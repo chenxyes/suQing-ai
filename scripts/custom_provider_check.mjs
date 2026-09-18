@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const temp = mkdtempSync(path.join(tmpdir(), 'custom-provider-'));
-const env = { ...process.env, DB_PATH: path.join(temp, 'bot.db'), LOG_DIR: path.join(temp, 'logs'), AUTH_SECRET: 'test-only-secret-'.repeat(4), AUTH_MODE: 'local', HOSTED_MODE: 'false', IMAGE_BEAUTIFY_ENABLED: 'false' };
+const env = { ...process.env, DB_PATH: path.join(temp, 'bot.db'), LOG_DIR: path.join(temp, 'logs'), AUTH_SECRET: 'test-only-secret-'.repeat(4), AUTH_MODE: 'local', HOSTED_MODE: 'false', IMAGE_BEAUTIFY_ENABLED: 'false', IMAGE_PROVIDER: 'openai', EMBEDDING_PROVIDER: 'openai', OPENAI_API_KEY: 'fixture-native-key', ZHIPU_API_KEY: '' };
 Object.assign(process.env, env);
 const caps = ['vision', 'asr', 'tts', 'image', 'embedding'];
 const seen = [];
@@ -19,7 +19,7 @@ const relay = http.createServer(async (req, res) => {
   if (req.url.endsWith('/audio/speech')) { res.writeHead(200, { 'content-type': 'audio/mpeg' }); res.end(Buffer.alloc(64, 1)); return; }
   res.setHeader('content-type', 'application/json');
   const value = req.url.endsWith('/chat/completions') ? { choices: [{ message: { content: 'vision ok' } }] }
-    : req.url.endsWith('/audio/transcriptions') ? { text: 'asr ok' }
+    : req.url.endsWith('/audio/transcriptions') ? { text: 'Hello, this is a speech recognition test.' }
     : req.url.endsWith('/images/generations') ? { data: [imageUrl ? { url: 'https://example.com/image.png' } : { b64_json: 'cG5n' }] }
     : { data: [{ embedding: [0.1, 0.2, 0.3] }] };
   res.end(JSON.stringify(value));
@@ -43,12 +43,17 @@ try {
   assert.equal(account.status, 201, JSON.stringify(account)); token = account.body.token;
   assert.equal((await api('provider-config', { capability: 'vision', provider: 'custom' }, false)).status, 401);
   const dbModule = await import('../src/db.mjs'); db = dbModule.getDb();
+  for (const cap of ['image', 'embedding']) {
+    const status = (await api('provider-status')).body.data[cap];
+    assert.equal(status.active, 'openai'); assert.equal(status.active_configured, true, 'native configuration must be reported');
+  }
   for (const cap of caps) {
     const config = { capability: cap, provider: 'custom', base_url: `http://127.0.0.1:${relay.address().port}/v1/${cap}/`, model: `${cap}-relay-model`, api_key: `test-${cap}-independent-key`, voice_id: 'custom-voice' };
     const save = await api('provider-config', config); assert.equal(save.body.ok, true, JSON.stringify(save));
     assert.equal(dbModule.getAppSetting(`${cap.toUpperCase()}_BASE_URL`), config.base_url.replace(/\/$/, ''), `${cap} saved base URL`);
     const status = (await api('provider-status')).body.data;
     assert.equal(status[cap].active, 'custom');
+    if (['image', 'embedding'].includes(cap)) assert.equal(status[cap].active_configured, true);
     assert.equal(status[cap].providers?.custom?.base_url || status[cap].custom?.base_url, config.base_url.replace(/\/$/, ''));
     assert.ok(!JSON.stringify(status).includes(config.api_key));
     assert.equal((await api('provider-config', { ...config, api_key: '' })).body.ok, true);
@@ -70,7 +75,7 @@ try {
   const { imageGenerate } = await import('../src/providers/image.mjs');
   const { embedText } = await import('../src/providers/embedding.mjs');
   assert.equal(await visionRecognize(Buffer.from('fixture')), 'vision ok');
-  assert.equal(await asrRecognize(Buffer.from('fixture'), 'audio/wav'), 'asr ok');
+  assert.equal(await asrRecognize(Buffer.from('fixture'), 'audio/wav'), 'Hello, this is a speech recognition test.');
   assert.equal((await ttsSynthesize('hello')).audio.length, 64);
   assert.equal(await imageGenerate('hello'), 'data:image/png;base64,cG5n');
   imageUrl = true; assert.equal(await imageGenerate('hello'), 'https://example.com/image.png');
@@ -81,6 +86,14 @@ try {
     assert.equal(req.auth, `Bearer test-${cap}-independent-key`);
     if (cap === 'asr') { assert.match(req.type, /multipart\/form-data/); assert.ok(req.body.includes('asr-relay-model')); }
     else assert.equal(JSON.parse(req.body).model, `${cap}-relay-model`);
+  }
+  for (const cap of ['image', 'embedding']) {
+    dbModule.setAppSetting(`${cap.toUpperCase()}_PROVIDER`, 'zhipu');
+    assert.equal((await api('provider-status')).body.data[cap].active_configured, false, 'native missing key');
+    assert.equal((await api('provider-config', { capability: cap, clear: true })).body.ok, true);
+    const restored = (await api('provider-status')).body.data[cap];
+    assert.equal(restored.active, 'openai');
+    assert.equal(restored.active_configured, true, 'clear restores configured environment provider');
   }
   failureStatus = 503;
   const fail = await api('test-provider', { capability: 'image', provider: 'custom' });

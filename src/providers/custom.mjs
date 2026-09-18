@@ -1,4 +1,5 @@
 /** Independent OpenAI-compatible endpoints for optional model capabilities. */
+import { readFile } from 'node:fs/promises';
 import { getAppSetting, getDb, setAppSetting } from '../db.mjs';
 export const CUSTOM_CAPABILITIES = ['vision', 'asr', 'tts', 'image', 'embedding'];
 export function readProviderSetting(key) {
@@ -120,11 +121,10 @@ export async function testCustomProvider(capability) {
   const options = { timeoutMs: 15_000 };
   if (capability === 'vision') await customVision(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64'), 'image/png', options);
   else if (capability === 'asr') {
-    const wav = Buffer.alloc(44 + 512);
-    wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16);
-    wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(16000, 24); wav.writeUInt32LE(32000, 28);
-    wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(512, 40);
-    await customAsr(wav, 'audio/wav', options);
+    const wav = await readFile(new URL('./fixtures/asr-probe.wav', import.meta.url));
+    const transcript = await customAsr(wav, 'audio/wav', options);
+    const words = transcript.toLowerCase().replace(/[^a-z]+/g, ' ').trim();
+    if (!words.includes('speech recognition test')) throw new Error('custom asr probe transcription did not match the spoken test phrase');
   } else if (capability === 'tts') await customTts('你好', options);
   else if (capability === 'image') await customImage('A simple blue circle on a white background', '1024x1024', options);
   else if (capability === 'embedding') await customEmbedding('connection test', options);

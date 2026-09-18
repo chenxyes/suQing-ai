@@ -2204,10 +2204,10 @@ router.get('/setup/provider-status', softAuth, (req, res) => {
     vision: buildOptionalSection(VISION_REGISTRY, 'VISION_PROVIDER', 'VISION_MODEL', visionActive),
     asr:    buildOptionalSection(ASR_REGISTRY,    'ASR_PROVIDER',    'ASR_MODEL',    asrActive),
     image: { active: getActiveImageProvider().id, active_model: getActiveImageProvider().model,
-      active_configured: getActiveImageProvider().id === 'custom' && customProviderStatus('image').configured,
+      active_configured: getActiveImageProvider().configured,
       providers: { custom: customProviderStatus('image', isAuthed) } },
-    embedding: { active: readProviderSetting('EMBEDDING_PROVIDER') || 'gemini', active_model: readProviderSetting('EMBEDDING_MODEL'),
-      active_configured: readProviderSetting('EMBEDDING_PROVIDER') === 'custom' && customProviderStatus('embedding').configured,
+    embedding: { active: getActiveEmbeddingProvider().id, active_model: getActiveEmbeddingProvider().model,
+      active_configured: getActiveEmbeddingProvider().configured,
       providers: { custom: customProviderStatus('embedding', isAuthed) } },
     tts:    {
       active: ttsActive.active || null,

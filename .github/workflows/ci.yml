@@ -39,7 +39,9 @@ jobs:
         run: npm run lint
 
       - name: 自定义中转 API 与运行时回归
-        run: node scripts/custom_provider_check.mjs
+        run: |
+          node scripts/custom_provider_check.mjs
+          node scripts/provider_review_check.mjs
 
       - name: 设置向导脚本与控件回归
         run: node scripts/setup_ui_check.mjs

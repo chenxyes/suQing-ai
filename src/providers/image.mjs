@@ -15,7 +15,7 @@
  */
 
 import { log } from '../logger.mjs';
-import { customImage, readProviderSetting } from './custom.mjs';
+import { customImage, customProviderStatus, readProviderSetting } from './custom.mjs';
 const setting = readProviderSetting;
 const active = () => (setting('IMAGE_PROVIDER') || 'zhipu').toLowerCase();
 
@@ -310,7 +310,12 @@ export async function imageGenerate(prompt, { size = '1024x1024', referenceImage
 }
 
 export function getActiveImageProvider() {
-  return { id: active(), model: setting('IMAGE_MODEL') || '(默认)' };
+  const id = active();
+  const keys = { zhipu: 'ZHIPU_API_KEY', qwen: 'QWEN_API_KEY', doubao: 'DOUBAO_API_KEY', wenxin: 'WENXIN_API_KEY', openai: 'OPENAI_API_KEY', openrouter: 'OPENROUTER_API_KEY', '302ai': 'AI302_API_KEY' };
+  const key = process.env[keys[id]] || (id === 'qwen' ? process.env.DASHSCOPE_API_KEY : '');
+  const configured = id === 'custom' ? customProviderStatus('image').configured
+    : Boolean(key?.trim() && (id !== 'doubao' || process.env.IMAGE_MODEL?.trim()));
+  return { id, model: (id === 'custom' ? setting('IMAGE_MODEL') : process.env.IMAGE_MODEL) || '(默认)', configured };
 }
 
 export function getImageProviderCapabilities(providerName = active()) {
