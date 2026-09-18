@@ -2200,8 +2200,8 @@ router.get('/setup/provider-status', softAuth, (req, res) => {
     providers,
     vision: buildOptionalSection(VISION_REGISTRY, 'VISION_PROVIDER', 'VISION_MODEL', visionActive),
     asr:    buildOptionalSection(ASR_REGISTRY,    'ASR_PROVIDER',    'ASR_MODEL',    asrActive),
-    image: { active: getActiveImageProvider().id, providers: { custom: { label: 'Custom OpenAI relay', configured: Boolean(process.env.IMAGE_BASE_URL || getAppSetting('IMAGE_BASE_URL')) } } },
-    embedding: { active: process.env.EMBEDDING_PROVIDER || getAppSetting('EMBEDDING_PROVIDER') || 'gemini', providers: { custom: { label: 'Custom OpenAI relay', configured: Boolean(process.env.EMBEDDING_BASE_URL || getAppSetting('EMBEDDING_BASE_URL')) } } },
+    image: { active: getActiveImageProvider().id, providers: { custom: { label: 'Custom OpenAI relay', configured: Boolean((getAppSetting('IMAGE_BASE_URL') || process.env.IMAGE_BASE_URL) && (getAppSetting('IMAGE_API_KEY') || process.env.IMAGE_API_KEY) && (getAppSetting('IMAGE_MODEL') || process.env.IMAGE_MODEL)), base_url: isAuthed ? (getAppSetting('IMAGE_BASE_URL') || process.env.IMAGE_BASE_URL || '') : undefined, model: isAuthed ? (getAppSetting('IMAGE_MODEL') || process.env.IMAGE_MODEL || '') : undefined } } },
+    embedding: { active: getAppSetting('EMBEDDING_PROVIDER') || process.env.EMBEDDING_PROVIDER || 'gemini', providers: { custom: { label: 'Custom OpenAI relay', configured: Boolean((getAppSetting('EMBEDDING_BASE_URL') || process.env.EMBEDDING_BASE_URL) && (getAppSetting('EMBEDDING_API_KEY') || process.env.EMBEDDING_API_KEY) && (getAppSetting('EMBEDDING_MODEL') || process.env.EMBEDDING_MODEL)), base_url: isAuthed ? (getAppSetting('EMBEDDING_BASE_URL') || process.env.EMBEDDING_BASE_URL || '') : undefined, model: isAuthed ? (getAppSetting('EMBEDDING_MODEL') || process.env.EMBEDDING_MODEL || '') : undefined } } },
     tts:    {
       active: ttsActive.active || null,
       configured: !!ttsActive.configured,
@@ -2443,15 +2443,16 @@ router.post('/setup/test-provider',
     const cap  = String(capability).toLowerCase();
 
     const REG = cap === 'vision' ? VISION_REGISTRY
-              : cap === 'asr'    ? ASR_REGISTRY
-              : cap === 'search' ? SEARCH_REGISTRY
-              : CHAT_REGISTRY;
+              : cap === 'asr' ? ASR_REGISTRY
+              : cap === 'tts' ? TTS_REGISTRY
+              : (cap === 'image' || cap === 'embedding') ? { custom: { label: 'Custom OpenAI relay' } }
+              : cap === 'search' ? SEARCH_REGISTRY : CHAT_REGISTRY;
     if (!REG[name]) return err(res, `未知 ${cap} provider: ${name}`);
 
     try {
       let result;
       if (cap === 'image' || cap === 'embedding' || cap === 'tts') {
-        const prefix = cap.toUpperCase(); const base = process.env[`${prefix}_BASE_URL`] || getAppSetting(`${prefix}_BASE_URL`); const key = process.env[`${prefix}_API_KEY`] || getAppSetting(`${prefix}_API_KEY`); const model = process.env[`${prefix}_MODEL`] || getAppSetting(`${prefix}_MODEL`);
+        const prefix = cap.toUpperCase(); const base = getAppSetting(`${prefix}_BASE_URL`) || process.env[`${prefix}_BASE_URL`]; const key = getAppSetting(`${prefix}_API_KEY`) || process.env[`${prefix}_API_KEY`]; const model = getAppSetting(`${prefix}_MODEL`) || process.env[`${prefix}_MODEL`];
         if (!base || !key || !model) throw new Error(`${cap} custom 配置不完整`);
         const path = cap === 'image' ? '/images/generations' : cap === 'embedding' ? '/embeddings' : '/audio/speech';
         const body = cap === 'image' ? { model, prompt: 'probe', n: 1 } : cap === 'embedding' ? { model, input: 'probe' } : { model, input: 'probe', voice: 'alloy' };

@@ -313,6 +313,7 @@
             <div class="mb-2">
               <label class="block text-[12px] font-semibold mb-1">Provider</label>
               <select id="s2-vision-provider" class="input">
+                <option value="custom">自定义 OpenAI 中转</option>
                 <option value="">不启用</option>
                 <option value="zhipu">智谱 GLM-4V</option>
                 <option value="openai">OpenAI gpt-4o-mini</option>
@@ -352,6 +353,7 @@
             <div class="mb-2">
               <label class="block text-[12px] font-semibold mb-1">Provider</label>
               <select id="s2-asr-provider" class="input">
+                <option value="custom">自定义 OpenAI 中转</option>
                 <option value="">不启用</option>
                 <option value="gemini">Google Gemini</option>
                 <option value="openai">OpenAI Whisper / gpt-4o-transcribe</option>
@@ -445,6 +447,7 @@
             <div class="mb-2">
               <label class="block text-[12px] font-semibold mb-1">Provider</label>
               <select id="s2-tts-provider" class="input">
+                <option value="custom">自定义 OpenAI 中转</option>
                 <option value="">不启用</option>
                 <option value="minimax">MiniMax speech-02-turbo（推荐 · 新户送 500 字符）</option>
                 <option value="openai">OpenAI tts-1 / tts-1-hd（6 个内置音色 · 国内需代理）</option>
@@ -1612,6 +1615,13 @@ document.getElementById('init-btn').addEventListener('click', async () => {
   renderView();
   // 如果进入向导且 Step 4，顺带检查角色
   if (S.authenticated) checkExistingRole();
+})();
+</script>
+
+<script>
+(function(){
+ const save=(cap,base,model)=>{const key=prompt('API Key（留空保留已有）')||''; return fetch('/api/setup/provider-config',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({capability:cap,provider:'custom',base_url:base,model,api_key:key})}).then(r=>r.json());};
+ for(const cap of ['image','embedding']){const p=cap==='image'?'image':'embedding'; const b=document.getElementById('s2-'+p+'-base'),m=document.getElementById('s2-'+p+'-model'); if(b&&m){const btn=document.createElement('button');btn.className='btn-outline';btn.textContent='保存 '+p;btn.onclick=()=>save(cap,b.value,m.value);b.parentElement.appendChild(btn);}}
 })();
 </script>
 </body>

@@ -16,8 +16,9 @@
 
 import { log } from '../logger.mjs';
 import { customImage } from './custom.mjs';
-
-const ACTIVE = (process.env.IMAGE_PROVIDER || 'zhipu').toLowerCase();
+import { getAppSetting } from '../db.mjs';
+const setting = (k) => { try { const v=getAppSetting(k); if (v !== undefined && v !== null) return String(v); } catch {} return process.env[k] || ''; };
+const active = () => (setting('IMAGE_PROVIDER') || 'zhipu').toLowerCase();
 
 // ─── 智谱 CogView ─────────────────────────────────────────────────────────
 // ── v1.21.2: per-provider 尺寸 best-fit ───────────────────────────────────
@@ -293,6 +294,7 @@ const REGISTRY = {
  * v1.10.52: 所有 provider 输出后自动过 beautify 滤镜（可 IMAGE_BEAUTIFY_ENABLED=false 关）。
  */
 export async function imageGenerate(prompt, { size = '1024x1024', referenceImage = null } = {}) {
+  const ACTIVE = active();
   const fn = REGISTRY[ACTIVE];
   if (!fn) throw new Error(`未知 IMAGE_PROVIDER=${ACTIVE}。可选：${Object.keys(REGISTRY).join(', ')}`);
   log('debug', `[image] provider=${ACTIVE} size=${size}${referenceImage ? ' (i2i)' : ''}`);
@@ -309,11 +311,11 @@ export async function imageGenerate(prompt, { size = '1024x1024', referenceImage
 }
 
 export function getActiveImageProvider() {
-  return { id: ACTIVE, model: process.env.IMAGE_MODEL || '(默认)' };
+  return { id: active(), model: setting('IMAGE_MODEL') || '(默认)' };
 }
 
-export function getImageProviderCapabilities(providerName = ACTIVE) {
-  const id = String(providerName || ACTIVE || '').toLowerCase();
+export function getImageProviderCapabilities(providerName = active()) {
+  const id = String(providerName || active() || '').toLowerCase();
   // v1.10.53: openrouter 走 chat/completions 多模态，可吃 input image 做
   // image-to-image（gpt-image / gemini-2.5-flash-image）。其它 provider 暂只文生图。
   const supportsRef = id === 'openrouter' || id === '302ai';

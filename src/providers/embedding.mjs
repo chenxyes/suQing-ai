@@ -15,8 +15,10 @@
 import { log } from '../logger.mjs';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { customEmbedding } from './custom.mjs';
+import { getAppSetting } from '../db.mjs';
 
-const ACTIVE = (process.env.EMBEDDING_PROVIDER || 'gemini').toLowerCase();
+const setting = (k) => { try { const v=getAppSetting(k); if (v !== undefined && v !== null) return String(v); } catch {} return process.env[k] || ''; };
+const active = () => (setting('EMBEDDING_PROVIDER') || 'gemini').toLowerCase();
 const DIM = Number(process.env.EMBEDDING_DIM) || 768;
 
 async function geminiEmbed(text) {
@@ -53,7 +55,8 @@ export async function embedText(text) {
   const trimmed = text.trim().slice(0, 2000);
   if (!trimmed) return null;
   try {
-    if (ACTIVE === 'custom') return await customEmbedding(trimmed);
+    const ACTIVE = active();
+  if (ACTIVE === 'custom') return await customEmbedding(trimmed);
     switch (ACTIVE) {
       case 'gemini':
         return await geminiEmbed(trimmed);
@@ -88,5 +91,5 @@ export async function embedText(text) {
 }
 
 export function getActiveEmbeddingProvider() {
-  return { id: ACTIVE, model: process.env.EMBEDDING_MODEL || '(默认)', dim: DIM };
+  return { id: active(), model: setting('EMBEDDING_MODEL') || '(默认)', dim: DIM };
 }
