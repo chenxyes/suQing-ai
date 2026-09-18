@@ -22,3 +22,21 @@ for (const cap of ['vision', 'asr', 'tts', 'image', 'embedding']) {
 }
 assert.ok(!/<head>[\s\S]*<section[\s\S]*<\/head>/.test(html));
 console.log('setup UI: inline scripts, tab initialization and all capability controls passed');
+
+const saveSearch = /async function saveSearch\(\) \{[\s\S]*?\n\}/.exec(html)?.[0];
+assert.ok(saveSearch);
+const fields = { 's2-search-provider': { value: 'tavily' }, 's2-search-key': { value: 'fixture-key' } };
+const messages = []; let refreshed = 0;
+await vm.runInNewContext(`${saveSearch}; saveSearch();`, {
+  document: { getElementById: id => fields[id] },
+  setMsg: (...args) => messages.push(args), authHeaders: () => ({}),
+  fetch: async (_url, options) => {
+    assert.equal(JSON.parse(options.body).api_key, 'fixture-key');
+    return { json: async () => ({ ok: true, data: { label: 'Tavily', key_saved: true } }) };
+  },
+  refreshOptional: async () => { refreshed++; },
+});
+assert.equal(messages.at(-1)[2], 'ok', 'successful search save must remain successful');
+assert.equal(fields['s2-search-key'].value, '', 'saved search key must be cleared');
+assert.equal(refreshed, 1, 'successful save must refresh metadata');
+console.log('setup UI: search save behavior passed');

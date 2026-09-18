@@ -1345,7 +1345,7 @@ async function saveSearch() {
     });
     const d = await r.json();
     if (d.ok) {
-      document.getElementById(`${prefix}-key`).value = '';
+      document.getElementById('s2-search-key').value = '';
       const parts = [d.data.label || provider];
       if (d.data.key_saved)      parts.push('含 API Key');
       if (d.data.base_url_saved) parts.push('Base URL');
