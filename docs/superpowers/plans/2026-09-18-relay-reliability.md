@@ -47,7 +47,7 @@
 - [x] Run lint, import smoke, relevant existing checks and all new checks. Compare unchanged baseline failures before attributing them to this branch.
 - [x] Independent review of task diffs and full branch; resolve important findings with covering tests.
 - [x] Add regression commands to CI; update investigation report and progress ledger.
-- [ ] Push branch, create PR with evidence and deployment prerequisites, attach PR, inspect checks. Do not merge or deploy.
+- [x] Push branch, create PR with evidence and deployment prerequisites, attach PR, inspect checks. Do not merge or deploy.
 
 ## Verification record (2026-09-18)
 
@@ -61,3 +61,5 @@
 - Independent reviews identified search success reporting, proactive failure accounting, and auxiliary fallback propagation. Focused guards and behavioral regressions cover these paths, including preserving source memories when summary generation fails. Memory extraction, retrieval and ranking are unchanged.
 
 Production remains untouched. The production environment/reviewer rules and SSH secrets require owner setup before any authorized deployment. The precise historical upstream reason for each fallback cannot be recovered from old logs; see the investigation report for evidence and limits.
+
+PR: https://github.com/chenxyes/suQing-ai/pull/1 — open for owner review; no merge or deployment. GitHub check status is live on the PR.
