@@ -1,3 +1,4 @@
+import { isChatFallback } from './chat_response.mjs';
 import { CUSTOM_CAPABILITIES, readProviderSetting, customProviderStatus, saveCustomProviderConfig, testCustomProvider } from './providers/custom.mjs';
 /**
  * REST API 服务
@@ -3007,6 +3008,7 @@ ${r.prompt_hint}`;
           temperature: 0.85,
           max_tokens: 80,
         });
+        if (isChatFallback(reply)) throw new Error('wake chat unavailable');
         reply = (reply || '').replace(/^["「『]+|["」』]+$/g, '').trim();
         if (!reply) reply = '……几点啊';
         for (const seg of reply.split('||').map(s => s.trim()).filter(Boolean).slice(0, 3)) {

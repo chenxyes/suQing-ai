@@ -1,3 +1,4 @@
+import { isChatFallback } from './chat_response.mjs';
 /**
  * 共享照片发送 helper：生成场景图 -> 下载转码 -> iLink CDN 上传 -> 微信图片消息发送。
  */
@@ -130,6 +131,7 @@ async function generateNaturalCaption(companion, { activity, source }) {
       temperature: 0.9,
       top_p: 0.9,
     });
+    if (isChatFallback(text)) return pickPhotoCaption({ source, activity });
     return sanitizeCaption(text, source, activity);
   } catch (e) {
     log('warn', `[Photo] caption 生成失败: ${e.message}`);

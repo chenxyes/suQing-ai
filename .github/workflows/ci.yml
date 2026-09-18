@@ -47,6 +47,11 @@ jobs:
       - name: 聊天空回复和诊断回归
         run: node scripts/chat_response_check.mjs
 
+      - name: 辅助生成失败边界回归
+        run: |
+          node scripts/chat_output_boundary_check.mjs
+          node scripts/auxiliary_chat_failure_check.mjs
+
       - name: 审批发布与回滚回归
         run: |
           bash -n deploy/release.sh
