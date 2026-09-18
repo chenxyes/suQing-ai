@@ -39,6 +39,12 @@ healthy() {
   done
   return 1
 }
+persist_image() {
+  local ref=$1
+  printf 'services:\n  xiyu-ai:\n    image: %s\n' "$ref" > "$project_dir/.release/compose.image.yml.tmp" &&
+    mv "$project_dir/.release/compose.image.yml.tmp" "$project_dir/.release/compose.image.yml" &&
+    printf '%s\n' "$ref" > "$project_dir/.release/current-image"
+}
 finish() {
   local rc=$?
   trap - EXIT INT TERM
@@ -46,7 +52,7 @@ finish() {
     echo 'Release failed; restoring previous image' >&2
     export RELEASE_IMAGE=$rollback_image
     if "${compose[@]}" up -d --no-deps --no-build --pull never xiyu-ai && healthy; then
-      printf '%s\n' "$rollback_image" > "$project_dir/.release/current-image"
+      persist_image "$rollback_image" || echo 'Failed to persist rollback metadata; inspect before restart' >&2
       echo 'Previous image restored and healthy' >&2
     else
       echo 'ROLLBACK FAILED: manual intervention required; persistent volumes retained' >&2
@@ -77,9 +83,9 @@ docker pull "$candidate"
 mutated=1
 "${compose[@]}" up -d --no-deps --no-build --pull never xiyu-ai
 if ! healthy; then echo 'Candidate did not become healthy' >&2; exit 1; fi
-printf '%s\n' "$candidate" > "$project_dir/.release/current-image"
+persist_image "$candidate"
 printf '%s\n' "$rollback_image" > "$project_dir/.release/previous-image"
 # Save the override as well so manual restarts can use the exact deployed image.
-printf 'services:\n  xiyu-ai:\n    image: %s\n' "$candidate" > "$project_dir/.release/compose.image.yml"
+
 mutated=0
 echo 'Release healthy; previous image retained locally for rollback'

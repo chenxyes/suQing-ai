@@ -106,8 +106,11 @@ jobs:
           ssh_args=(-i "$HOME/.ssh/release_key" -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3)
           target="$DEPLOY_USER@$DEPLOY_HOST"
           stage=".xiyu-release-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          trap 'rm -f "$HOME/.ssh/release_key"' EXIT
+          cleanup() {
+            ssh "${ssh_args[@]}" "$target" "rm -rf '$stage'" || true
+            rm -f "$HOME/.ssh/release_key"
+          }
+          trap cleanup EXIT
           ssh "${ssh_args[@]}" "$target" "umask 077; mkdir -p '$stage'"
           scp "${ssh_args[@]}" deploy/release.sh deploy/compose.release.yml "$target:$stage/"
           ssh "${ssh_args[@]}" "$target" "bash '$stage/release.sh' '$DEPLOY_DIR' '$IMAGE'"
-          ssh "${ssh_args[@]}" "$target" "rm -rf '$stage'"

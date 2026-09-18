@@ -46,10 +46,11 @@ function runCase(extra = {}, ref = image) {
       FAKE_CALLS: path.join(dir, 'calls.jsonl'), FAKE_PROJECT: realpathSync(dir),
       RELEASE_HEALTH_ATTEMPTS: '1', RELEASE_HEALTH_INTERVAL: '0', ...extra }, encoding: 'utf8', timeout: 10_000,
   });
+  let override = ''; try { override = readFileSync(path.join(dir, '.release/compose.image.yml'), 'utf8'); } catch {}
   const state = JSON.parse(readFileSync(path.join(dir, 'state.json'), 'utf8'));
   let calls = []; try { calls = readFileSync(path.join(dir, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse); } catch {}
   rmSync(dir, { recursive: true, force: true });
-  return { ...result, state, calls };
+  return { ...result, state, calls, override };
 }
 const success = runCase();
 assert.equal(success.status, 0, success.stderr);
@@ -60,6 +61,7 @@ for (const mode of ['UNHEALTHY', 'FAIL_UP']) {
   assert.notEqual(r.status, 0);
   assert.match(r.state.image, /^xiyu-release-rollback:/, mode);
   assert.equal(r.state.bad, false);
+  assert.ok(r.override.includes(r.state.image), `${mode}: restart override must select restored image`);
 }
 for (const env of [{ FAIL_PULL: '1' }, { NO_CONTAINER: '1' }]) {
   const r = runCase(env); assert.notEqual(r.status, 0);
