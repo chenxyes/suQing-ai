@@ -17,11 +17,12 @@
  */
 
 import { log } from '../logger.mjs';
-import { getAppSetting } from '../db.mjs';
+import { customVision, readProviderSetting, customProviderStatus } from './custom.mjs';
 
 // ─── Provider 注册表 ───────────────────────────────────────────────────────
 // custom=true 表示需要用户提供 model（如豆包接入点）；否则有默认值。
 export const REGISTRY = {
+  custom: { label: 'Custom OpenAI relay', kind: 'custom', apiKeyEnv: 'VISION_API_KEY', defaultModel: '' },
   zhipu: {
     baseURL: 'https://open.bigmodel.cn/api/paas/v4',
     defaultModel: 'glm-4v-flash',
@@ -84,14 +85,7 @@ export const REGISTRY = {
 const PROMPT = '请详细描述这张图片：主体、场景、颜色、氛围、情绪等。用中文，控制在 100 字以内。';
 
 // ─── 动态读取：env 优先，其次 app_settings ─────────────────────────────────
-function readSetting(key) {
-  if (process.env[key]) return process.env[key];
-  try {
-    const v = getAppSetting(key);
-    if (v) return v;
-  } catch {}
-  return '';
-}
+function readSetting(key) { return readProviderSetting(key); }
 
 function getActiveProviderName() {
   return (readSetting('VISION_PROVIDER') || 'zhipu').toLowerCase();
@@ -186,6 +180,7 @@ export async function visionRecognize(imageBuffer, mimeType = 'image/jpeg') {
   const dataUrl = `data:${mimeType};base64,${base64}`;
 
   try {
+    if (name === 'custom') return await customVision(imageBuffer, mimeType);
     return await callVisionWithProvider(name, base64, dataUrl, mimeType, imageBuffer.length);
   } catch (err) {
     // v1.10.26: 限额类错误 → 自动 fallback 到 VISION_FALLBACK_PROVIDER（默认 minimax）
@@ -216,7 +211,7 @@ export function getActiveVisionProvider() {
     id: name,
     label: entry?.label,
     model: getModelFor(entry),
-    configured: Boolean(entry && getApiKeyForEntry(entry) && getModelFor(entry)),
+    configured: name === 'custom' ? customProviderStatus('vision').configured : Boolean(entry && getApiKeyForEntry(entry) && getModelFor(entry)),
   };
 }
 

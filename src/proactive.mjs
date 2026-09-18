@@ -36,6 +36,7 @@ import {
 import { canAcceptConfession } from './memory.mjs';
 import { buildSystemPrompt } from './companion.mjs';
 import { generateReply } from './ai.mjs';
+import { isChatFallback } from './chat_response.mjs';
 import { sendTextMessage, sendMessageItem, recallContextToken, peekSendQuota } from './ilink.mjs';
 import { dedupSegments, isSemanticallySimilar } from './text_similarity.mjs';
 import { classifyIntent, topicKey, recentIntentEvents, trailingAckStreak, isIntentCooled } from './intent_dedup.mjs';
@@ -937,6 +938,7 @@ ${recallLoop.expected_followup ? `你心里想：${recallLoop.expected_followup}
     max_tokens: Math.min(companion.max_tokens || 300, 300),
     top_p: companion.top_p,
   }, { accountId: proactiveBinding?.account_id || null });
+  if (isChatFallback(reply)) throw new Error('proactive chat unavailable');
   reply = safeOutboundReply(reply);
   // #281：文本 proactive 永远没有真实照片（场景照是 kind=photo 独立分支）——表情绝不冒充照片
   reply = scrubPhotoImpersonation(reply, companion.id);
@@ -953,6 +955,7 @@ ${recallLoop.expected_followup ? `你心里想：${recallLoop.expected_followup}
       max_tokens: Math.min(companion.max_tokens || 300, 300),
       top_p: companion.top_p,
     }, { accountId: proactiveBinding?.account_id || null });
+    if (isChatFallback(retry)) throw new Error('proactive chat unavailable');
     retry = safeOutboundReply(retry);
     const retryCollision = findCollision(retry, recentAssistantTexts);
     if (!retryCollision) {

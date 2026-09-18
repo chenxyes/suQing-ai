@@ -26,11 +26,12 @@
 
 import { log } from '../logger.mjs';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { getAppSetting } from '../db.mjs';
 import { randomUUID } from 'node:crypto';
+import { customAsr, readProviderSetting, customProviderStatus } from './custom.mjs';
 
 // ─── Provider 注册表 ───────────────────────────────────────────────────────
 export const REGISTRY = {
+  custom: { label: 'Custom OpenAI relay', kind: 'custom', apiKeyEnv: 'ASR_API_KEY', defaultModel: '' },
   gemini: {
     apiKeyEnv: 'GEMINI_API_KEY',
     defaultModel: 'gemini-2.5-flash',
@@ -85,14 +86,7 @@ export const REGISTRY = {
 };
 
 // ─── 动态读取：env 优先，其次 app_settings ─────────────────────────────────
-function readSetting(key) {
-  if (process.env[key]) return process.env[key];
-  try {
-    const v = getAppSetting(key);
-    if (v) return v;
-  } catch {}
-  return '';
-}
+function readSetting(key) { return readProviderSetting(key); }
 function getActiveProviderName() {
   return (readSetting('ASR_PROVIDER') || 'gemini').toLowerCase();
 }
@@ -330,6 +324,7 @@ const HANDLERS = {
   doubao: doubaoASR,
   xunfei: xunfeiASR,
   tencent: tencentASR,
+  custom: customAsr,
 };
 
 export async function asrRecognize(audioBuffer, mimeType = 'audio/ogg') {
@@ -376,7 +371,7 @@ export function getActiveAsrProvider() {
     label: entry?.label,
     model: getModelFor(entry),
     extras: entryExtras(entry),
-    configured: Boolean(entry && !entry.stub && getApiKeyForEntry(entry) && entryExtrasOk(entry)),
+    configured: name === 'custom' ? customProviderStatus('asr').configured : Boolean(entry && !entry.stub && getApiKeyForEntry(entry) && entryExtrasOk(entry)),
   };
 }
 

@@ -45,3 +45,8 @@ public/generated
 # CI / docs 输出
 .github/workflows/*.log
 README.md.bak
+
+# Local isolated worktrees and agent scratch
+.worktrees/
+.superpowers/
+.release/

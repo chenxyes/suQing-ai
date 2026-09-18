@@ -12,6 +12,7 @@
 import { parseMessage, sendTextMessage, sendTyping, sendMessageItem, rememberContextToken, peekSendQuota } from './ilink.mjs';
 import { stripCurrentTurnFromHistory, isProtocolDuplicate } from './inbound_dedup.mjs';   // v1.21.4 #279
 import { generateReply, recognizeImage, embedText } from './ai.mjs';
+import { isChatFallback } from './chat_response.mjs';
 import { downloadInboundVoiceToMp3 } from './voice_inbound.mjs';
 import { analyzeVoiceWithQwen } from './voice_emotion.mjs';
 import { dedupSegments, findCollision } from './text_similarity.mjs';
@@ -1015,6 +1016,14 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
       throw err;
     }
 
+    // A delivery failure is not an assistant conversation turn or a memory source.
+    if (isChatFallback(reply)) {
+      saveConversationTurn(companion.id, 'user', userText, companion.chat_mode_active);
+      try { recordUserReplied(companion.id); } catch {}
+      await sendTextMessage(ctx, msg.fromUser, reply, msg.contextToken);
+      return;
+    }
+
     // ── 出站审核：AI 回复过黑名单 + 确定性防人设泄露 + 冲突红线 ─────────────
     reply = safeOutboundReply(reply);
     reply = scrubPersonaLeak(reply, companion.name);
@@ -1041,6 +1050,14 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
       }
     } catch (e) {
       log('warn', `[PersonaGuard] error: ${e.message}`);
+    }
+
+    // A delivery failure is not an assistant conversation turn or a memory source.
+    if (isChatFallback(reply)) {
+      saveConversationTurn(companion.id, 'user', userText, companion.chat_mode_active);
+      try { recordUserReplied(companion.id); } catch {}
+      await sendTextMessage(ctx, msg.fromUser, reply, msg.contextToken);
+      return;
     }
 
     // ── Record user replied (proactive engine) ────────────────────────────────

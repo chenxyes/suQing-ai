@@ -43,6 +43,7 @@ import { refreshCurrentWorks, buildScheduleWorksHint } from './current_works.mjs
 import { refreshLifeState } from './life_state.mjs';   // v1.22 PR-L1 身体状态档案推进/归档
 import { runPlaygroundProbe } from './playground_probe.mjs';   // #310 对外通道每日合成探针
 import { generateReply, extractStructuredInfo, embedText } from './ai.mjs';
+import { isChatFallback } from './chat_response.mjs';
 import { log } from './logger.mjs';
 import { tryAchievement } from './achievements.mjs';
 import {
@@ -753,6 +754,7 @@ async function summarize(kind, instruction, text) {
     max_tokens: 500,
     top_p: 0.9,
   });
+  if (isChatFallback(result)) throw new Error('summary chat unavailable');
   return result.replace(/\s+/g, ' ').slice(0, 500);
 }
 

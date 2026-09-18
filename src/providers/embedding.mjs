@@ -14,8 +14,10 @@
 
 import { log } from '../logger.mjs';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { customEmbedding, customProviderStatus, readProviderSetting } from './custom.mjs';
 
-const ACTIVE = (process.env.EMBEDDING_PROVIDER || 'gemini').toLowerCase();
+const setting = readProviderSetting;
+const active = () => (setting('EMBEDDING_PROVIDER') || 'gemini').toLowerCase();
 const DIM = Number(process.env.EMBEDDING_DIM) || 768;
 
 async function geminiEmbed(text) {
@@ -52,6 +54,8 @@ export async function embedText(text) {
   const trimmed = text.trim().slice(0, 2000);
   if (!trimmed) return null;
   try {
+    const ACTIVE = active();
+    if (ACTIVE === 'custom') return await customEmbedding(trimmed);
     switch (ACTIVE) {
       case 'gemini':
         return await geminiEmbed(trimmed);
@@ -86,5 +90,8 @@ export async function embedText(text) {
 }
 
 export function getActiveEmbeddingProvider() {
-  return { id: ACTIVE, model: process.env.EMBEDDING_MODEL || '(默认)', dim: DIM };
+  const id = active();
+  const keys = { gemini: 'GEMINI_API_KEY', openai: 'OPENAI_API_KEY', zhipu: 'ZHIPU_API_KEY', qwen: 'QWEN_API_KEY' };
+  const configured = id === 'custom' ? customProviderStatus('embedding').configured : Boolean(keys[id] && process.env[keys[id]]?.trim());
+  return { id, model: (id === 'custom' ? setting('EMBEDDING_MODEL') : process.env.EMBEDDING_MODEL) || '(默认)', dim: id === 'custom' ? null : DIM, configured };
 }

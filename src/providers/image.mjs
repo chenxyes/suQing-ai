@@ -15,8 +15,9 @@
  */
 
 import { log } from '../logger.mjs';
-
-const ACTIVE = (process.env.IMAGE_PROVIDER || 'zhipu').toLowerCase();
+import { customImage, customProviderStatus, readProviderSetting } from './custom.mjs';
+const setting = readProviderSetting;
+const active = () => (setting('IMAGE_PROVIDER') || 'zhipu').toLowerCase();
 
 // ─── 智谱 CogView ─────────────────────────────────────────────────────────
 // ── v1.21.2: per-provider 尺寸 best-fit ───────────────────────────────────
@@ -277,6 +278,7 @@ async function ai302Generate(prompt, size, refImage = null) {
 }
 
 const REGISTRY = {
+  custom: customImage,
   zhipu: zhipuGenerate,
   qwen: qwenGenerate,
   doubao: doubaoGenerate,
@@ -291,6 +293,7 @@ const REGISTRY = {
  * v1.10.52: 所有 provider 输出后自动过 beautify 滤镜（可 IMAGE_BEAUTIFY_ENABLED=false 关）。
  */
 export async function imageGenerate(prompt, { size = '1024x1024', referenceImage = null } = {}) {
+  const ACTIVE = active();
   const fn = REGISTRY[ACTIVE];
   if (!fn) throw new Error(`未知 IMAGE_PROVIDER=${ACTIVE}。可选：${Object.keys(REGISTRY).join(', ')}`);
   log('debug', `[image] provider=${ACTIVE} size=${size}${referenceImage ? ' (i2i)' : ''}`);
@@ -307,11 +310,16 @@ export async function imageGenerate(prompt, { size = '1024x1024', referenceImage
 }
 
 export function getActiveImageProvider() {
-  return { id: ACTIVE, model: process.env.IMAGE_MODEL || '(默认)' };
+  const id = active();
+  const keys = { zhipu: 'ZHIPU_API_KEY', qwen: 'QWEN_API_KEY', doubao: 'DOUBAO_API_KEY', wenxin: 'WENXIN_API_KEY', openai: 'OPENAI_API_KEY', openrouter: 'OPENROUTER_API_KEY', '302ai': 'AI302_API_KEY' };
+  const key = process.env[keys[id]] || (id === 'qwen' ? process.env.DASHSCOPE_API_KEY : '');
+  const configured = id === 'custom' ? customProviderStatus('image').configured
+    : Boolean(key?.trim() && (id !== 'doubao' || process.env.IMAGE_MODEL?.trim()));
+  return { id, model: (id === 'custom' ? setting('IMAGE_MODEL') : process.env.IMAGE_MODEL) || '(默认)', configured };
 }
 
-export function getImageProviderCapabilities(providerName = ACTIVE) {
-  const id = String(providerName || ACTIVE || '').toLowerCase();
+export function getImageProviderCapabilities(providerName = active()) {
+  const id = String(providerName || active() || '').toLowerCase();
   // v1.10.53: openrouter 走 chat/completions 多模态，可吃 input image 做
   // image-to-image（gpt-image / gemini-2.5-flash-image）。其它 provider 暂只文生图。
   const supportsRef = id === 'openrouter' || id === '302ai';

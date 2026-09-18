@@ -15,6 +15,7 @@
 
 import { log } from './logger.mjs';
 import { generateReply, embedText } from './ai.mjs';
+import { isChatFallback } from './chat_response.mjs';
 import {
   recallMemoriesSemantic, recallMemories, getUserProfile, getConversationContext,
   getDailySchedule, getRecentSchedules, getPersonaFacts, shanghaiDateKey,
@@ -212,6 +213,13 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
   } catch (err) {
     log('error', `[Playground] generateReply 失败 companion=${companion.id}: ${err.message}`);
     throw err;
+  }
+  if (isChatFallback(reply)) {
+    if (!probe) saveConversationTurn(companion.id, 'user', text, companion.chat_mode_active);
+    return {
+      reply, segments: [{ text: reply, stickers: [] }],
+      state: { mood: companion.current_mood, affection_level: companion.affection_level, relationship_stage: companion.relationship_stage },
+    };
   }
   reply = safeOutboundReply(reply);
   reply = scrubPhotoImpersonation(reply, companion.id);   // #281：playground 无照片链路，同罩

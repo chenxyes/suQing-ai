@@ -38,6 +38,28 @@ jobs:
       - name: ESLint（真 bug 级规则，零风格审美）
         run: npm run lint
 
+      - name: 自定义中转 API 与运行时回归
+        run: |
+          node scripts/custom_provider_check.mjs
+          node scripts/provider_review_check.mjs
+
+      - name: 设置向导脚本与控件回归
+        run: node scripts/setup_ui_check.mjs
+
+      - name: 聊天空回复和诊断回归
+        run: node scripts/chat_response_check.mjs
+
+      - name: 辅助生成失败边界回归
+        run: |
+          node scripts/chat_output_boundary_check.mjs
+          node scripts/auxiliary_chat_failure_check.mjs
+
+      - name: 审批发布与回滚回归
+        run: |
+          bash -n deploy/release.sh
+          node scripts/deploy_release_check.mjs
+          node scripts/release_gate_check.mjs
+
       - name: import 链 smoke
         run: npm run check:imports
 
@@ -166,6 +188,9 @@ jobs:
 
       - name: current_works 日程结构化（v1.21.4 PR-W5 日程消费档案/progress 渐进/life_state 预留）
         run: node scripts/works_schedule_smoke.mjs
+
+      - name: Proactive chat failure isolation
+        run: node scripts/proactive_chat_failure_check.mjs
 
       - name: proactive digest 旁路素材冷却闸门（接线类第五案：mem:509 复读修+双向红验）
         run: node scripts/proactive_digest_cooldown_smoke.mjs

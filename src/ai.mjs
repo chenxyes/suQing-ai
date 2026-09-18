@@ -18,6 +18,7 @@
 import { log } from './logger.mjs';
 import { recordAiUsage, recordAiUsageEvent } from './db.mjs';
 import { chatComplete } from './providers/chat.mjs';
+import { CHAT_FALLBACK, isChatFallback, boundedNumber, chatFailureMetadata } from './chat_response.mjs';
 import { imageGenerate } from './providers/image.mjs';
 import { visionRecognize } from './providers/vision.mjs';
 import { asrRecognize } from './providers/asr.mjs';
@@ -27,12 +28,13 @@ import { shouldSearch, webSearch, formatSearchContext } from './web_search.mjs';
 // ─── v1.9.0 #2: Provider retry wrapper（单 provider 内退避，不做跨 provider fallback） ──
 // 三类瞬时故障 → 重试：超时 / 429 / 5xx / 网络错
 // 三类持久故障 → 立即抛：401 key 错误 / 403 权限 / 400 prompt 格式 / 404 模型不存在
-const PROVIDER_RETRY_MAX = Math.max(0, Number(process.env.PROVIDER_RETRY_MAX ?? 2));
+const PROVIDER_RETRY_MAX = boundedNumber(process.env.PROVIDER_RETRY_MAX, 2, 0, 4);
 // 退避基线（指数 3 倍）：默认 250ms → 750 → 2250。调高让重试更耐心，调低更激进。
-const PROVIDER_RETRY_BASE_MS = Math.max(0, Number(process.env.PROVIDER_RETRY_BASE_DELAY_MS ?? 250));
+const PROVIDER_RETRY_BASE_MS = boundedNumber(process.env.PROVIDER_RETRY_BASE_DELAY_MS, 250, 0, 5_000);
 
 function isRetryableError(err) {
   if (!err) return false;
+  if (typeof err.retryable === 'boolean') return err.retryable;
   // 1. SDK 上的 status 字段（OpenAI APIError 等）
   if (typeof err.status === 'number') {
     if (err.status === 429) return true;
@@ -54,18 +56,22 @@ function isRetryableError(err) {
 
 async function chatCompleteWithRetry(args, { label = 'chat' } = {}) {
   let lastErr = null;
+  const started = Date.now();
   for (let attempt = 0; attempt <= PROVIDER_RETRY_MAX; attempt++) {
     try {
-      return await chatComplete(args);
+      const result = await chatComplete(args);
+      log('info', `[ai] chat_result ${JSON.stringify({ provider: result.provider, model: result.model, attempt: attempt + 1, finish_reason: result.finish_reason, elapsed_ms: Date.now() - started })}`);
+      return result;
     } catch (err) {
       lastErr = err;
+      log('warn', `[ai] chat_failure ${JSON.stringify({ provider: err.provider, model: err.model, attempt: attempt + 1, elapsed_ms: Date.now() - started, ...chatFailureMetadata(err) })}`);
       if (attempt >= PROVIDER_RETRY_MAX || !isRetryableError(err)) {
         throw err;
       }
       const base = PROVIDER_RETRY_BASE_MS * Math.pow(3, attempt);
       const jitter = base * (0.8 + Math.random() * 0.4);  // ±20%
       const delay = Math.round(jitter);
-      log('warn', `[ai] ${label} retry ${attempt + 1}/${PROVIDER_RETRY_MAX} after ${delay}ms: ${String(err.message || err).slice(0, 120)}`);
+      log('warn', `[ai] ${label} retry ${attempt + 1}/${PROVIDER_RETRY_MAX} after ${delay}ms: ${chatFailureMetadata(err).code}`);
       await new Promise(r => setTimeout(r, delay));
     }
   }
@@ -150,7 +156,7 @@ export async function activityToPhotoPrompt(activity, { timeSlot = 'afternoon', 
     });
     return text.replace(/^["'`]+|["'`]+$/g, '');
   } catch (err) {
-    log('warn', `[ai] activityToPhotoPrompt 失败: ${err.message}`);
+    log('warn', `[ai] activityToPhotoPrompt 失败: ${JSON.stringify(chatFailureMetadata(err))}`);
     return null;
   }
 }
@@ -240,7 +246,7 @@ export async function generatePersonaFacts(companion) {
     if (!m) throw new Error('No JSON in response');
     return JSON.parse(m[0]);
   } catch (err) {
-    log('warn', `[ai] generatePersonaFacts 失败: ${err.message}`);
+    log('warn', `[ai] generatePersonaFacts 失败: ${JSON.stringify(chatFailureMetadata(err))}`);
     return null;
   }
 }
@@ -304,6 +310,7 @@ export async function generateReply(personaPrompt, history, userMessage, params 
     const role = h.direction
       ? (h.direction === 'in' ? 'user' : 'assistant')
       : (h.role === 'user' ? 'user' : 'assistant');
+    if (role === 'assistant' && isChatFallback(h.content)) continue;
     messages.push({ role, content: h.content });
   }
   messages.push({ role: 'user', content: userMessage });
@@ -329,20 +336,19 @@ export async function generateReply(personaPrompt, history, userMessage, params 
   }
 
   log('debug', `[ai] chat messages=${messages.length} temp=${temperature}`);
-  const FALLBACK = '嗯…我刚刚有点走神，等我一下下，再跟你说～';
+  const FALLBACK = CHAT_FALLBACK;
   try {
-    const { text, usage } = await chatCompleteWithRetry({
+    const { text, usage, provider, model } = await chatCompleteWithRetry({
       system: effectiveSystem,
       messages,
       temperature,
       max_tokens,
       top_p,
-      timeout_ms: 30_000,
     });
-    let reply = text || FALLBACK;
+    let reply = text;
     // v1.13.x 真人感#1：非角色扮演模式，删掉动作神态旁白（确定性兜底，prompt 之外再保一道）
     if (!/进入角色扮演模式/.test(personaPrompt)) reply = stripActionNarration(reply);
-    log('info', `[ai] 回复: ${reply.slice(0, 80)}...`);
+    log('info', `[ai] reply_length=${reply.length}`);
     if (accountId && usage) {
       try {
         recordAiUsage({
@@ -357,15 +363,15 @@ export async function generateReply(personaPrompt, history, userMessage, params 
     }
     // P1-7 成本明细：chat 调用一律记一条（accountId 可空），含 token/延迟/状态/估算成本
     recordAiUsageEvent({
-      accountId, companionId, provider: process.env.CHAT_PROVIDER, model: process.env.CHAT_MODEL,
+      accountId, companionId, provider, model,
       capability: 'chat', promptTokens: usage?.prompt_tokens || 0, completionTokens: usage?.completion_tokens || 0,
       latencyMs: Date.now() - _t0, status: reply === FALLBACK ? 'fallback' : 'ok',
     });
     return reply;
   } catch (err) {
-    log('error', `[ai] chat 错误: ${err.message}`);
+    log('error', `[ai] chat 错误: ${JSON.stringify(chatFailureMetadata(err))}`);
     recordAiUsageEvent({
-      accountId, companionId, provider: process.env.CHAT_PROVIDER, model: process.env.CHAT_MODEL,
+      accountId, companionId, provider: err.provider, model: err.model,
       capability: 'chat', latencyMs: Date.now() - _t0, status: 'error',
     });
     return FALLBACK;
@@ -394,7 +400,7 @@ export async function extractStructuredInfo(systemPrompt, userContent, ctx = {})
     }
     return text || '{}';
   } catch (err) {
-    log('warn', `[ai] extractStructuredInfo 失败: ${err.message}`);
+    log('warn', `[ai] extractStructuredInfo 失败: ${JSON.stringify(chatFailureMetadata(err))}`);
     return '{}';
   }
 }

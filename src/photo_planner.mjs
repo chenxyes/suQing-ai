@@ -1,3 +1,4 @@
+import { readProviderSetting, customProviderStatus } from './providers/custom.mjs';
 /**
  * AI 决策式照片规划。
  *
@@ -85,7 +86,8 @@ function pickImageProviderKey(provider) {
   return { provider: name, keys: map[name] || [] };
 }
 
-export function isImageProviderConfigured(provider = process.env.IMAGE_PROVIDER || 'zhipu') {
+export function isImageProviderConfigured(provider = readProviderSetting('IMAGE_PROVIDER') || 'zhipu') {
+  if (provider === 'custom') return customProviderStatus('image').configured;
   const { keys } = pickImageProviderKey(provider);
   return keys.some(k => !!process.env[k]);
 }

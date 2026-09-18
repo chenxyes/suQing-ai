@@ -25,11 +25,12 @@
  */
 
 import { log } from '../logger.mjs';
-import { getAppSetting } from '../db.mjs';
 import { randomUUID } from 'node:crypto';
+import { customTts, readProviderSetting, customProviderStatus } from './custom.mjs';
 
 // ─── Provider 注册表 ───────────────────────────────────────────────────────
 export const REGISTRY = {
+  custom: { label: 'Custom OpenAI relay', kind: 'custom', apiKeyEnv: 'TTS_API_KEY', defaultModel: '', defaultVoiceId: 'alloy' },
   minimax: {
     baseURL: 'https://api.minimax.chat/v1',
     defaultModel: 'speech-02-turbo',  // 性价比版；speech-02-hd 更清晰但贵
@@ -78,14 +79,7 @@ export const REGISTRY = {
 };
 
 // ─── 动态读取：env 优先，其次 app_settings ────────────────────────────────
-function readSetting(key) {
-  if (process.env[key]) return process.env[key];
-  try {
-    const v = getAppSetting(key);
-    if (v) return v;
-  } catch { /* 表不存在时静默 */ }
-  return '';
-}
+function readSetting(key) { return readProviderSetting(key); }
 
 export function getActiveProviderName() {
   return (readSetting('TTS_PROVIDER') || '').toLowerCase();
@@ -306,7 +300,9 @@ export async function ttsSynthesize(text, opts = {}) {
 
   try {
     let audio;
-    if (entry.kind === 'minimax-native') {
+    if (entry.kind === 'custom') {
+      audio = await customTts(text, { voice: voice_id, model, speed, signal: controller.signal });
+    } else if (entry.kind === 'minimax-native') {
       const groupId = entry.groupIdEnv ? readSetting(entry.groupIdEnv) : null;
       audio = await minimaxSynthesize({
         apiKey, groupId, model, voice_id, speed,
@@ -368,7 +364,7 @@ export function getTtsStatus() {
     label: entry.label,
     model: getModelFor(entry),
     voice_id: getVoiceId(entry),
-    configured: !!apiKey && extraOk,
+    configured: name === 'custom' ? customProviderStatus('tts').configured : !!apiKey && extraOk,
     extras,
     providers: Object.keys(REGISTRY),
   };

@@ -1,3 +1,5 @@
+import { isChatFallback } from './chat_response.mjs';
+import { CUSTOM_CAPABILITIES, readProviderSetting, customProviderStatus, saveCustomProviderConfig, testCustomProvider } from './providers/custom.mjs';
 /**
  * REST API 服务
  *
@@ -2100,17 +2102,17 @@ router.get('/setup/provider-status', softAuth, (req, res) => {
   const providers = {};
   for (const [id, entry] of Object.entries(CHAT_REGISTRY)) {
     const envVal  = process.env[entry.apiKeyEnv] || '';
-    const dbVal   = envVal ? '' : (getAppSetting(entry.apiKeyEnv) || '');
-    const rawKey  = envVal || dbVal;
+    const dbVal   = getAppSetting(entry.apiKeyEnv) || '';
+    const rawKey  = dbVal || envVal;
     // 自定义兼容 provider 需要额外的 base_url + model 状态
     let customBaseURL = '';
     let customModel   = '';
     if (entry.custom) {
       if (entry.baseURLEnv) {
-        customBaseURL = process.env[entry.baseURLEnv] || getAppSetting(entry.baseURLEnv) || '';
+        customBaseURL = readProviderSetting(entry.baseURLEnv);
       }
       if (entry.modelEnv) {
-        customModel = process.env[entry.modelEnv] || getAppSetting(entry.modelEnv) || '';
+        customModel = readProviderSetting(entry.modelEnv);
       }
     }
     const configured = entry.custom
@@ -2123,7 +2125,7 @@ router.get('/setup/provider-status', softAuth, (req, res) => {
       if (Array.isArray(entry.models) && entry.models.length) info.models = entry.models;
       if (entry.defaultModel) info.default_model = entry.defaultModel;
       if (isAuthed) {
-        info.source     = envVal ? 'env' : 'app_settings';
+        info.source     = dbVal ? 'app_settings' : 'env';
         info.masked_key = maskApiKey(rawKey);
         if (entry.custom) {
           info.base_url = customBaseURL;
@@ -2147,17 +2149,23 @@ router.get('/setup/provider-status', softAuth, (req, res) => {
   // 当前 CHAT_MODEL override（已登录返回）
   let currentChatModel = '';
   try {
-    currentChatModel = process.env.CHAT_MODEL || getAppSetting('CHAT_MODEL') || '';
+    currentChatModel = readProviderSetting('CHAT_MODEL');
   } catch {}
   // 附加：可选能力 vision / asr 的当前状态
   // 匿名只返回 enabled + label；已登录额外返回 model + masked_key
   function buildOptionalSection(REG, providerEnvKey, modelEnvKey, active) {
     const items = {};
     for (const [id, entry] of Object.entries(REG)) {
-      const rawKey = process.env[entry.apiKeyEnv] || (entry.apiKeyEnv ? getAppSetting(entry.apiKeyEnv) : '') || '';
-      const info = { label: entry.label, configured: Boolean(rawKey) };
+      const rawKey = entry.apiKeyEnv ? readProviderSetting(entry.apiKeyEnv) : '';
+      const capPrefix = providerEnvKey.split('_')[0];
+      const custom = id === 'custom';
+      const customBase = custom ? readProviderSetting(`${capPrefix}_BASE_URL`) : '';
+      const customModel = custom ? readProviderSetting(`${capPrefix}_MODEL`) : '';
+      const info = { label: entry.label, configured: custom ? Boolean(rawKey && customBase && customModel) : Boolean(rawKey) };
+      if (custom) Object.assign(info, customProviderStatus(capPrefix.toLowerCase(), isAuthed));
       if (entry.stub) info.stub = true;
-      if (isAuthed && rawKey) info.masked_key = maskApiKey(rawKey);
+      if (!custom && isAuthed && rawKey) info.masked_key = maskApiKey(rawKey);
+      if (custom && isAuthed) { if (customBase) info.base_url = customBase; if (customModel) info.model = customModel; }
       items[id] = info;
     }
     return {
@@ -2176,7 +2184,7 @@ router.get('/setup/provider-status', softAuth, (req, res) => {
   const searchProviders = {};
   for (const [id, entry] of Object.entries(SEARCH_REGISTRY)) {
     const envKey = entry.apiKeyEnv ? (process.env[entry.apiKeyEnv] || getAppSetting(entry.apiKeyEnv) || '') : '';
-    const baseURL = entry.baseURLEnv ? (process.env[entry.baseURLEnv] || getAppSetting(entry.baseURLEnv) || '') : '';
+    const baseURL = entry.baseURLEnv ? (readProviderSetting(entry.baseURLEnv)) : '';
     const configured = entry.custom ? Boolean(baseURL) : Boolean(envKey);
     const info = { label: entry.label, configured };
     if (entry.custom) info.requires_base_url = true;
@@ -2195,9 +2203,16 @@ router.get('/setup/provider-status', softAuth, (req, res) => {
     providers,
     vision: buildOptionalSection(VISION_REGISTRY, 'VISION_PROVIDER', 'VISION_MODEL', visionActive),
     asr:    buildOptionalSection(ASR_REGISTRY,    'ASR_PROVIDER',    'ASR_MODEL',    asrActive),
+    image: { active: getActiveImageProvider().id, active_model: getActiveImageProvider().model,
+      active_configured: getActiveImageProvider().configured,
+      providers: { custom: customProviderStatus('image', isAuthed) } },
+    embedding: { active: getActiveEmbeddingProvider().id, active_model: getActiveEmbeddingProvider().model,
+      active_configured: getActiveEmbeddingProvider().configured,
+      providers: { custom: customProviderStatus('embedding', isAuthed) } },
     tts:    {
       active: ttsActive.active || null,
-      configured: !!ttsActive.configured,
+      configured: ttsActive.active === 'custom' ? customProviderStatus('tts').configured : !!ttsActive.configured,
+      custom: customProviderStatus('tts', isAuthed),
       label: ttsActive.label || null,
       model: ttsActive.model || null,
       voice_id: ttsActive.voice_id || null,
@@ -2217,7 +2232,11 @@ router.post('/setup/provider-config',
   blockIfHosted,
   requireAuth,
   async (req, res) => {
-    const capability = (req.body?.capability || 'chat').toLowerCase();
+    const capability = String(req.body?.capability || 'chat').toLowerCase();
+    if (CUSTOM_CAPABILITIES.includes(capability) && String(req.body?.provider || '').trim().toLowerCase() === 'custom' && !req.body?.clear) {
+      try { return ok(res, saveCustomProviderConfig(capability, req.body)); }
+      catch (error) { return err(res, error.message); }
+    }
 
     // ── 可选能力：vision / asr / tts ──────────────────────────────────────
     // 字段：{ capability: 'vision'|'asr'|'tts', provider, model?, api_key?, clear? }
@@ -2290,6 +2309,15 @@ router.post('/setup/provider-config',
         voice_id_saved: voiceIdSaved,
         extras_saved: extrasSaved,
       });
+    }
+
+    // For image/embedding the new controls configure custom endpoints; clear restores env presets.
+    if (capability === 'image' || capability === 'embedding') {
+      if (!req.body?.clear) return err(res, '请选择 custom 或恢复环境配置');
+      const prefix = capability.toUpperCase();
+      deleteAppSetting(`${prefix}_PROVIDER`);
+      deleteAppSetting(`${prefix}_MODEL`);
+      return ok(res, { capability, cleared: true });
     }
 
     // ── 联网搜索：capability=search ──────────────────────────────────────
@@ -2421,15 +2449,26 @@ router.post('/setup/test-provider',
     const name = provider.toLowerCase().trim();
     const cap  = String(capability).toLowerCase();
 
+    if (name === 'custom' && CUSTOM_CAPABILITIES.includes(cap)) {
+      try { return ok(res, await testCustomProvider(cap)); }
+      catch (error) { return res.status(200).json({ ok: false, error: error.message }); }
+    }
     const REG = cap === 'vision' ? VISION_REGISTRY
-              : cap === 'asr'    ? ASR_REGISTRY
-              : cap === 'search' ? SEARCH_REGISTRY
-              : CHAT_REGISTRY;
+              : cap === 'asr' ? ASR_REGISTRY
+              : cap === 'tts' ? TTS_REGISTRY
+              : (cap === 'image' || cap === 'embedding') ? { custom: { label: 'Custom OpenAI relay' } }
+              : cap === 'search' ? SEARCH_REGISTRY : CHAT_REGISTRY;
     if (!REG[name]) return err(res, `未知 ${cap} provider: ${name}`);
 
     try {
       let result;
-      if (cap === 'vision') {
+      if (cap === 'tts') {
+        const { ttsSynthesize, getTtsStatus } = await import('./providers/tts.mjs');
+        if (getTtsStatus().active !== name) throw new Error('请先保存所选语音 provider 再测试');
+        const t0 = Date.now();
+        await ttsSynthesize('你好', { timeoutMs: 15_000 });
+        result = { ok: true, provider: name, latency_ms: Date.now() - t0 };
+      } else if (cap === 'vision') {
         const { testVisionProvider } = await import('./providers/vision.mjs');
         result = await testVisionProvider(name);
       } else if (cap === 'asr') {
@@ -2969,6 +3008,7 @@ ${r.prompt_hint}`;
           temperature: 0.85,
           max_tokens: 80,
         });
+        if (isChatFallback(reply)) throw new Error('wake chat unavailable');
         reply = (reply || '').replace(/^["「『]+|["」』]+$/g, '').trim();
         if (!reply) reply = '……几点啊';
         for (const seg of reply.split('||').map(s => s.trim()).filter(Boolean).slice(0, 3)) {
