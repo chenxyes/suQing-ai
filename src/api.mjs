@@ -2155,9 +2155,14 @@ router.get('/setup/provider-status', softAuth, (req, res) => {
     const items = {};
     for (const [id, entry] of Object.entries(REG)) {
       const rawKey = process.env[entry.apiKeyEnv] || (entry.apiKeyEnv ? getAppSetting(entry.apiKeyEnv) : '') || '';
-      const info = { label: entry.label, configured: Boolean(rawKey) };
+      const capPrefix = providerEnvKey.split('_')[0];
+      const custom = id === 'custom';
+      const customBase = custom ? (process.env[`${capPrefix}_BASE_URL`] || getAppSetting(`${capPrefix}_BASE_URL`) || '') : '';
+      const customModel = custom ? (process.env[`${capPrefix}_MODEL`] || getAppSetting(`${capPrefix}_MODEL`) || '') : '';
+      const info = { label: entry.label, configured: custom ? Boolean(rawKey && customBase && customModel) : Boolean(rawKey) };
       if (entry.stub) info.stub = true;
       if (isAuthed && rawKey) info.masked_key = maskApiKey(rawKey);
+      if (custom && isAuthed) { if (customBase) info.base_url = customBase; if (customModel) info.model = customModel; }
       items[id] = info;
     }
     return {
@@ -2195,6 +2200,8 @@ router.get('/setup/provider-status', softAuth, (req, res) => {
     providers,
     vision: buildOptionalSection(VISION_REGISTRY, 'VISION_PROVIDER', 'VISION_MODEL', visionActive),
     asr:    buildOptionalSection(ASR_REGISTRY,    'ASR_PROVIDER',    'ASR_MODEL',    asrActive),
+    image: { active: getActiveImageProvider().id, providers: { custom: { label: 'Custom OpenAI relay', configured: Boolean(process.env.IMAGE_BASE_URL || getAppSetting('IMAGE_BASE_URL')) } } },
+    embedding: { active: process.env.EMBEDDING_PROVIDER || getAppSetting('EMBEDDING_PROVIDER') || 'gemini', providers: { custom: { label: 'Custom OpenAI relay', configured: Boolean(process.env.EMBEDDING_BASE_URL || getAppSetting('EMBEDDING_BASE_URL')) } } },
     tts:    {
       active: ttsActive.active || null,
       configured: !!ttsActive.configured,
@@ -2443,7 +2450,14 @@ router.post('/setup/test-provider',
 
     try {
       let result;
-      if (cap === 'vision') {
+      if (cap === 'image' || cap === 'embedding' || cap === 'tts') {
+        const prefix = cap.toUpperCase(); const base = process.env[`${prefix}_BASE_URL`] || getAppSetting(`${prefix}_BASE_URL`); const key = process.env[`${prefix}_API_KEY`] || getAppSetting(`${prefix}_API_KEY`); const model = process.env[`${prefix}_MODEL`] || getAppSetting(`${prefix}_MODEL`);
+        if (!base || !key || !model) throw new Error(`${cap} custom 配置不完整`);
+        const path = cap === 'image' ? '/images/generations' : cap === 'embedding' ? '/embeddings' : '/audio/speech';
+        const body = cap === 'image' ? { model, prompt: 'probe', n: 1 } : cap === 'embedding' ? { model, input: 'probe' } : { model, input: 'probe', voice: 'alloy' };
+        const rr = await fetch(base.replace(/\/$/, '') + path, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(15000) });
+        if (!rr.ok) throw new Error(`${cap} HTTP ${rr.status}`); result = { ok: true, provider: name };
+      } else if (cap === 'vision') {
         const { testVisionProvider } = await import('./providers/vision.mjs');
         result = await testVisionProvider(name);
       } else if (cap === 'asr') {
