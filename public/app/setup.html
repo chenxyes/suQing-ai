@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
+  <section class="card" id="s2-custom-capabilities"><h3 class="text-[14px] font-bold">🧩 生图与 Embedding 自定义中转</h3><p class="text-[12px] text-mute">通过 API 保存 image/embedding 的 custom base URL、模型和密钥。</p><div class="grid grid-cols-2 gap-2"><input id="s2-image-base" class="input font-mono" placeholder="IMAGE_BASE_URL"><input id="s2-image-model" class="input font-mono" placeholder="IMAGE_MODEL"><input id="s2-embedding-base" class="input font-mono" placeholder="EMBEDDING_BASE_URL"><input id="s2-embedding-model" class="input font-mono" placeholder="EMBEDDING_MODEL"></div></section>
   <script>(function(){try{var p=localStorage.getItem('xiyu_theme')||'auto';var d=p==='dark'||(p==='auto'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.setAttribute('data-theme',d?'dark':'light');}catch(e){}})();</script>
   <script>(function(){fetch('/api/setup/status').then(function(r){return r.json();}).then(function(d){if(d&&d.data&&d.data.hosted_mode){location.replace('/app/dashboard.html');}}).catch(function(){});})();</script>
   <meta charset="UTF-8" />
@@ -321,6 +322,7 @@
                 <option value="kimi">Kimi（Moonshot）vision</option>
                 <option value="stepfun">StepFun step-1v</option>
                 <option value="minimax">MiniMax abab vision（key 与 TTS 复用）</option>
+                <option value="custom">自定义 OpenAI 兼容中转</option>
               </select>
             </div>
             <div class="mb-2">
