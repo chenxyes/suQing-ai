@@ -14,12 +14,13 @@ export function normalizeChatResponse({ text, finishReason = null, refusal = fal
   let code, retryable = false;
   if (refusal || ['content_filter', 'safety', 'recitation', 'blocklist', 'prohibited_content', 'spii', 'refusal'].includes(lower)) {
     code = 'response_refused';
+  } else if (['tool_calls', 'function_call', 'tool_use'].includes(lower)) {
+    code = 'unsupported_tool_call';
   } else {
     if (Array.isArray(text)) text = text.filter(part => part?.type === 'text' && typeof part.text === 'string').map(part => part.text).join('');
     if (text != null && typeof text !== 'string') code = 'invalid_content';
     else if (typeof text === 'string' && text.trim()) return { text: text.trim(), usage, finish_reason: reason };
     else if (['length', 'max_tokens'].includes(lower)) code = 'token_limit';
-    else if (['tool_calls', 'function_call'].includes(lower)) code = 'unsupported_tool_call';
     else { code = 'empty_response'; retryable = true; }
   }
   const error = new Error(`chat ${code}`);

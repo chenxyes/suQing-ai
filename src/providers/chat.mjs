@@ -209,8 +209,8 @@ async function anthropicChat({ system, messages, model, temperature, max_tokens,
     signal,
   });
   if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`Anthropic HTTP ${resp.status}: ${text.slice(0, 200)}`);
+    await resp.body?.cancel();
+    throw Object.assign(new Error(`Anthropic HTTP ${resp.status}`), { status: resp.status });
   }
   const data = await resp.json();
   const text = (data.content || [])
@@ -258,8 +258,8 @@ async function geminiChat({ system, messages, model, temperature, max_tokens, to
     signal,
   });
   if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`Gemini HTTP ${resp.status}: ${text.slice(0, 200)}`);
+    await resp.body?.cancel();
+    throw Object.assign(new Error(`Gemini HTTP ${resp.status}`), { status: resp.status });
   }
   const data = await resp.json();
   const text = (data.candidates?.[0]?.content?.parts || [])
@@ -336,33 +336,34 @@ export async function chatComplete({
   timeout_ms = readSetting('CHAT_TIMEOUT_MS') || 60_000,
 } = {}) {
   const name = getActiveProviderName();
+  const model = activeModel(name);
+  const snapshot = { provider: name, model };
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), boundedNumber(timeout_ms, 60_000, 1_000, 180_000));
   try {
     if (name === 'anthropic') {
-      return await anthropicChat({
+      return { ...await anthropicChat({
         system,
         messages,
-        model: activeModel(name),
+        model,
         temperature,
         max_tokens,
         top_p,
         signal: controller.signal,
-      });
+      }), ...snapshot };
     }
     if (name === 'gemini') {
-      return await geminiChat({
+      return { ...await geminiChat({
         system,
         messages,
-        model: activeModel(name),
+        model,
         temperature,
         max_tokens,
         top_p,
         signal: controller.signal,
-      });
+      }), ...snapshot };
     }
     const client = getOpenAIClientFor(name);
-    const model = activeModel(name);
     if (!model) {
       throw new Error(
         `${REGISTRY[name]?.label || name} 未指定模型。请设置 CHAT_MODEL=... ` +
@@ -374,7 +375,7 @@ export async function chatComplete({
       { model, messages: allMessages, temperature, max_tokens, top_p },
       { signal: controller.signal },
     );
-    return normalizeChatResponse({
+    return { ...normalizeChatResponse({
       text: resp.choices?.[0]?.message?.content,
       finishReason: resp.choices?.[0]?.finish_reason,
       refusal: Boolean(resp.choices?.[0]?.message?.refusal),
@@ -382,7 +383,10 @@ export async function chatComplete({
         prompt_tokens: resp.usage?.prompt_tokens || 0,
         completion_tokens: resp.usage?.completion_tokens || 0,
       },
-    });
+    }), ...snapshot };
+  } catch (error) {
+    Object.assign(error, snapshot);
+    throw error;
   } finally {
     clearTimeout(t);
   }

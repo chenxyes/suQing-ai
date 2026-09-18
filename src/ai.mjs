@@ -17,7 +17,7 @@
 
 import { log } from './logger.mjs';
 import { recordAiUsage, recordAiUsageEvent } from './db.mjs';
-import { chatComplete, getActiveChatProvider } from './providers/chat.mjs';
+import { chatComplete } from './providers/chat.mjs';
 import { CHAT_FALLBACK, isChatFallback, boundedNumber, chatFailureMetadata } from './chat_response.mjs';
 import { imageGenerate } from './providers/image.mjs';
 import { visionRecognize } from './providers/vision.mjs';
@@ -60,13 +60,11 @@ async function chatCompleteWithRetry(args, { label = 'chat' } = {}) {
   for (let attempt = 0; attempt <= PROVIDER_RETRY_MAX; attempt++) {
     try {
       const result = await chatComplete(args);
-      const active = getActiveChatProvider();
-      log('info', `[ai] chat_result ${JSON.stringify({ provider: active.id, model: active.model, attempt: attempt + 1, finish_reason: result.finish_reason, elapsed_ms: Date.now() - started })}`);
+      log('info', `[ai] chat_result ${JSON.stringify({ provider: result.provider, model: result.model, attempt: attempt + 1, finish_reason: result.finish_reason, elapsed_ms: Date.now() - started })}`);
       return result;
     } catch (err) {
       lastErr = err;
-      const active = getActiveChatProvider();
-      log('warn', `[ai] chat_failure ${JSON.stringify({ provider: active.id, model: active.model, attempt: attempt + 1, elapsed_ms: Date.now() - started, ...chatFailureMetadata(err) })}`);
+      log('warn', `[ai] chat_failure ${JSON.stringify({ provider: err.provider, model: err.model, attempt: attempt + 1, elapsed_ms: Date.now() - started, ...chatFailureMetadata(err) })}`);
       if (attempt >= PROVIDER_RETRY_MAX || !isRetryableError(err)) {
         throw err;
       }
@@ -158,7 +156,7 @@ export async function activityToPhotoPrompt(activity, { timeSlot = 'afternoon', 
     });
     return text.replace(/^["'`]+|["'`]+$/g, '');
   } catch (err) {
-    log('warn', `[ai] activityToPhotoPrompt 失败: ${err.message}`);
+    log('warn', `[ai] activityToPhotoPrompt 失败: ${JSON.stringify(chatFailureMetadata(err))}`);
     return null;
   }
 }
@@ -248,7 +246,7 @@ export async function generatePersonaFacts(companion) {
     if (!m) throw new Error('No JSON in response');
     return JSON.parse(m[0]);
   } catch (err) {
-    log('warn', `[ai] generatePersonaFacts 失败: ${err.message}`);
+    log('warn', `[ai] generatePersonaFacts 失败: ${JSON.stringify(chatFailureMetadata(err))}`);
     return null;
   }
 }
@@ -340,7 +338,7 @@ export async function generateReply(personaPrompt, history, userMessage, params 
   log('debug', `[ai] chat messages=${messages.length} temp=${temperature}`);
   const FALLBACK = CHAT_FALLBACK;
   try {
-    const { text, usage } = await chatCompleteWithRetry({
+    const { text, usage, provider, model } = await chatCompleteWithRetry({
       system: effectiveSystem,
       messages,
       temperature,
@@ -350,7 +348,7 @@ export async function generateReply(personaPrompt, history, userMessage, params 
     let reply = text;
     // v1.13.x 真人感#1：非角色扮演模式，删掉动作神态旁白（确定性兜底，prompt 之外再保一道）
     if (!/进入角色扮演模式/.test(personaPrompt)) reply = stripActionNarration(reply);
-    log('info', `[ai] 回复: ${reply.slice(0, 80)}...`);
+    log('info', `[ai] reply_length=${reply.length}`);
     if (accountId && usage) {
       try {
         recordAiUsage({
@@ -365,7 +363,7 @@ export async function generateReply(personaPrompt, history, userMessage, params 
     }
     // P1-7 成本明细：chat 调用一律记一条（accountId 可空），含 token/延迟/状态/估算成本
     recordAiUsageEvent({
-      accountId, companionId, provider: getActiveChatProvider().id, model: getActiveChatProvider().model,
+      accountId, companionId, provider, model,
       capability: 'chat', promptTokens: usage?.prompt_tokens || 0, completionTokens: usage?.completion_tokens || 0,
       latencyMs: Date.now() - _t0, status: reply === FALLBACK ? 'fallback' : 'ok',
     });
@@ -373,7 +371,7 @@ export async function generateReply(personaPrompt, history, userMessage, params 
   } catch (err) {
     log('error', `[ai] chat 错误: ${JSON.stringify(chatFailureMetadata(err))}`);
     recordAiUsageEvent({
-      accountId, companionId, provider: getActiveChatProvider().id, model: getActiveChatProvider().model,
+      accountId, companionId, provider: err.provider, model: err.model,
       capability: 'chat', latencyMs: Date.now() - _t0, status: 'error',
     });
     return FALLBACK;
