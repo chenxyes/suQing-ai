@@ -7,14 +7,15 @@
  * 单独处理 Anthropic（因为它字段不同）。
  *
  * 使用方式：
- *   1. 优先读取 process.env（.env 文件或环境变量）
- *   2. 其次读取 SQLite app_settings（通过 /app/setup.html 写入）
+ *   1. 优先读取 SQLite app_settings（设置页保存）
+ *   2. 其次读取 process.env（.env 文件或环境变量）
  *   3. 两者都没有时 provider disabled，聊天时返回友好错误
  *
  * Copyright (c) 2026 溪语 AI Contributors. MIT License.
  */
 
 import OpenAI from 'openai';
+import { normalizeChatResponse, boundedNumber } from '../chat_response.mjs';
 import { log } from '../logger.mjs';
 import { getAppSetting } from '../db.mjs';
 
@@ -157,16 +158,15 @@ export const REGISTRY = {
   },
 };
 
-// ─── 动态读取：env 优先，其次 app_settings ─────────────────────────────────
+// ─── 动态读取：app_settings 优先，其次 env ─────────────────────────────────
 
-// 通用：env > app_settings > '' 优先级
+// 通用：app_settings > env > '' 优先级
 function readSetting(key) {
-  if (process.env[key]) return process.env[key];
   try {
-    const v = getAppSetting(key);
-    if (v) return v;
+    const value = getAppSetting(key);
+    if (value !== null && value !== undefined && value !== '') return value;
   } catch {}
-  return '';
+  return process.env[key] || '';
 }
 
 function getActiveProviderName() {
@@ -175,33 +175,13 @@ function getActiveProviderName() {
 }
 
 function getApiKeyForEntry(entry) {
-  if (!entry) return null;
-  if (process.env[entry.apiKeyEnv]) return process.env[entry.apiKeyEnv];
-  try {
-    const stored = getAppSetting(entry.apiKeyEnv);
-    if (stored) return stored;
-  } catch {}
-  return null;
+  return entry ? readSetting(entry.apiKeyEnv) || null : null;
 }
-
-// 仅对自定义兼容 provider 用：动态读取 base URL 与 model。
 function getDynamicBaseURL(entry) {
-  if (!entry?.baseURLEnv) return entry?.baseURL || '';
-  if (process.env[entry.baseURLEnv]) return process.env[entry.baseURLEnv];
-  try {
-    const stored = getAppSetting(entry.baseURLEnv);
-    if (stored) return stored;
-  } catch {}
-  return '';
+  return entry?.baseURLEnv ? readSetting(entry.baseURLEnv) : entry?.baseURL || '';
 }
 function getDynamicModel(entry) {
-  if (!entry?.modelEnv) return entry?.defaultModel || '';
-  if (process.env[entry.modelEnv]) return process.env[entry.modelEnv];
-  try {
-    const stored = getAppSetting(entry.modelEnv);
-    if (stored) return stored;
-  } catch {}
-  return '';
+  return entry?.modelEnv ? readSetting(entry.modelEnv) : entry?.defaultModel || '';
 }
 
 // ─── Anthropic 单独走原生协议（messages API） ─────────────────────────────
@@ -238,13 +218,13 @@ async function anthropicChat({ system, messages, model, temperature, max_tokens,
     .map((b) => b.text)
     .join('')
     .trim();
-  return {
-    text,
+  return normalizeChatResponse({
+    text, finishReason: data.stop_reason,
     usage: {
       prompt_tokens: data.usage?.input_tokens || 0,
       completion_tokens: data.usage?.output_tokens || 0,
     },
-  };
+  });
 }
 
 // ─── Gemini 单独走原生协议（generateContent） ─────────────────────────────
@@ -283,16 +263,17 @@ async function geminiChat({ system, messages, model, temperature, max_tokens, to
   }
   const data = await resp.json();
   const text = (data.candidates?.[0]?.content?.parts || [])
-    .map((p) => p.text || '')
+    .filter((p) => !p.thought)
+    .map((p) => typeof p.text === 'string' ? p.text : '')
     .join('')
     .trim();
-  return {
-    text,
+  return normalizeChatResponse({
+    text, finishReason: data.candidates?.[0]?.finishReason, refusal: Boolean(data.promptFeedback?.blockReason),
     usage: {
       prompt_tokens: data.usageMetadata?.promptTokenCount || 0,
       completion_tokens: data.usageMetadata?.candidatesTokenCount || 0,
     },
-  };
+  });
 }
 
 // ─── 工厂：按 provider 名返回 OpenAI-compatible client ────────────────────
@@ -316,7 +297,7 @@ function getOpenAIClientFor(name) {
   const cacheKey = entry.custom ? `${apiKey}::${baseURL}` : apiKey;
   const cached = _clientCache.get(name);
   if (cached && cached.key === cacheKey) return cached.client;
-  const client = new OpenAI({ apiKey, baseURL });
+  const client = new OpenAI({ apiKey, baseURL, maxRetries: 0 });
   _clientCache.set(name, { key: cacheKey, client });
   log('info', `[chat] provider=${name} (${entry.label}) client 已创建`);
   return client;
@@ -352,11 +333,11 @@ export async function chatComplete({
   temperature = 0.8,
   max_tokens = 3000,
   top_p = 0.95,
-  timeout_ms = 30_000,
+  timeout_ms = readSetting('CHAT_TIMEOUT_MS') || 60_000,
 } = {}) {
   const name = getActiveProviderName();
   const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), timeout_ms);
+  const t = setTimeout(() => controller.abort(), boundedNumber(timeout_ms, 60_000, 1_000, 180_000));
   try {
     if (name === 'anthropic') {
       return await anthropicChat({
@@ -393,13 +374,15 @@ export async function chatComplete({
       { model, messages: allMessages, temperature, max_tokens, top_p },
       { signal: controller.signal },
     );
-    return {
-      text: (resp.choices?.[0]?.message?.content || '').trim(),
+    return normalizeChatResponse({
+      text: resp.choices?.[0]?.message?.content,
+      finishReason: resp.choices?.[0]?.finish_reason,
+      refusal: Boolean(resp.choices?.[0]?.message?.refusal),
       usage: {
         prompt_tokens: resp.usage?.prompt_tokens || 0,
         completion_tokens: resp.usage?.completion_tokens || 0,
       },
-    };
+    });
   } finally {
     clearTimeout(t);
   }

@@ -47,3 +47,11 @@
 现有服务为 Compose `xiyu-ai`，主机目录 `/home/ubuntu/xiyu-ai`，对外端口 3000，持久化数据、微信凭据及头像目录。发布必须复用原 compose 项目和挂载。仓库检查时不存在 GitHub environments；仅写 `environment: production` 不能构成审批保护，必须配置并检查 required reviewers。
 
 本次 PR 只提供流程和验证，不部署。首次配置审批环境、SSH secrets 和生产首次发版需经用户许可。镜像回滚不等于数据库降级；涉及不兼容 schema 变更的未来发版必须另做迁移/恢复方案。
+
+## 聊天修复行为与配置
+
+- `CHAT_TIMEOUT_MS` 默认 60000，每次请求限制在 1000–180000 ms；`PROVIDER_RETRY_MAX` 默认 2，限制 0–4；退避基线 `PROVIDER_RETRY_BASE_DELAY_MS` 默认 250，限制 0–5000 ms。SDK 自带重试关闭，总请求数最多为 1 + PROVIDER_RETRY_MAX。
+- 无正文/无 choices 视为可恢复空响应；HTTP 429/5xx 与网络、超时允许有限重试。401/403/400/404、明确拒绝、过滤、没有正文且 token 预算耗尽不重复同一请求。
+- `chat_failure` / `chat_result` 记录有效 provider、model、attempt、耗时和结束原因；错误分类不含上游错误原文、密钥、提示词或推理文本。看到 `token_limit` 时需要调整模型/回复 token 预算，单纯延长超时无效。
+- 历史中的确切兜底句在发送给模型前过滤；新失败轮次保留用户输入，网页和微信通道不把失败文本写为正常 assistant 对话，也不执行该回复的情绪和记忆后处理。不删除既有历史或记忆。
+- 仍保留既有友好兜底作为故障时的用户提示。此修复不会让失效 Key 或中转站故障自动变成正常服务，但会避免短暂空响应立即打断，并提供可定位的证据。
