@@ -182,6 +182,9 @@ jobs:
       - name: current_works 日程结构化（v1.21.4 PR-W5 日程消费档案/progress 渐进/life_state 预留）
         run: node scripts/works_schedule_smoke.mjs
 
+      - name: Proactive chat failure isolation
+        run: node scripts/proactive_chat_failure_check.mjs
+
       - name: proactive digest 旁路素材冷却闸门（接线类第五案：mem:509 复读修+双向红验）
         run: node scripts/proactive_digest_cooldown_smoke.mjs
 
