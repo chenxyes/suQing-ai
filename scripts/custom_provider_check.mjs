@@ -1,0 +1,9 @@
+import http from 'node:http';
+import assert from 'node:assert/strict';
+const seen=[];
+const server=http.createServer(async (req,res)=>{let b=''; for await(const c of req)b+=c; seen.push({url:req.url,headers:req.headers,body:b}); const u=req.url; if(u.endsWith('/chat/completions')) return json(res,{choices:[{message:{content:'vision ok'}}]}); if(u.endsWith('/audio/transcriptions')) return json(res,{text:'asr ok'}); if(u.endsWith('/audio/speech')) {res.writeHead(200,{'content-type':'audio/mpeg'}); return res.end(Buffer.alloc(64,1));} if(u.endsWith('/images/generations')) return json(res,{data:[{b64_json:Buffer.from('png').toString('base64')}]}); if(u.endsWith('/embeddings')) return json(res,{data:[{embedding:[1,2,3]}]}); res.writeHead(404);res.end();});
+function json(r,x){r.writeHead(200,{'content-type':'application/json'});r.end(JSON.stringify(x));}
+await new Promise(r=>server.listen(0,r)); const base=`http://127.0.0.1:${server.address().port}/v1`; process.env.CUSTOM_RELAY_BASE_URL=base; process.env.CUSTOM_RELAY_API_KEY='relay-secret'; process.env.CUSTOM_RELAY_MODEL='relay-model';
+const {customVision,customAsr,customTts,customImage,customEmbedding}=await import('../src/providers/custom.mjs');
+assert.equal(await customVision(Buffer.from('x'),'image/jpeg'),'vision ok'); assert.equal(await customAsr(Buffer.from('x'),'audio/wav'),'asr ok'); assert.equal((await customTts('hi')).length,64); assert.match(await customImage('hi'),/^data:image\/png;base64,/); assert.deepEqual(await customEmbedding('hi'),[1,2,3]);
+assert.deepEqual(seen.map(x=>x.url),['/v1/chat/completions','/v1/audio/transcriptions','/v1/audio/speech','/v1/images/generations','/v1/embeddings']); for(const x of seen){assert.equal(x.headers.authorization,'Bearer relay-secret'); if(x.url!='/v1/audio/transcriptions') assert.equal(JSON.parse(x.body).model,'relay-model');} server.close(); console.log('custom relay ok');

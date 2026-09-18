@@ -14,6 +14,7 @@
 
 import { log } from '../logger.mjs';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { customEmbedding } from './custom.mjs';
 
 const ACTIVE = (process.env.EMBEDDING_PROVIDER || 'gemini').toLowerCase();
 const DIM = Number(process.env.EMBEDDING_DIM) || 768;
@@ -52,6 +53,7 @@ export async function embedText(text) {
   const trimmed = text.trim().slice(0, 2000);
   if (!trimmed) return null;
   try {
+    if (ACTIVE === 'custom') return await customEmbedding(trimmed);
     switch (ACTIVE) {
       case 'gemini':
         return await geminiEmbed(trimmed);

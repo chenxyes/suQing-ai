@@ -28,9 +28,11 @@ import { log } from '../logger.mjs';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { getAppSetting } from '../db.mjs';
 import { randomUUID } from 'node:crypto';
+import { customAsr } from './custom.mjs';
 
 // ─── Provider 注册表 ───────────────────────────────────────────────────────
 export const REGISTRY = {
+  custom: { label: 'Custom OpenAI relay', kind: 'custom', apiKeyEnv: 'ASR_API_KEY', defaultModel: '' },
   gemini: {
     apiKeyEnv: 'GEMINI_API_KEY',
     defaultModel: 'gemini-2.5-flash',
@@ -330,6 +332,7 @@ const HANDLERS = {
   doubao: doubaoASR,
   xunfei: xunfeiASR,
   tencent: tencentASR,
+  custom: customAsr,
 };
 
 export async function asrRecognize(audioBuffer, mimeType = 'audio/ogg') {

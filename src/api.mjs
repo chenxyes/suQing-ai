@@ -2292,6 +2292,20 @@ router.post('/setup/provider-config',
       });
     }
 
+    // ── Image / embedding custom relay configuration ─────────────────────
+    if (capability === 'image' || capability === 'embedding') {
+      const prefix = capability.toUpperCase();
+      const { provider, api_key, base_url, model, clear = false } = req.body || {};
+      if (clear) { for (const k of [`${prefix}_PROVIDER`, `${prefix}_BASE_URL`, `${prefix}_MODEL`]) deleteAppSetting(k); return ok(res, { capability, cleared: true }); }
+      if (String(provider || '').toLowerCase() !== 'custom') return err(res, `${capability} 仅支持 custom provider 配置`);
+      const u = String(base_url || '').trim(), m = String(model || '').trim(), key = String(api_key || '').trim();
+      if (!/^https?:\/\/[^\s]+$/i.test(u)) return err(res, 'base_url 必须是合法的 http(s) URL');
+      if (!m) return err(res, 'model 不能为空');
+      if (key && key.length < 8) return err(res, 'api_key 长度不足');
+      setAppSetting(`${prefix}_PROVIDER`, 'custom', { secret: 0 }); setAppSetting(`${prefix}_BASE_URL`, u, { secret: 0 }); setAppSetting(`${prefix}_MODEL`, m, { secret: 0 }); if (key) setAppSetting(`${prefix}_API_KEY`, key, { secret: 1 });
+      return ok(res, { capability, provider: 'custom', base_url_saved: true, model_saved: true, key_saved: Boolean(key) });
+    }
+
     // ── 联网搜索：capability=search ──────────────────────────────────────
     // 字段：{ capability:'search', provider, api_key?, base_url?, clear? }
     if (capability === 'search') {

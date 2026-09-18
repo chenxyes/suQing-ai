@@ -15,6 +15,7 @@
  */
 
 import { log } from '../logger.mjs';
+import { customImage } from './custom.mjs';
 
 const ACTIVE = (process.env.IMAGE_PROVIDER || 'zhipu').toLowerCase();
 
@@ -277,6 +278,7 @@ async function ai302Generate(prompt, size, refImage = null) {
 }
 
 const REGISTRY = {
+  custom: customImage,
   zhipu: zhipuGenerate,
   qwen: qwenGenerate,
   doubao: doubaoGenerate,

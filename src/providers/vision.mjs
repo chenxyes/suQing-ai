@@ -18,10 +18,12 @@
 
 import { log } from '../logger.mjs';
 import { getAppSetting } from '../db.mjs';
+import { customVision, customConfig } from './custom.mjs';
 
 // ─── Provider 注册表 ───────────────────────────────────────────────────────
 // custom=true 表示需要用户提供 model（如豆包接入点）；否则有默认值。
 export const REGISTRY = {
+  custom: { label: 'Custom OpenAI relay', kind: 'custom', apiKeyEnv: 'VISION_API_KEY', defaultModel: '' },
   zhipu: {
     baseURL: 'https://open.bigmodel.cn/api/paas/v4',
     defaultModel: 'glm-4v-flash',
@@ -165,6 +167,7 @@ function isQuotaLikeError(err) {
 async function callVisionWithProvider(name, base64, dataUrl, mimeType, imageSize) {
   const entry = REGISTRY[name];
   if (!entry) throw new Error(`未知 vision provider: ${name}`);
+  if (name === 'custom') return await customVision(imageBuffer, mimeType);
   const apiKey = getApiKeyForEntry(entry);
   if (!apiKey) throw new Error(`${entry.apiKeyEnv || name} 未配置`);
   const model = getModelFor(entry);
