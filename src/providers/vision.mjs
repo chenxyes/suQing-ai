@@ -18,7 +18,7 @@
 
 import { log } from '../logger.mjs';
 import { getAppSetting } from '../db.mjs';
-import { customVision, customConfig } from './custom.mjs';
+import { customVision } from './custom.mjs';
 
 // ─── Provider 注册表 ───────────────────────────────────────────────────────
 // custom=true 表示需要用户提供 model（如豆包接入点）；否则有默认值。
@@ -181,6 +181,7 @@ async function callVisionWithProvider(name, base64, dataUrl, mimeType, imageSize
 
 export async function visionRecognize(imageBuffer, mimeType = 'image/jpeg') {
   const name = getActiveProviderName();
+  if (name === 'custom') return await customVision(imageBuffer, mimeType);
   if (!REGISTRY[name]) {
     log('error', `[vision] 未知 VISION_PROVIDER=${name}`);
     return '[图片识别失败]';
