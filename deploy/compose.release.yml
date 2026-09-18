@@ -1,0 +1,4 @@
+# Applied after the server's existing compose file: preserve ports, env and volumes.
+services:
+  xiyu-ai:
+    image: ${RELEASE_IMAGE:?RELEASE_IMAGE must be set by release.sh}
