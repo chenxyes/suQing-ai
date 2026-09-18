@@ -13,6 +13,7 @@
  */
 
 import { generateReply } from './ai.mjs';
+import { isChatFallback } from './chat_response.mjs';
 import { log } from './logger.mjs';
 
 // 三态：off | selective | always（默认 always，保留对未说出口情绪的反应）
@@ -175,7 +176,7 @@ export async function generateInnerMonologue({
       { temperature: 0.85, max_tokens: MAX_INNER_TOKENS, top_p: 0.9 },
       { accountId: context?.accountId || null },
     );
-    if (!inner) return null;
+    if (!inner || isChatFallback(inner)) return null;
     // 先从原始输出剥结构化 JSON（清理/截断之前，防 slice 吃掉末行）
     const struct = parseInnerStruct(inner);
     // 清理：去掉 JSON 行 / markdown / 多余空行 / "我应该" 这类元话术
