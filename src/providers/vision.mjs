@@ -167,7 +167,6 @@ function isQuotaLikeError(err) {
 async function callVisionWithProvider(name, base64, dataUrl, mimeType, imageSize) {
   const entry = REGISTRY[name];
   if (!entry) throw new Error(`未知 vision provider: ${name}`);
-  if (name === 'custom') return await customVision(imageBuffer, mimeType);
   const apiKey = getApiKeyForEntry(entry);
   if (!apiKey) throw new Error(`${entry.apiKeyEnv || name} 未配置`);
   const model = getModelFor(entry);
