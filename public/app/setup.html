@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <section class="card" id="s2-custom-capabilities"><h3 class="text-[14px] font-bold">🧩 生图与 Embedding 自定义中转</h3><p class="text-[12px] text-mute">通过 API 保存 image/embedding 的 custom base URL、模型和密钥。</p><div class="grid grid-cols-2 gap-2"><input id="s2-image-base" class="input font-mono" placeholder="IMAGE_BASE_URL"><input id="s2-image-model" class="input font-mono" placeholder="IMAGE_MODEL"><input id="s2-embedding-base" class="input font-mono" placeholder="EMBEDDING_BASE_URL"><input id="s2-embedding-model" class="input font-mono" placeholder="EMBEDDING_MODEL"></div></section>
   <script>(function(){try{var p=localStorage.getItem('xiyu_theme')||'auto';var d=p==='dark'||(p==='auto'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.setAttribute('data-theme',d?'dark':'light');}catch(e){}})();</script>
   <script>(function(){fetch('/api/setup/status').then(function(r){return r.json();}).then(function(d){if(d&&d.data&&d.data.hosted_mode){location.replace('/app/dashboard.html');}}).catch(function(){});})();</script>
   <meta charset="UTF-8" />
@@ -219,7 +218,7 @@
     <section class="panel card p-6 mb-4" data-panel="2">
       <h2 class="text-[16px] font-bold mb-1">Step 2：选择 Chat Provider</h2>
       <p class="text-[13px] text-mute mb-1">选一家模型服务商，粘贴 API Key。保存在本地 SQLite，不写入 <code>.env</code>。</p>
-      <p class="text-[12px] text-mute mb-4">也可直接在 <code>.env</code> 配置，环境变量优先。</p>
+      <p class="text-[12px] text-mute mb-4">也可直接在 <code>.env</code> 配置；此页面保存的模型设置优先，恢复环境配置后使用 .env 默认值。</p>
 
       <!-- 当前配置状态 -->
       <div id="s2-current" class="mb-4 p-3 rounded-xl bg-cloud text-[13px] hidden">
@@ -299,9 +298,34 @@
       <!-- ── 可选能力：图片理解 / 语音识别 ── -->
       <details id="s2-optional" class="mt-6 pt-4 border-t border-line">
         <summary class="cursor-pointer text-[13px] font-semibold text-sakura-deep">
-          可选：图片理解 / 语音识别 <span class="text-mute font-normal">（不配也能聊天）</span>
+          可选：图片、语音与向量模型 <span class="text-mute font-normal">（不配也能聊天）</span>
         </summary>
         <div class="mt-4 space-y-5">
+
+          <div class="p-4 rounded-xl bg-cloud">
+            <h3 class="text-[14px] font-bold">生图</h3>
+            <p id="s2-image-state" class="text-[12px] text-mute">未配置</p>
+            <p class="text-[12px] text-mute mb-3">支持 OpenAI 兼容中转。测试会实际调用服务，可能产生费用。</p>
+            <label for="s2-image-provider">Provider</label>
+            <select id="s2-image-provider" class="input"><option value="">使用现有环境配置</option><option value="custom">自定义 OpenAI 兼容中转</option></select>
+            <div id="s2-image-base-row" class="mb-2 hidden"><label for="s2-image-base">Base URL</label><input id="s2-image-base" class="input font-mono" type="url" placeholder="https://relay.example/v1" autocomplete="off" /></div>
+            <label for="s2-image-model">Model（自定义必填）</label><input id="s2-image-model" class="input font-mono" placeholder="中转站的模型名称" autocomplete="off" />
+            <label for="s2-image-key">API Key</label><input id="s2-image-key" class="input font-mono" type="password" placeholder="首次必填；留空保留已保存的 Key" autocomplete="off" />
+            <div class="flex gap-2 flex-wrap mt-2"><button class="btn-outline" id="s2-image-save">保存</button><button class="btn-ghost" id="s2-image-test">测试已保存配置</button><button class="btn-ghost" id="s2-image-clear">恢复环境配置</button></div>
+            <p id="s2-image-msg" class="mt-2 msg-info"></p>
+          </div>
+          <div class="p-4 rounded-xl bg-cloud">
+            <h3 class="text-[14px] font-bold">Embedding 向量模型</h3>
+            <p id="s2-embedding-state" class="text-[12px] text-mute">未配置</p>
+            <p class="text-[12px] text-mute mb-3">支持 OpenAI 兼容中转。测试会实际调用服务，可能产生费用。</p>
+            <label for="s2-embedding-provider">Provider</label>
+            <select id="s2-embedding-provider" class="input"><option value="">使用现有环境配置</option><option value="custom">自定义 OpenAI 兼容中转</option></select>
+            <div id="s2-embedding-base-row" class="mb-2 hidden"><label for="s2-embedding-base">Base URL</label><input id="s2-embedding-base" class="input font-mono" type="url" placeholder="https://relay.example/v1" autocomplete="off" /></div>
+            <label for="s2-embedding-model">Model（自定义必填）</label><input id="s2-embedding-model" class="input font-mono" placeholder="中转站的模型名称" autocomplete="off" />
+            <label for="s2-embedding-key">API Key</label><input id="s2-embedding-key" class="input font-mono" type="password" placeholder="首次必填；留空保留已保存的 Key" autocomplete="off" />
+            <div class="flex gap-2 flex-wrap mt-2"><button class="btn-outline" id="s2-embedding-save">保存</button><button class="btn-ghost" id="s2-embedding-test">测试已保存配置</button><button class="btn-ghost" id="s2-embedding-clear">恢复环境配置</button></div>
+            <p id="s2-embedding-msg" class="mt-2 msg-info"></p>
+          </div>
 
           <!-- 图片理解（vision） -->
           <div class="p-4 rounded-xl bg-cloud">
@@ -313,8 +337,8 @@
             <div class="mb-2">
               <label class="block text-[12px] font-semibold mb-1">Provider</label>
               <select id="s2-vision-provider" class="input">
-                <option value="custom">自定义 OpenAI 中转</option>
                 <option value="">不启用</option>
+                <option value="custom">自定义 OpenAI 兼容中转</option>
                 <option value="zhipu">智谱 GLM-4V</option>
                 <option value="openai">OpenAI gpt-4o-mini</option>
                 <option value="qwen">通义千问 VL</option>
@@ -323,8 +347,12 @@
                 <option value="kimi">Kimi（Moonshot）vision</option>
                 <option value="stepfun">StepFun step-1v</option>
                 <option value="minimax">MiniMax abab vision（key 与 TTS 复用）</option>
-                <option value="custom">自定义 OpenAI 兼容中转</option>
               </select>
+            </div>
+            <div id="s2-vision-base-row" class="mb-2 hidden">
+              <label class="block text-[12px] font-semibold mb-1" for="s2-vision-base">Base URL（自定义必填）</label>
+              <input id="s2-vision-base" class="input font-mono" type="url" placeholder="https://relay.example/v1" autocomplete="off" />
+              <p class="text-[12px] text-mute">填写 API 根地址，通常含 /v1；不要附带具体接口路径或 Key。</p>
             </div>
             <div class="mb-2">
               <label class="block text-[12px] font-semibold mb-1">Model（选填）</label>
@@ -338,7 +366,8 @@
             </div>
             <div class="flex gap-2 flex-wrap">
               <button class="btn-outline" id="s2-vision-save" style="padding:6px 16px;font-size:13px">保存图片理解</button>
-              <button class="btn-ghost"   id="s2-vision-clear">清除</button>
+              <button class="btn-ghost" id="s2-vision-test">测试已保存配置</button>
+              <button class="btn-ghost"   id="s2-vision-clear">恢复环境配置</button>
             </div>
             <p id="s2-vision-msg" class="mt-2 msg-info"></p>
           </div>
@@ -353,8 +382,8 @@
             <div class="mb-2">
               <label class="block text-[12px] font-semibold mb-1">Provider</label>
               <select id="s2-asr-provider" class="input">
-                <option value="custom">自定义 OpenAI 中转</option>
                 <option value="">不启用</option>
+                <option value="custom">自定义 OpenAI 兼容中转</option>
                 <option value="gemini">Google Gemini</option>
                 <option value="openai">OpenAI Whisper / gpt-4o-transcribe</option>
                 <option value="qwen">通义千问 paraformer</option>
@@ -363,6 +392,11 @@
                 <option value="azure">Azure Speech-to-Text（与 TTS 共用 key + Region）</option>
                 <option value="doubao">豆包 ASR 一句话识别（需 AppID + Cluster）</option>
               </select>
+            </div>
+            <div id="s2-asr-base-row" class="mb-2 hidden">
+              <label class="block text-[12px] font-semibold mb-1" for="s2-asr-base">Base URL（自定义必填）</label>
+              <input id="s2-asr-base" class="input font-mono" type="url" placeholder="https://relay.example/v1" autocomplete="off" />
+              <p class="text-[12px] text-mute">填写 API 根地址，通常含 /v1；不要附带具体接口路径或 Key。</p>
             </div>
             <div class="mb-2">
               <label class="block text-[12px] font-semibold mb-1">Model（选填）</label>
@@ -392,7 +426,8 @@
             </div>
             <div class="flex gap-2 flex-wrap">
               <button class="btn-outline" id="s2-asr-save" style="padding:6px 16px;font-size:13px">保存语音识别</button>
-              <button class="btn-ghost"   id="s2-asr-clear">清除</button>
+              <button class="btn-ghost" id="s2-asr-test">测试已保存配置</button>
+              <button class="btn-ghost"   id="s2-asr-clear">恢复环境配置</button>
             </div>
             <p id="s2-asr-msg" class="mt-2 msg-info"></p>
           </div>
@@ -447,14 +482,19 @@
             <div class="mb-2">
               <label class="block text-[12px] font-semibold mb-1">Provider</label>
               <select id="s2-tts-provider" class="input">
-                <option value="custom">自定义 OpenAI 中转</option>
                 <option value="">不启用</option>
+                <option value="custom">自定义 OpenAI 兼容中转</option>
                 <option value="minimax">MiniMax speech-02-turbo（推荐 · 新户送 500 字符）</option>
                 <option value="openai">OpenAI tts-1 / tts-1-hd（6 个内置音色 · 国内需代理）</option>
                 <option value="azure">Azure Speech（zh-CN-XiaoxiaoNeural 等海量音色 · 需 Region）</option>
                 <option value="doubao">豆包 TTS（火山引擎 · 需 AppID + Cluster）</option>
                 <option value="qwen">通义 CosyVoice / Qwen-TTS（DashScope · OpenAI 兼容模式）</option>
               </select>
+            </div>
+            <div id="s2-tts-base-row" class="mb-2 hidden">
+              <label class="block text-[12px] font-semibold mb-1" for="s2-tts-base">Base URL（自定义必填）</label>
+              <input id="s2-tts-base" class="input font-mono" type="url" placeholder="https://relay.example/v1" autocomplete="off" />
+              <p class="text-[12px] text-mute">填写 API 根地址，通常含 /v1；不要附带具体接口路径或 Key。</p>
             </div>
             <div class="mb-2">
               <label class="block text-[12px] font-semibold mb-1">Model（选填）</label>
@@ -489,7 +529,8 @@
             </div>
             <div class="flex gap-2 flex-wrap">
               <button class="btn-outline" id="s2-tts-save" style="padding:6px 16px;font-size:13px">保存语音合成</button>
-              <button class="btn-ghost"   id="s2-tts-clear">清除</button>
+              <button class="btn-ghost" id="s2-tts-test">测试已保存配置</button>
+              <button class="btn-ghost"   id="s2-tts-clear">恢复环境配置</button>
             </div>
             <p id="s2-tts-msg" class="mt-2 msg-info"></p>
           </div>
@@ -723,7 +764,7 @@ function updateTabs() {
     } else if (i < S.currentStep) {
       tab.classList.add('done');
     } else {
-      tab.classList.add(canGoStep(i) ? '' : 'locked');
+      if (!canGoStep(i)) tab.classList.add('locked');
     }
   }
 }
@@ -1051,6 +1092,16 @@ async function refreshOptional() {
         a.active_configured ? `已启用：${a.active}（${a.active_model || '默认模型'}）` : '未配置';
       updateAsrProviderHints(sel.value);
     }
+    for (const cap of ['vision', 'asr', 'tts', 'image', 'embedding']) {
+      const section = d.data?.[cap];
+      const custom = cap === 'tts' ? section?.custom : section?.providers?.custom;
+      document.getElementById(`s2-${cap}-base`).value = custom?.base_url || '';
+      if (cap === 'image' || cap === 'embedding') {
+        document.getElementById(`s2-${cap}-provider`).value = section?.active === 'custom' ? 'custom' : '';
+        document.getElementById(`s2-${cap}-model`).value = custom?.model || '';
+        document.getElementById(`s2-${cap}-state`).textContent = `当前：${section?.active || '未启用'}${section?.active_configured ? ' · 已配置' : ''}`;
+      }
+    }
     const s = d.data?.search;
     if (s) refreshSearchUI(s.active, s.active_configured, s.providers);
     const t = d.data?.tts;
@@ -1071,6 +1122,7 @@ async function refreshOptional() {
         t.configured ? `已启用：${t.active}（${t.model || '默认'} · ${t.voice_id || 'default'}）` : '未配置';
       updateTtsProviderHints(sel.value);
     }
+    for (const cap of ['vision', 'asr', 'tts', 'image', 'embedding']) updateCustomFields(cap);
   } catch {}
 }
 
@@ -1126,14 +1178,15 @@ document.getElementById('s2-asr-provider').addEventListener('change', e => {
 });
 
 async function saveOptional(capability) {
-  const prefix = capability === 'vision' ? 's2-vision' : capability === 'asr' ? 's2-asr' : 's2-tts';
+  const prefix = `s2-${capability}`;
   const provider = document.getElementById(`${prefix}-provider`).value;
   const model    = document.getElementById(`${prefix}-model`).value.trim();
   const apiKey   = document.getElementById(`${prefix}-key`).value;
+  const baseUrl = document.getElementById(`${prefix}-base`).value.trim();
   const voiceId  = capability === 'tts' ? document.getElementById('s2-tts-voice-id').value.trim() : '';
   const msgId    = `${prefix}-msg`;
   if (!provider) {
-    setMsg(msgId, '请选择 Provider，或点"清除"关闭该能力', 'err');
+    setMsg(msgId, '请选择 Provider，或恢复环境配置', 'err');
     return;
   }
   // 各 provider 的额外字段（azure region / doubao appid+cluster），按 capability 取对应输入框
@@ -1161,11 +1214,12 @@ async function saveOptional(capability) {
     const r = await fetch('/api/setup/provider-config', {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ capability, provider, model, api_key: apiKey, voice_id: voiceId, extras }),
+      body: JSON.stringify({ capability, provider, model, base_url: baseUrl, api_key: apiKey, voice_id: voiceId, extras }),
     });
     const d = await r.json();
     if (d.ok) {
-      const parts = [d.data.label];
+      document.getElementById(`${prefix}-key`).value = '';
+      const parts = [d.data.label || provider];
       if (d.data.model_saved) parts.push('含 Model');
       if (d.data.key_saved)   parts.push('含 API Key');
       setMsg(msgId, `✅ 已保存 ${parts.join(' · ')}`, 'ok');
@@ -1179,7 +1233,7 @@ async function saveOptional(capability) {
 }
 
 async function clearOptional(capability) {
-  const msgId = capability === 'vision' ? 's2-vision-msg' : capability === 'asr' ? 's2-asr-msg' : 's2-tts-msg';
+  const msgId = `s2-${capability}-msg`;
   setMsg(msgId, '清除中…', 'info');
   try {
     const r = await fetch('/api/setup/provider-config', {
@@ -1190,7 +1244,7 @@ async function clearOptional(capability) {
     const d = await r.json();
     if (d.ok) {
       setMsg(msgId, '✅ 已清除', 'ok');
-      const prefix = capability === 'vision' ? 's2-vision' : capability === 'asr' ? 's2-asr' : 's2-tts';
+      const prefix = `s2-${capability}`;
       document.getElementById(`${prefix}-provider`).value = '';
       document.getElementById(`${prefix}-model`).value = '';
       document.getElementById(`${prefix}-key`).value = '';
@@ -1213,12 +1267,30 @@ async function clearOptional(capability) {
   } catch (e) { setMsg(msgId, '❌ ' + e.message, 'err'); }
 }
 
-document.getElementById('s2-vision-save').addEventListener('click', () => saveOptional('vision'));
-document.getElementById('s2-asr-save').addEventListener('click', () => saveOptional('asr'));
-document.getElementById('s2-tts-save').addEventListener('click', () => saveOptional('tts'));
-document.getElementById('s2-vision-clear').addEventListener('click', () => clearOptional('vision'));
-document.getElementById('s2-asr-clear').addEventListener('click', () => clearOptional('asr'));
-document.getElementById('s2-tts-clear').addEventListener('click', () => clearOptional('tts'));
+function updateCustomFields(cap) {
+  document.getElementById(`s2-${cap}-base-row`).classList.toggle('hidden', document.getElementById(`s2-${cap}-provider`).value !== 'custom');
+}
+async function testOptional(cap) {
+  const provider = document.getElementById(`s2-${cap}-provider`).value;
+  const msgId = `s2-${cap}-msg`;
+  if (!provider) { setMsg(msgId, '请先选择并保存 Provider', 'err'); return; }
+  const button = document.getElementById(`s2-${cap}-test`);
+  button.disabled = true;
+  setMsg(msgId, '正在测试已保存配置（会实际调用服务）…', 'info');
+  try {
+    const response = await fetch('/api/setup/test-provider', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ capability: cap, provider }) });
+    const result = await response.json();
+    const success = result.ok && result.data?.ok;
+    setMsg(msgId, success ? `✅ 连接成功 · ${result.data.latency_ms || 0} ms` : `❌ ${result.error || result.message || '连接失败'}`, success ? 'ok' : 'err');
+  } catch { setMsg(msgId, '连接测试失败，请检查网络后重试', 'err'); }
+  finally { button.disabled = false; }
+}
+for (const cap of ['vision', 'asr', 'tts', 'image', 'embedding']) {
+  document.getElementById(`s2-${cap}-save`).addEventListener('click', () => saveOptional(cap));
+  document.getElementById(`s2-${cap}-clear`).addEventListener('click', () => clearOptional(cap));
+  document.getElementById(`s2-${cap}-test`).addEventListener('click', () => testOptional(cap));
+  document.getElementById(`s2-${cap}-provider`).addEventListener('change', () => updateCustomFields(cap));
+}
 
 // ─── 联网搜索（search） ───────────────────────────────────────────────────
 S.searchConfigured = false;
@@ -1273,7 +1345,8 @@ async function saveSearch() {
     });
     const d = await r.json();
     if (d.ok) {
-      const parts = [d.data.label];
+      document.getElementById(`${prefix}-key`).value = '';
+      const parts = [d.data.label || provider];
       if (d.data.key_saved)      parts.push('含 API Key');
       if (d.data.base_url_saved) parts.push('Base URL');
       setMsg('s2-search-msg', `✅ 已保存 ${parts.join(' · ')}`, 'ok');
@@ -1615,13 +1688,6 @@ document.getElementById('init-btn').addEventListener('click', async () => {
   renderView();
   // 如果进入向导且 Step 4，顺带检查角色
   if (S.authenticated) checkExistingRole();
-})();
-</script>
-
-<script>
-(function(){
- const save=(cap,base,model)=>{const key=prompt('API Key（留空保留已有）')||''; return fetch('/api/setup/provider-config',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({capability:cap,provider:'custom',base_url:base,model,api_key:key})}).then(r=>r.json());};
- for(const cap of ['image','embedding']){const p=cap==='image'?'image':'embedding'; const b=document.getElementById('s2-'+p+'-base'),m=document.getElementById('s2-'+p+'-model'); if(b&&m){const btn=document.createElement('button');btn.className='btn-outline';btn.textContent='保存 '+p;btn.onclick=()=>save(cap,b.value,m.value);b.parentElement.appendChild(btn);}}
 })();
 </script>
 </body>

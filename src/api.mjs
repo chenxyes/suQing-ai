@@ -1,3 +1,4 @@
+import { CUSTOM_CAPABILITIES, readProviderSetting, customProviderStatus, saveCustomProviderConfig, testCustomProvider } from './providers/custom.mjs';
 /**
  * REST API 服务
  *
@@ -2100,17 +2101,17 @@ router.get('/setup/provider-status', softAuth, (req, res) => {
   const providers = {};
   for (const [id, entry] of Object.entries(CHAT_REGISTRY)) {
     const envVal  = process.env[entry.apiKeyEnv] || '';
-    const dbVal   = envVal ? '' : (getAppSetting(entry.apiKeyEnv) || '');
-    const rawKey  = envVal || dbVal;
+    const dbVal   = getAppSetting(entry.apiKeyEnv) || '';
+    const rawKey  = dbVal || envVal;
     // 自定义兼容 provider 需要额外的 base_url + model 状态
     let customBaseURL = '';
     let customModel   = '';
     if (entry.custom) {
       if (entry.baseURLEnv) {
-        customBaseURL = process.env[entry.baseURLEnv] || getAppSetting(entry.baseURLEnv) || '';
+        customBaseURL = readProviderSetting(entry.baseURLEnv);
       }
       if (entry.modelEnv) {
-        customModel = process.env[entry.modelEnv] || getAppSetting(entry.modelEnv) || '';
+        customModel = readProviderSetting(entry.modelEnv);
       }
     }
     const configured = entry.custom
@@ -2123,7 +2124,7 @@ router.get('/setup/provider-status', softAuth, (req, res) => {
       if (Array.isArray(entry.models) && entry.models.length) info.models = entry.models;
       if (entry.defaultModel) info.default_model = entry.defaultModel;
       if (isAuthed) {
-        info.source     = envVal ? 'env' : 'app_settings';
+        info.source     = dbVal ? 'app_settings' : 'env';
         info.masked_key = maskApiKey(rawKey);
         if (entry.custom) {
           info.base_url = customBaseURL;
@@ -2147,21 +2148,22 @@ router.get('/setup/provider-status', softAuth, (req, res) => {
   // 当前 CHAT_MODEL override（已登录返回）
   let currentChatModel = '';
   try {
-    currentChatModel = process.env.CHAT_MODEL || getAppSetting('CHAT_MODEL') || '';
+    currentChatModel = readProviderSetting('CHAT_MODEL');
   } catch {}
   // 附加：可选能力 vision / asr 的当前状态
   // 匿名只返回 enabled + label；已登录额外返回 model + masked_key
   function buildOptionalSection(REG, providerEnvKey, modelEnvKey, active) {
     const items = {};
     for (const [id, entry] of Object.entries(REG)) {
-      const rawKey = process.env[entry.apiKeyEnv] || (entry.apiKeyEnv ? getAppSetting(entry.apiKeyEnv) : '') || '';
+      const rawKey = entry.apiKeyEnv ? readProviderSetting(entry.apiKeyEnv) : '';
       const capPrefix = providerEnvKey.split('_')[0];
       const custom = id === 'custom';
-      const customBase = custom ? (process.env[`${capPrefix}_BASE_URL`] || getAppSetting(`${capPrefix}_BASE_URL`) || '') : '';
-      const customModel = custom ? (process.env[`${capPrefix}_MODEL`] || getAppSetting(`${capPrefix}_MODEL`) || '') : '';
+      const customBase = custom ? readProviderSetting(`${capPrefix}_BASE_URL`) : '';
+      const customModel = custom ? readProviderSetting(`${capPrefix}_MODEL`) : '';
       const info = { label: entry.label, configured: custom ? Boolean(rawKey && customBase && customModel) : Boolean(rawKey) };
+      if (custom) Object.assign(info, customProviderStatus(capPrefix.toLowerCase(), isAuthed));
       if (entry.stub) info.stub = true;
-      if (isAuthed && rawKey) info.masked_key = maskApiKey(rawKey);
+      if (!custom && isAuthed && rawKey) info.masked_key = maskApiKey(rawKey);
       if (custom && isAuthed) { if (customBase) info.base_url = customBase; if (customModel) info.model = customModel; }
       items[id] = info;
     }
@@ -2181,7 +2183,7 @@ router.get('/setup/provider-status', softAuth, (req, res) => {
   const searchProviders = {};
   for (const [id, entry] of Object.entries(SEARCH_REGISTRY)) {
     const envKey = entry.apiKeyEnv ? (process.env[entry.apiKeyEnv] || getAppSetting(entry.apiKeyEnv) || '') : '';
-    const baseURL = entry.baseURLEnv ? (process.env[entry.baseURLEnv] || getAppSetting(entry.baseURLEnv) || '') : '';
+    const baseURL = entry.baseURLEnv ? (readProviderSetting(entry.baseURLEnv)) : '';
     const configured = entry.custom ? Boolean(baseURL) : Boolean(envKey);
     const info = { label: entry.label, configured };
     if (entry.custom) info.requires_base_url = true;
@@ -2200,11 +2202,16 @@ router.get('/setup/provider-status', softAuth, (req, res) => {
     providers,
     vision: buildOptionalSection(VISION_REGISTRY, 'VISION_PROVIDER', 'VISION_MODEL', visionActive),
     asr:    buildOptionalSection(ASR_REGISTRY,    'ASR_PROVIDER',    'ASR_MODEL',    asrActive),
-    image: { active: getActiveImageProvider().id, providers: { custom: { label: 'Custom OpenAI relay', configured: Boolean((getAppSetting('IMAGE_BASE_URL') || process.env.IMAGE_BASE_URL) && (getAppSetting('IMAGE_API_KEY') || process.env.IMAGE_API_KEY) && (getAppSetting('IMAGE_MODEL') || process.env.IMAGE_MODEL)), base_url: isAuthed ? (getAppSetting('IMAGE_BASE_URL') || process.env.IMAGE_BASE_URL || '') : undefined, model: isAuthed ? (getAppSetting('IMAGE_MODEL') || process.env.IMAGE_MODEL || '') : undefined } } },
-    embedding: { active: getAppSetting('EMBEDDING_PROVIDER') || process.env.EMBEDDING_PROVIDER || 'gemini', providers: { custom: { label: 'Custom OpenAI relay', configured: Boolean((getAppSetting('EMBEDDING_BASE_URL') || process.env.EMBEDDING_BASE_URL) && (getAppSetting('EMBEDDING_API_KEY') || process.env.EMBEDDING_API_KEY) && (getAppSetting('EMBEDDING_MODEL') || process.env.EMBEDDING_MODEL)), base_url: isAuthed ? (getAppSetting('EMBEDDING_BASE_URL') || process.env.EMBEDDING_BASE_URL || '') : undefined, model: isAuthed ? (getAppSetting('EMBEDDING_MODEL') || process.env.EMBEDDING_MODEL || '') : undefined } } },
+    image: { active: getActiveImageProvider().id, active_model: getActiveImageProvider().model,
+      active_configured: getActiveImageProvider().id === 'custom' && customProviderStatus('image').configured,
+      providers: { custom: customProviderStatus('image', isAuthed) } },
+    embedding: { active: readProviderSetting('EMBEDDING_PROVIDER') || 'gemini', active_model: readProviderSetting('EMBEDDING_MODEL'),
+      active_configured: readProviderSetting('EMBEDDING_PROVIDER') === 'custom' && customProviderStatus('embedding').configured,
+      providers: { custom: customProviderStatus('embedding', isAuthed) } },
     tts:    {
       active: ttsActive.active || null,
-      configured: !!ttsActive.configured,
+      configured: ttsActive.active === 'custom' ? customProviderStatus('tts').configured : !!ttsActive.configured,
+      custom: customProviderStatus('tts', isAuthed),
       label: ttsActive.label || null,
       model: ttsActive.model || null,
       voice_id: ttsActive.voice_id || null,
@@ -2224,7 +2231,11 @@ router.post('/setup/provider-config',
   blockIfHosted,
   requireAuth,
   async (req, res) => {
-    const capability = (req.body?.capability || 'chat').toLowerCase();
+    const capability = String(req.body?.capability || 'chat').toLowerCase();
+    if (CUSTOM_CAPABILITIES.includes(capability) && String(req.body?.provider || '').trim().toLowerCase() === 'custom' && !req.body?.clear) {
+      try { return ok(res, saveCustomProviderConfig(capability, req.body)); }
+      catch (error) { return err(res, error.message); }
+    }
 
     // ── 可选能力：vision / asr / tts ──────────────────────────────────────
     // 字段：{ capability: 'vision'|'asr'|'tts', provider, model?, api_key?, clear? }
@@ -2299,18 +2310,13 @@ router.post('/setup/provider-config',
       });
     }
 
-    // ── Image / embedding custom relay configuration ─────────────────────
+    // For image/embedding the new controls configure custom endpoints; clear restores env presets.
     if (capability === 'image' || capability === 'embedding') {
+      if (!req.body?.clear) return err(res, '请选择 custom 或恢复环境配置');
       const prefix = capability.toUpperCase();
-      const { provider, api_key, base_url, model, clear = false } = req.body || {};
-      if (clear) { for (const k of [`${prefix}_PROVIDER`, `${prefix}_BASE_URL`, `${prefix}_MODEL`]) deleteAppSetting(k); return ok(res, { capability, cleared: true }); }
-      if (String(provider || '').toLowerCase() !== 'custom') return err(res, `${capability} 仅支持 custom provider 配置`);
-      const u = String(base_url || '').trim(), m = String(model || '').trim(), key = String(api_key || '').trim();
-      if (!/^https?:\/\/[^\s]+$/i.test(u)) return err(res, 'base_url 必须是合法的 http(s) URL');
-      if (!m) return err(res, 'model 不能为空');
-      if (key && key.length < 8) return err(res, 'api_key 长度不足');
-      setAppSetting(`${prefix}_PROVIDER`, 'custom', { secret: 0 }); setAppSetting(`${prefix}_BASE_URL`, u, { secret: 0 }); setAppSetting(`${prefix}_MODEL`, m, { secret: 0 }); if (key) setAppSetting(`${prefix}_API_KEY`, key, { secret: 1 });
-      return ok(res, { capability, provider: 'custom', base_url_saved: true, model_saved: true, key_saved: Boolean(key) });
+      deleteAppSetting(`${prefix}_PROVIDER`);
+      deleteAppSetting(`${prefix}_MODEL`);
+      return ok(res, { capability, cleared: true });
     }
 
     // ── 联网搜索：capability=search ──────────────────────────────────────
@@ -2442,6 +2448,10 @@ router.post('/setup/test-provider',
     const name = provider.toLowerCase().trim();
     const cap  = String(capability).toLowerCase();
 
+    if (name === 'custom' && CUSTOM_CAPABILITIES.includes(cap)) {
+      try { return ok(res, await testCustomProvider(cap)); }
+      catch (error) { return res.status(200).json({ ok: false, error: error.message }); }
+    }
     const REG = cap === 'vision' ? VISION_REGISTRY
               : cap === 'asr' ? ASR_REGISTRY
               : cap === 'tts' ? TTS_REGISTRY
@@ -2451,13 +2461,12 @@ router.post('/setup/test-provider',
 
     try {
       let result;
-      if (cap === 'image' || cap === 'embedding' || cap === 'tts') {
-        const prefix = cap.toUpperCase(); const base = getAppSetting(`${prefix}_BASE_URL`) || process.env[`${prefix}_BASE_URL`]; const key = getAppSetting(`${prefix}_API_KEY`) || process.env[`${prefix}_API_KEY`]; const model = getAppSetting(`${prefix}_MODEL`) || process.env[`${prefix}_MODEL`];
-        if (!base || !key || !model) throw new Error(`${cap} custom 配置不完整`);
-        const path = cap === 'image' ? '/images/generations' : cap === 'embedding' ? '/embeddings' : '/audio/speech';
-        const body = cap === 'image' ? { model, prompt: 'probe', n: 1 } : cap === 'embedding' ? { model, input: 'probe' } : { model, input: 'probe', voice: 'alloy' };
-        const rr = await fetch(base.replace(/\/$/, '') + path, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(15000) });
-        if (!rr.ok) throw new Error(`${cap} HTTP ${rr.status}`); result = { ok: true, provider: name };
+      if (cap === 'tts') {
+        const { ttsSynthesize, getTtsStatus } = await import('./providers/tts.mjs');
+        if (getTtsStatus().active !== name) throw new Error('请先保存所选语音 provider 再测试');
+        const t0 = Date.now();
+        await ttsSynthesize('你好', { timeoutMs: 15_000 });
+        result = { ok: true, provider: name, latency_ms: Date.now() - t0 };
       } else if (cap === 'vision') {
         const { testVisionProvider } = await import('./providers/vision.mjs');
         result = await testVisionProvider(name);

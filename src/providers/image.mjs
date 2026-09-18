@@ -15,9 +15,8 @@
  */
 
 import { log } from '../logger.mjs';
-import { customImage } from './custom.mjs';
-import { getAppSetting } from '../db.mjs';
-const setting = (k) => { try { const v=getAppSetting(k); if (v !== undefined && v !== null) return String(v); } catch {} return process.env[k] || ''; };
+import { customImage, readProviderSetting } from './custom.mjs';
+const setting = readProviderSetting;
 const active = () => (setting('IMAGE_PROVIDER') || 'zhipu').toLowerCase();
 
 // ─── 智谱 CogView ─────────────────────────────────────────────────────────

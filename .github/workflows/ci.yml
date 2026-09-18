@@ -38,6 +38,21 @@ jobs:
       - name: ESLint（真 bug 级规则，零风格审美）
         run: npm run lint
 
+      - name: 自定义中转 API 与运行时回归
+        run: node scripts/custom_provider_check.mjs
+
+      - name: 设置向导脚本与控件回归
+        run: node scripts/setup_ui_check.mjs
+
+      - name: 聊天空回复和诊断回归
+        run: node scripts/chat_response_check.mjs
+
+      - name: 审批发布与回滚回归
+        run: |
+          bash -n deploy/release.sh
+          node scripts/deploy_release_check.mjs
+          node scripts/release_gate_check.mjs
+
       - name: import 链 smoke
         run: npm run check:imports
 
