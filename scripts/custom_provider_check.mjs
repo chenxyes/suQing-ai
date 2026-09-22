@@ -98,6 +98,40 @@ try {
   failureStatus = 503;
   const fail = await api('test-provider', { capability: 'image', provider: 'custom' });
   assert.equal(fail.body.ok, false); assert.ok(!JSON.stringify(fail).includes('private-upstream-secret'));
+
+  // Fish native TTS uses the same setup API and must persist its key as a secret
+  // without echoing it in either the save response or authenticated status.
+  const fishKey = 'fish-key-fixture-123';
+  const fishSave = await api('provider-config', {
+    capability: 'tts', provider: 'fish', model: 's2.1-pro-free',
+    voice_id: 'fixture-reference', api_key: fishKey,
+  });
+  assert.equal(fishSave.body.ok, true, JSON.stringify(fishSave));
+  assert.ok(!JSON.stringify(fishSave.body).includes(fishKey));
+  assert.equal(dbModule.getAppSetting('FISH_API_KEY'), fishKey);
+  assert.equal(db.prepare('SELECT secret FROM app_settings WHERE key = ?').get('FISH_API_KEY')?.secret, 1);
+  const fishStatus = await api('provider-status');
+  assert.equal(fishStatus.body.data.tts.active, 'fish');
+  assert.equal(fishStatus.body.data.tts.configured, true);
+  assert.ok(!JSON.stringify(fishStatus.body).includes(fishKey));
+  const fishClear = await api('provider-config', {
+    capability: 'tts', provider: 'fish', model: '', voice_id: '', api_key: '',
+  });
+  assert.equal(fishClear.body.ok, true, JSON.stringify(fishClear));
+  assert.equal(fishClear.body.data.model_cleared, true);
+  assert.equal(fishClear.body.data.voice_id_cleared, true);
+  assert.equal(dbModule.getAppSetting('TTS_MODEL'), '');
+  assert.equal(dbModule.getAppSetting('TTS_VOICE_ID'), '');
+  const fishDefaultStatus = await api('provider-status');
+  assert.equal(fishDefaultStatus.body.data.tts.model, 's2.1-pro-free');
+  assert.equal(fishDefaultStatus.body.data.tts.voice_id, null);
+  const fishBeforeInvalid = db.prepare('SELECT key,value,secret FROM app_settings ORDER BY key').all();
+  const fishInvalid = await api('provider-config', {
+    capability: 'tts', provider: 'fish', model: 'bad\nmodel', voice_id: 'bad\nvoice', api_key: '',
+  });
+  assert.equal(fishInvalid.body.ok, false);
+  assert.deepEqual(db.prepare('SELECT key,value,secret FROM app_settings ORDER BY key').all(), fishBeforeInvalid,
+    'invalid Fish model/reference must not partially persist');
   console.log('custom providers: authenticated save/status/probe, independent runtime endpoints, secret handling, atomic validation and photo gate passed');
 } finally {
   child.kill('SIGTERM'); await new Promise(resolve => child.exitCode !== null ? resolve() : child.once('exit', resolve));

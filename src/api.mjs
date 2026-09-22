@@ -89,7 +89,7 @@ import { getActiveEmbeddingProvider } from './providers/embedding.mjs';
 import { downloadImageWithGuards } from './security/netguard.mjs';
 import { synthesizeMp3Only } from './voice_pipeline.mjs';
 import { recognizeVoice } from './ai.mjs';
-import { REGISTRY as TTS_REGISTRY, getTtsStatus } from './providers/tts.mjs';
+import { REGISTRY as TTS_REGISTRY, getTtsStatus, normalizeFishTtsValue } from './providers/tts.mjs';
 import { getActiveSearchProvider, REGISTRY as SEARCH_REGISTRY } from './web_search.mjs';
 import {
   buildCompanionExport, validateCompanionImport, importCompanionForUser,
@@ -2268,9 +2268,21 @@ router.post('/setup/provider-config',
       if (!REG[pName]) return err(res, `未知 ${capability} provider: ${pName}`);
       const pEntry = REG[pName];
       if (pEntry.stub) return err(res, `${pEntry.label} 当前仅为占位实现`);
+      const rawModel = typeof model === 'string' ? model : '';
+      const rawVoice = typeof voice_id === 'string' ? voice_id : '';
+      let trimmedModel = rawModel.trim();
+      let trimmedVoice = rawVoice.trim();
+      if (capability === 'tts' && pName === 'fish') {
+        try {
+          trimmedModel = normalizeFishTtsValue(rawModel, 'model');
+          trimmedVoice = normalizeFishTtsValue(rawVoice, 'reference_id');
+        } catch (error) {
+          return err(res, error.message);
+        }
+      }
       setAppSetting(PROVIDER_KEY, pName, { secret: 0 });
-      const trimmedModel = typeof model === 'string' ? model.trim() : '';
-      if (trimmedModel) setAppSetting(MODEL_KEY, trimmedModel, { secret: 0 });
+      if (capability === 'tts') setAppSetting(MODEL_KEY, trimmedModel, { secret: 0 });
+      else if (trimmedModel) setAppSetting(MODEL_KEY, trimmedModel, { secret: 0 });
       const trimmedKey = typeof api_key === 'string' ? api_key.trim() : '';
       let keySaved = false;
       if (trimmedKey.length >= 8) {
@@ -2282,11 +2294,8 @@ router.post('/setup/provider-config',
       let voiceIdSaved = false;
       const extrasSaved = [];
       if (capability === 'tts') {
-        const trimmedVoice = typeof voice_id === 'string' ? voice_id.trim() : '';
-        if (trimmedVoice) {
-          setAppSetting('TTS_VOICE_ID', trimmedVoice, { secret: 0 });
-          voiceIdSaved = true;
-        }
+        setAppSetting('TTS_VOICE_ID', trimmedVoice, { secret: 0 });
+        voiceIdSaved = Boolean(trimmedVoice);
       }
       if (pEntry.regionEnv && typeof extras.region === 'string' && extras.region.trim()) {
         setAppSetting(pEntry.regionEnv, extras.region.trim(), { secret: 0 });
@@ -2305,8 +2314,10 @@ router.post('/setup/provider-config',
         provider: pName,
         label: pEntry.label,
         model_saved: Boolean(trimmedModel),
+        model_cleared: capability === 'tts' && !trimmedModel,
         key_saved: keySaved,
         voice_id_saved: voiceIdSaved,
+        voice_id_cleared: capability === 'tts' && !trimmedVoice,
         extras_saved: extrasSaved,
       });
     }

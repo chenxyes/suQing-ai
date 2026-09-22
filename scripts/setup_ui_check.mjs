@@ -21,6 +21,20 @@ for (const cap of ['vision', 'asr', 'tts', 'image', 'embedding']) {
   for (const suffix of ['provider', 'base', 'model', 'key', 'save', 'clear', 'test', 'msg']) assert.ok(ids.includes(`s2-${cap}-${suffix}`));
 }
 assert.ok(!/<head>[\s\S]*<section[\s\S]*<\/head>/.test(html));
+assert.match(html, /<option value="fish">Fish Audio/);
+assert.match(html, /id="s2-tts-model-hint"/);
+assert.match(html, /Reference ID（可选）/);
+const ttsHints = html.slice(html.indexOf('const TTS_VOICE_HINTS'), html.indexOf('// ─── ASR Provider'));
+const hintElements = new Map(['s2-tts-azure-row', 's2-tts-doubao-row', 's2-tts-voice-hint', 's2-tts-model-hint', 's2-tts-voice-label', 's2-tts-key-label'].map(id => [id, {
+  classList: { toggle() {} }, textContent: '', addEventListener() {},
+}]));
+hintElements.set('s2-tts-provider', { addEventListener() {} });
+vm.runInNewContext(`${ttsHints}; updateTtsProviderHints('fish')`, {
+  document: { getElementById: id => hintElements.get(id) },
+});
+assert.match(hintElements.get('s2-tts-model-hint').textContent, /s2\.1-pro-free/);
+assert.match(hintElements.get('s2-tts-voice-label').textContent, /Reference ID/);
+assert.match(hintElements.get('s2-tts-key-label').textContent, /Fish Audio/);
 console.log('setup UI: inline scripts, tab initialization and all capability controls passed');
 
 const saveSearch = /async function saveSearch\(\) \{[\s\S]*?\n\}/.exec(html)?.[0];

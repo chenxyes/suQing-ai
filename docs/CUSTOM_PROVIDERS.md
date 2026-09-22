@@ -25,3 +25,18 @@ ASR 连接测试发送仓库内固定的约 3 秒英语语音（“Hello. This i
 自定义 Embedding 完整保留上游返回向量，不使用原厂商 `EMBEDDING_DIM` 截断，也不擅自指定模型输出维度；状态中的 custom `dim` 为 null，表示由模型决定。存储支持可变长度，现有余弦计算对不同长度返回零相似度；旧检索仍可能按重要性补足，因此换模型前仍需单独安排索引迁移。本次不修改原厂商向量处理或生产索引。
 
 生图与 Embedding 的 `active_configured` 表示当前 provider 的本地配置是否具备所需字段（豆包还需接入点 ID），不表示凭据已经被上游验证；恢复环境配置后也按实际原厂商判断。
+
+## Fish Audio 原生 TTS
+
+设置页的 `Fish Audio` 是原生 provider，不使用 OpenAI 兼容的 `/audio/speech`。请求固定发送到 `https://api.fish.audio/v1/tts`，模型通过 `model` 请求头传递，文本使用 `text` 字段，音频固定请求为 MP3。`TTS_VOICE_ID` 在此 provider 中对应 Fish 的 `reference_id`，可以留空；填写时使用 Fish 账户可访问的声音模型 ID。
+
+默认模型为 `s2.1-pro-free`，也可以在 Model 输入框中填写 Fish 账户可用的其它模型 ID。Fish provider 仍然是完整 MP3 返回后播放的普通 TTS，不提供麦克风实时会话或边生成边播放。
+
+也可以通过环境变量配置：
+
+```env
+TTS_PROVIDER=fish
+TTS_MODEL=s2.1-pro-free
+TTS_VOICE_ID=your-reference-id
+FISH_API_KEY=
+```

@@ -489,6 +489,7 @@
                 <option value="azure">Azure Speech（zh-CN-XiaoxiaoNeural 等海量音色 · 需 Region）</option>
                 <option value="doubao">豆包 TTS（火山引擎 · 需 AppID + Cluster）</option>
                 <option value="qwen">通义 CosyVoice / Qwen-TTS（DashScope · OpenAI 兼容模式）</option>
+                <option value="fish">Fish Audio（原生 TTS · 需 API Key）</option>
               </select>
             </div>
             <div id="s2-tts-base-row" class="mb-2 hidden">
@@ -500,9 +501,10 @@
               <label class="block text-[12px] font-semibold mb-1">Model（选填）</label>
               <input id="s2-tts-model" class="input font-mono" type="text"
                      placeholder="留空使用该 provider 默认模型" autocomplete="off" spellcheck="false" />
+              <p id="s2-tts-model-hint" class="text-[11px] text-mute/80 mt-1"></p>
             </div>
             <div class="mb-2">
-              <label class="block text-[12px] font-semibold mb-1">Voice ID（选填）</label>
+              <label class="block text-[12px] font-semibold mb-1" id="s2-tts-voice-label">Voice ID（选填）</label>
               <input id="s2-tts-voice-id" class="input font-mono" type="text"
                      placeholder="留空使用该 provider 默认音色" autocomplete="off" spellcheck="false" />
               <p id="s2-tts-voice-hint" class="text-[11px] text-mute/80 mt-1"></p>
@@ -1133,6 +1135,10 @@ const TTS_VOICE_HINTS = {
   azure:   '如 zh-CN-XiaoxiaoNeural / zh-CN-YunxiNeural（默认 Xiaoxiao）',
   doubao:  '如 BV700_streaming / BV001_streaming（火山引擎控制台音色列表）',
   qwen:    '如 longxiaochun / longjingjing / longwan（CosyVoice 音色）',
+  fish:    'Fish reference_id（可选）；留空时使用 Fish 默认声音行为',
+};
+const TTS_MODEL_HINTS = {
+  fish: '默认 s2.1-pro-free；也可填 s2.1-pro、s1 或 Fish 账户可用的其他模型 ID',
 };
 const TTS_KEY_LABELS = {
   minimax: 'MiniMax API Key',
@@ -1140,15 +1146,20 @@ const TTS_KEY_LABELS = {
   azure:   'Azure Speech Key',
   doubao:  '豆包 Access Token',
   qwen:    'DashScope API Key（sk-...）',
+  fish:    'Fish Audio API Key',
 };
 function updateTtsProviderHints(provider) {
   const azureRow  = document.getElementById('s2-tts-azure-row');
   const doubaoRow = document.getElementById('s2-tts-doubao-row');
   const hintEl    = document.getElementById('s2-tts-voice-hint');
+  const modelHint = document.getElementById('s2-tts-model-hint');
+  const voiceLabel = document.getElementById('s2-tts-voice-label');
   const keyLabel  = document.getElementById('s2-tts-key-label');
   azureRow.classList.toggle('hidden',  provider !== 'azure');
   doubaoRow.classList.toggle('hidden', provider !== 'doubao');
   hintEl.textContent = TTS_VOICE_HINTS[provider] || '';
+  modelHint.textContent = TTS_MODEL_HINTS[provider] || '';
+  voiceLabel.textContent = provider === 'fish' ? 'Reference ID（可选）' : 'Voice ID（选填）';
   keyLabel.textContent = TTS_KEY_LABELS[provider] || 'API Key';
 }
 document.getElementById('s2-tts-provider').addEventListener('change', e => {
