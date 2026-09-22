@@ -7,10 +7,11 @@
  *   - azure    Azure Cognitive Speech（zh-CN-XiaoxiaoNeural 等 SSML，需 region）
  *   - doubao   字节 火山引擎 TTS（需 appid + access_token + cluster）
  *   - qwen     阿里通义 CosyVoice / Qwen-TTS（OpenAI 兼容模式，需 DashScope key）
+ *   - fish      Fish Audio 原生 TTS（/v1/tts，需 API key，可选 reference_id）
  *
  * 配置优先级（同 vision/asr）：
- *   1. process.env.TTS_PROVIDER / TTS_MODEL / TTS_VOICE_ID / <PROVIDER>_API_KEY
- *   2. app_settings 同名 key（由 /app/setup.html 写入）
+ *   1. app_settings 同名 key（由 /app/setup.html 写入）
+ *   2. process.env.TTS_PROVIDER / TTS_MODEL / TTS_VOICE_ID / <PROVIDER>_API_KEY
  *   3. 默认值或抛错
  *
  * 各 provider 额外字段（按需读取）：
@@ -76,9 +77,16 @@ export const REGISTRY = {
     label: '通义 CosyVoice / Qwen-TTS',
     kind: 'openai-compatible',
   },
+  fish: {
+    defaultModel: 's2.1-pro-free',
+    apiKeyEnv: 'FISH_API_KEY',
+    defaultVoiceId: '',
+    label: 'Fish Audio',
+    kind: 'fish-native',
+  },
 };
 
-// ─── 动态读取：env 优先，其次 app_settings ────────────────────────────────
+// ─── 动态读取：app_settings 优先，其次 env ────────────────────────────────
 function readSetting(key) { return readProviderSetting(key); }
 
 export function getActiveProviderName() {
@@ -187,6 +195,50 @@ async function openaiCompatSynthesize({ baseURL, apiKey, model, voice_id, speed,
   const arr = await resp.arrayBuffer();
   const buf = Buffer.from(arr);
   if (buf.length < 32) throw new Error('[tts:openai-compat] 返回 audio 过短');
+  return buf;
+}
+
+// ─── Fish Audio 原生 TTS ─────────────────────────────────────────────────
+export function normalizeFishTtsValue(value, field, { required = false } = {}) {
+  const raw = String(value ?? '');
+  if (/[\x00-\x1f\x7f]/.test(raw)) {
+    throw new Error(`[tts:fish] ${field} 无效`);
+  }
+  const normalized = raw.trim();
+  if (required && !normalized) throw new Error(`[tts:fish] ${field} 无效`);
+  return normalized;
+}
+
+async function fishSynthesize({ apiKey, model, reference_id, speed, text, signal }) {
+  const fishModel = normalizeFishTtsValue(model, 'model', { required: true });
+  const fishReference = normalizeFishTtsValue(reference_id, 'reference_id');
+  const numericSpeed = Number(speed);
+  const normalizedSpeed = Number.isFinite(numericSpeed) && numericSpeed > 0 ? numericSpeed : 1;
+  const body = {
+    text,
+    format: 'mp3',
+    prosody: { speed: normalizedSpeed },
+    normalize: true,
+    latency: 'normal',
+  };
+  if (fishReference) body.reference_id = fishReference;
+  const resp = await fetch('https://api.fish.audio/v1/tts', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      model: fishModel,
+    },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!resp.ok) throw new Error(`[tts:fish] HTTP ${resp.status}`);
+  const contentType = resp.headers.get('content-type') || '';
+  if (!/^audio\//i.test(contentType) && !/^application\/octet-stream/i.test(contentType)) {
+    throw new Error('[tts:fish] 返回非音频响应');
+  }
+  const buf = Buffer.from(await resp.arrayBuffer());
+  if (buf.length < 32) throw new Error('[tts:fish] 返回 audio 为空或过短');
   return buf;
 }
 
@@ -311,6 +363,11 @@ export async function ttsSynthesize(text, opts = {}) {
     } else if (entry.kind === 'openai-compatible') {
       audio = await openaiCompatSynthesize({
         baseURL: entry.baseURL, apiKey, model, voice_id, speed,
+        text, signal: controller.signal,
+      });
+    } else if (entry.kind === 'fish-native') {
+      audio = await fishSynthesize({
+        apiKey, model, reference_id: voice_id, speed,
         text, signal: controller.signal,
       });
     } else if (entry.kind === 'azure-ssml') {

@@ -43,6 +43,9 @@ jobs:
           node scripts/custom_provider_check.mjs
           node scripts/provider_review_check.mjs
 
+      - name: Fish Audio 原生 TTS 回归
+        run: node scripts/fish_tts_check.mjs
+
       - name: 设置向导脚本与控件回归
         run: node scripts/setup_ui_check.mjs
 
