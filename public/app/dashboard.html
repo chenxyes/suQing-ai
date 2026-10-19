@@ -1630,7 +1630,7 @@
             });
             const d = await r.json();
             if (!r.ok || !d.ok) throw new Error(d.error || '声明失败');
-            if (d.released) { showToast('安全模式已解除'); banner.style.display = 'none'; }
+            if (d.data.released) { showToast('安全模式已解除'); banner.style.display = 'none'; }
             else { alert('根据你填写的出生年份，安全模式将保持开启。'); }
           } catch (e) { alert(e.message); }
         });
