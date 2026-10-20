@@ -47,6 +47,16 @@ try {
     const status = (await api('provider-status')).body.data[cap];
     assert.equal(status.active, 'openai'); assert.equal(status.active_configured, true, 'native configuration must be reported');
   }
+  dbModule.setAppSetting('OPENAI_API_KEY', 'ab用');
+  const invalidEmbedding = (await api('provider-status')).body.data.embedding;
+  assert.equal(invalidEmbedding.active_configured, false);
+  assert.equal(invalidEmbedding.config_error.code, 'invalid_key');
+  assert.equal(invalidEmbedding.health.state, 'blocked');
+  const invalidProbe = await api('test-provider', { capability: 'embedding', provider: 'openai' });
+  assert.equal(invalidProbe.body.ok, false);
+  assert.match(invalidProbe.body.error, /ASCII/);
+  assert.ok(!JSON.stringify(invalidProbe).includes('ab用'));
+  dbModule.deleteAppSetting('OPENAI_API_KEY');
   for (const cap of caps) {
     const config = { capability: cap, provider: 'custom', base_url: `http://127.0.0.1:${relay.address().port}/v1/${cap}/`, model: `${cap}-relay-model`, api_key: `test-${cap}-independent-key`, voice_id: 'custom-voice' };
     const save = await api('provider-config', config); assert.equal(save.body.ok, true, JSON.stringify(save));
@@ -64,6 +74,11 @@ try {
       assert.deepEqual(db.prepare('SELECT key,value FROM app_settings ORDER BY key').all(), before, 'invalid config must not partially persist');
     }
     const probe = await api('test-provider', { capability: cap, provider: 'custom' }); assert.equal(probe.body.data?.ok, true, JSON.stringify(probe));
+    if (cap === 'embedding') {
+      const state = (await api('provider-status')).body.data.embedding;
+      assert.equal(state.health.state, 'ok', 'setup probe must update embedding runtime health');
+      assert.equal(probe.body.data.dim, 3);
+    }
   }
   const anonymous = await api('provider-status', undefined, false);
   assert.ok(!JSON.stringify(anonymous.body).includes('127.0.0.1'), 'anonymous must not see private URLs');

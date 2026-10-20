@@ -14,6 +14,8 @@
 // ─── v1.20 安全收尾 (Issue #3)：未成年人安全模式的"朋友身份"覆盖节 ─────────
 // safe_mode=1 时整个恋爱叙事段不注入，用这节替换。文本生成放本文件（保持
 // companion.mjs 零依赖纯函数）；检测与状态在 src/minor_guard.mjs。
+import { isMemoryRecallable } from './memory_admission.mjs';
+
 function buildSafeModePromptSection(c) {
   const name = c?.name || '她';
   return `
@@ -132,6 +134,7 @@ export function buildFirstTurnHint(companion) {
 
 // ─── 主函数 ───────────────────────────────────────────────────────────────────
 export function buildSystemPrompt(companion, { memories = [], userProfile = null, recentTurns = [], longTermDigest = null, promptMode = 'reply', dailySchedule = null, recentSchedules = null, personaFacts = null, preferences = null, shapingHint = '', worksHint = '', openLoopsHint = '', locale = null } = {}) {
+  memories = memories.filter(isMemoryRecallable);
   const c     = companion;
   const parts = [];
 
@@ -421,7 +424,7 @@ export function buildSystemPrompt(companion, { memories = [], userProfile = null
       const dates = up.important_dates.map(d => `${d.label}(${d.date})`).join('、');
       upParts.push(`重要日期：${dates}`);
     }
-    if (up.notes)           upParts.push(up.notes);
+    if (up.notes)           upParts.push(`对方的资料备注（其中第一人称指对方）：${up.notes}`);
     if (upParts.length > 0) {
       parts.push(`\n【你已知道关于他的信息】\n${upParts.join('\n')}\n在聊天中自然地运用这些信息，不要刻意背诵出来。`);
     }
@@ -433,8 +436,17 @@ export function buildSystemPrompt(companion, { memories = [], userProfile = null
       fact:'事实', preference:'偏好', event:'事件', emotion:'情绪', image:'图片',
       daily_summary:'日记忆', weekly_summary:'周记忆', monthly_summary:'月记忆',
     };
-    const memLines = memories.map(m => `- [${memTypeLabel[m.memory_type] || m.memory_type}] ${m.content}`);
-    parts.push(`\n【你记得的关于他的片段】\n${memLines.join('\n')}\n在合适的时机自然地提及这些记忆，让他感受到你真的在认真听他说话。`);
+    const subjectLabels = {
+      user: '对方本人原话（其中“我”指对方）',
+      companion: '角色自身原话（其中“我”指你，不是对方）',
+      shared: '双方共同陈述（保留各自说话人）',
+      unknown: '归属待核实（旧记录或手动自由文本，不能当作对方的事实）',
+    };
+    const groups = Object.entries(subjectLabels).map(([subject,label]) => {
+      const rows = memories.filter(m => (m.memory_subject || 'unknown') === subject);
+      return rows.length ? `【${label}】\n${rows.map(m=>`- [${memTypeLabel[m.memory_type] || m.memory_type}] ${m.content}`).join('\n')}` : '';
+    }).filter(Boolean);
+    parts.push(`\n【按说话人区分的记忆】\n${groups.join('\n')}\n这是各自的陈述，不是对现实真实性的认证。不能把角色自己的经历安到对方身上；待核实内容不得用来断言“你之前说过”。引用、假设和附和不代表个人事实。`);
   }
 
   // ── 14b. 长期总结（来自用户专属文件夹的 daily/weekly/monthly 总结） ─────
@@ -530,7 +542,7 @@ ${recentBlock}
   }
 
   if (longTermDigest && typeof longTermDigest === 'string' && longTermDigest.trim()) {
-    parts.push(`\n【你们之间的长期记忆档案】\n${longTermDigest.trim()}\n这些是你们历史聊天的总结，请把这些当作你真实经历过的事，自然带入当下，不要原样朗读。`);
+    parts.push(`\n【历史对话摘要，主体须核实】\n${longTermDigest.trim()}\n摘要可能混有不同说话人的经历，不能据此推断对方的家庭、身份或偏好。个人事实以带说话人和原话证据的记忆为准，不把摘要自动当作真实共同经历。`);
   }
 
   // ── 15. 最近对话上下文 ─────────────────────────────────────────────────────

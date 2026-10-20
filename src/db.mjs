@@ -11,6 +11,8 @@ import fs from 'node:fs';
 import { estimateProviderCost, loadProviderPricing } from './provider_costs.mjs';
 // v1.20 (PR2): 隐私过滤挂在各长期存储写入函数入口（最窄腰部，所有调用方自动覆盖）
 import { filterForStorage, redactSensitiveInfo, replaceUserWording } from './privacy_filter.mjs';
+import { isMemoryRecallable, memorySourceIds, filterRecallableMemoryRows } from './memory_admission.mjs';
+import { validateMemoryEvidence, normalizedMemoryClaim, isRelatedExplicitCorrection } from './memory_provenance.mjs';
 
 const DB_PATH = process.env.DB_PATH || path.resolve(process.cwd(), 'data/bot.db');
 // 确保 data 目录存在
@@ -43,6 +45,7 @@ export function getDb() {
     migrateConfessionFields();
     initAvatarPresets();
     migrateMemoryV3();
+    migrateMemoryAdmission();
     migrateEmotionState();
     migrateProactiveEngineV2();
     migrateEmotionHistory();
@@ -1511,6 +1514,35 @@ function migrateMemoryV3() {
   `);
 }
 
+// A durable barrier keeps hard deletion/restoration from silently re-approving old derivatives.
+function migrateMemoryAdmission() {
+  addColIfMissing('companion_memories', 'memory_subject', "TEXT DEFAULT 'unknown'");
+  addColIfMissing('companion_memories', 'memory_evidence', 'TEXT');
+  db.exec(`CREATE TABLE IF NOT EXISTS user_profile_evidence (
+    companion_id INTEGER NOT NULL REFERENCES companions(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL, field TEXT NOT NULL, source_memory_ids TEXT,
+    manual_revision INTEGER, PRIMARY KEY(companion_id,user_id,field)
+  )`);
+  addColIfMissing('companion_memories', 'source_memory_ids', 'TEXT');
+  addColIfMissing('companion_memories', 'source_recall_revision', 'INTEGER');
+  addColIfMissing('companion_memories', 'recall_blocked', 'INTEGER DEFAULT 0');
+  db.exec(`CREATE TABLE IF NOT EXISTS memory_recall_barriers (
+    companion_id INTEGER NOT NULL REFERENCES companions(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1,
+    revoked_at TEXT NOT NULL,
+    turn_id_cutoff INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (companion_id, user_id)
+  )`);
+  // Existing restricted rows predate the write hooks. Keep contents, seed conservative recall barriers.
+  db.exec(`INSERT OR IGNORE INTO memory_recall_barriers (companion_id, user_id, revision, revoked_at, turn_id_cutoff)
+    SELECT m.companion_id, m.user_id, 1, CURRENT_TIMESTAMP,
+      COALESCE((SELECT MAX(t.id) FROM companion_conversation_turns t WHERE t.companion_id=m.companion_id), 0)
+    FROM companion_memories m
+    WHERE COALESCE(m.memory_status, 'active') != 'active' OR COALESCE(m.do_not_mention, 0) != 0
+    GROUP BY m.companion_id, m.user_id`);
+}
+
 // ─── Emotion State Machine ─────────────────────────────────────────────────────
 function migrateEmotionState() {
   db.exec(`
@@ -2741,10 +2773,26 @@ function createOrMoveWechatUser(db, { wechatUserId, displayName = null, avatarUr
       }
       db.prepare('UPDATE companion_memories SET user_id = ? WHERE companion_id = ? AND user_id = ?')
         .run(user.id, companion.id, companion.user_id);
+      // Recall restrictions belong to the moved history, not its former numeric owner.
+      // Merge counters conservatively; a new revision prevents coincidental counter
+      // equality from approving conversation-derived memories in either old scope.
+      const oldBarrier = getMemoryRecallBarrier(companion.id, companion.user_id);
+      const targetBarrier = getMemoryRecallBarrier(companion.id, user.id);
+      if (oldBarrier.revision || targetBarrier.revision) {
+        db.prepare(`INSERT INTO memory_recall_barriers (companion_id,user_id,revision,revoked_at,turn_id_cutoff)
+          VALUES (?,?,?,?,?) ON CONFLICT(companion_id,user_id) DO UPDATE SET
+          revision=excluded.revision, revoked_at=excluded.revoked_at, turn_id_cutoff=excluded.turn_id_cutoff`)
+          .run(companion.id, String(user.id), Math.max(oldBarrier.revision, targetBarrier.revision),
+            new Date().toISOString(), Math.max(oldBarrier.turn_id_cutoff, targetBarrier.turn_id_cutoff));
+        recordMemoryRevocation(companion.id, user.id);
+      }
       db.prepare('DELETE FROM user_profiles WHERE user_id = ? AND companion_id = ?')
         .run(user.id, companion.id);
       db.prepare('UPDATE user_profiles SET user_id = ? WHERE companion_id = ? AND user_id = ?')
         .run(user.id, companion.id, companion.user_id);
+      db.prepare('DELETE FROM user_profile_evidence WHERE companion_id=? AND user_id=?').run(companion.id,String(user.id));
+      db.prepare('UPDATE user_profile_evidence SET user_id=? WHERE companion_id=? AND user_id=?')
+        .run(String(user.id),companion.id,String(companion.user_id));
       db.prepare('UPDATE companions SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
         .run(user.id, companion.id);
     } else if (!user) {
@@ -3587,22 +3635,150 @@ function companionUserAlias(companionId) {
 // **纯加法**——未传的列一律不进 INSERT、沿用列默认(source='auto'/layer='event'/weight=NULL)，
 // 故既有 6 个 caller(全不传这三参) 零行为变更。reflection 此前传了 memorySource:'reflection'
 // 等却被旧签名静默丢弃(落库错贴 auto/event)，本次起才真正落库。
-export function saveMemory({ companionId, userId, memoryType, content, importance = 5, keywords = null, embedding = null, pinned = null, memorySource = null, memoryLayer = null, memoryWeight = null }) {
-  // v1.20 隐私过滤：密码/key/身份证/银行卡级 → 整条不入长期记忆；手机号/住址/学校班级 → 脱敏
-  const pf = filterForStorage(content);
-  if (!pf.store) { console.warn(`[PrivacyFilter] saveMemory 拦截敏感内容 companion=${companionId}`); return; }
-  content = replaceUserWording(pf.text, companionUserAlias(companionId));
+export function getMemoryRecallBarrier(companionId, userId) {
+  if (userId == null) userId = getDb().prepare('SELECT user_id FROM companions WHERE id=?').get(companionId)?.user_id;
+  if (userId == null) return { revision: 0, revoked_at: null, turn_id_cutoff: 0 };
+  return getDb().prepare('SELECT revision, revoked_at, turn_id_cutoff FROM memory_recall_barriers WHERE companion_id=? AND user_id=?')
+    .get(companionId, String(userId)) || { revision: 0, revoked_at: null, turn_id_cutoff: 0 };
+}
+
+export function getRecallableMemories(companionId, userId) {
   const db = getDb();
-  const isPinned = pinned !== null ? (pinned ? 1 : 0) : (importance >= 7 ? 1 : 0);
+  if (userId == null) userId = db.prepare('SELECT user_id FROM companions WHERE id=?').get(companionId)?.user_id;
+  if (userId == null) return [];
+  const rows = db.prepare('SELECT * FROM companion_memories WHERE companion_id=? AND user_id=? ORDER BY importance DESC, created_at DESC, id DESC')
+    .all(companionId, userId);
+  const recallRevision = getMemoryRecallBarrier(companionId, userId).revision;
+  const hasRevocations = recallRevision > 0
+    || rows.some(row => !isMemoryRecallable(row));
+  return filterRecallableMemoryRows(rows, { hasRevocations, recallRevision });
+}
+
+function recordMemoryRevocation(companionId, userId, sourceId = null) {
+  const db = getDb();
+  db.prepare(`INSERT INTO memory_recall_barriers (companion_id,user_id,revision,revoked_at,turn_id_cutoff)
+    VALUES (?, ?, 1, ?, COALESCE((SELECT MAX(id) FROM companion_conversation_turns WHERE companion_id=?), 0))
+    ON CONFLICT(companion_id,user_id) DO UPDATE SET revision=revision+1, revoked_at=excluded.revoked_at,
+      turn_id_cutoff=MAX(turn_id_cutoff,excluded.turn_id_cutoff)`)
+    .run(companionId,String(userId),new Date().toISOString(),companionId);
+  const rows = db.prepare('SELECT * FROM companion_memories WHERE companion_id=? AND user_id=?').all(companionId,userId);
+  // An edit invalidates derivatives of the OLD content, even though the new source itself is active.
+  const visible = new Set(filterRecallableMemoryRows(rows.map(row => row.id === sourceId
+    ? { ...row, memory_status: 'deleted' } : row), { hasRevocations: true,
+      recallRevision: getMemoryRecallBarrier(companionId, userId).revision }).map(row => row.id));
+  const block = db.prepare('UPDATE companion_memories SET recall_blocked=1 WHERE id=?');
+  for (const row of rows) {
+    if (row.id !== sourceId && !visible.has(row.id)
+      && (row.source_memory_ids != null || row.memory_layer === 'summary' || /_summary$/.test(row.memory_type))) block.run(row.id);
+  }
+}
+
+function prepareMemoryContent(companionId, content, keywords = null) {
+  const filtered = filterForStorage(content);
+  if (!filtered.store || !filtered.text.trim()) return null;
+  const normalized = replaceUserWording(filtered.text, companionUserAlias(companionId));
+  const final = filterForStorage(normalized);
   const kw = Array.isArray(keywords) ? JSON.stringify(keywords) : (keywords || null);
-  const emb = embedding ? packEmbedding(embedding) : null;
-  const cols = ['companion_id', 'user_id', 'memory_type', 'content', 'importance', 'pinned', 'keywords', 'embedding'];
-  const vals = [companionId, userId, memoryType, content, importance, isPinned, kw, emb];
-  if (memorySource != null) { cols.push('memory_source'); vals.push(memorySource); }
-  if (memoryLayer  != null) { cols.push('memory_layer');  vals.push(memoryLayer); }
-  if (memoryWeight != null) { cols.push('memory_weight'); vals.push(memoryWeight); }
-  db.prepare(`INSERT INTO companion_memories (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`)
-    .run(...vals);
+  const checkedKeywords = kw == null ? null : filterForStorage(kw);
+  if (!final.store || (checkedKeywords && !checkedKeywords.store)) return null;
+  return { content: final.text, keywords: checkedKeywords?.text ?? null, changed: final.text !== content };
+}
+
+export function saveMemory({ companionId, userId, memoryType, content, importance = 5, keywords = null, embedding = null, pinned = null,
+  memorySource = null, memoryLayer = null, memoryWeight = null, sourceMemoryIds = null, expectedRecallRevision = null }) {
+  const prepared = prepareMemoryContent(companionId, content, keywords);
+  if (!prepared) return null;
+  const db = getDb();
+  return db.transaction(() => {
+    const owner = db.prepare('SELECT user_id FROM companions WHERE id=?').get(companionId);
+    if (expectedRecallRevision != null && owner && String(owner.user_id) !== String(userId)) return null;
+    const revision = getMemoryRecallBarrier(companionId, userId).revision;
+    if (expectedRecallRevision != null && revision !== expectedRecallRevision) return null;
+    const sources = memorySourceIds(sourceMemoryIds);
+    if (sources === false) return null;
+    if (sources) {
+      if (!sources.length && revision > 0 && expectedRecallRevision == null) return null;
+      const allowed = new Set(getRecallableMemories(companionId,userId).map(row => row.id));
+      if (sources.some(id => !allowed.has(id))) return null;
+    }
+    const isPinned = pinned !== null ? (pinned ? 1 : 0) : (importance >= 7 ? 1 : 0);
+    const cols = ['companion_id', 'user_id', 'memory_type', 'content', 'importance', 'pinned', 'keywords', 'embedding', 'source_memory_ids', 'source_recall_revision'];
+    const vals = [companionId, userId, memoryType, prepared.content, importance, isPinned, prepared.keywords,
+      embedding && !prepared.changed ? packEmbedding(embedding) : null, sources == null ? null : JSON.stringify(sources), revision];
+    if (memorySource != null) { cols.push('memory_source'); vals.push(memorySource); }
+    if (memoryLayer != null) { cols.push('memory_layer'); vals.push(memoryLayer); }
+    if (memoryWeight != null) { cols.push('memory_weight'); vals.push(memoryWeight); }
+    const inserted = db.prepare(`INSERT INTO companion_memories (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(...vals);
+    return Number(inserted.lastInsertRowid);
+  })();
+}
+
+// v1.x 修(#1)：memory_type → memory_layer 映射（与 memory_v2.mjs LAYER_MAP 一致，
+/** Return only explicitly supplied real turns from the current owner and recall epoch. */
+export function getMemoryEvidenceTurns(companionId, userId, turnIds) {
+  if (!Array.isArray(turnIds) || !turnIds.length || turnIds.length > 160
+    || !turnIds.every(id => Number.isSafeInteger(id) && id > 0)) return [];
+  const db = getDb();
+  const owner = db.prepare('SELECT user_id FROM companions WHERE id=?').get(companionId);
+  if (!owner || String(owner.user_id) !== String(userId)) return [];
+  const ids = [...new Set(turnIds)];
+  const cutoff = getMemoryRecallBarrier(companionId,userId).turn_id_cutoff;
+  const turns = db.prepare(`SELECT id,companion_id,role,content,synthetic FROM companion_conversation_turns
+    WHERE companion_id=? AND COALESCE(synthetic,0)=0 AND id>? AND id IN (${ids.map(()=>'?').join(',')})
+    ORDER BY id`).all(companionId,cutoff,...ids);
+  return turns.length === ids.length ? turns : [];
+}
+
+/** Store an attributed assertion from persisted evidence, never from a model paraphrase. */
+export function saveGroundedMemory(input) {
+  const rejected = { action: 'rejected', memory: null };
+  const { companionId, userId, subject, evidence, allowedTurnIds, expectedRecallRevision } = input;
+  if (!Number.isSafeInteger(expectedRecallRevision)) return rejected;
+  return getDb().transaction(() => {
+    if (getMemoryRecallBarrier(companionId,userId).revision !== expectedRecallRevision) return rejected;
+    const turns = getMemoryEvidenceTurns(companionId,userId,allowedTurnIds);
+    const checked = validateMemoryEvidence({ subject,evidence,turns });
+    if (!checked) return rejected;
+    // Evidence copies must not become a second, unfiltered store for secrets.
+    for (const item of checked.evidence) {
+      const filtered = filterForStorage(item.quote);
+      if (!filtered.store || filtered.text !== item.quote) return rejected;
+    }
+    const eligible = getRecallableMemories(companionId,userId);
+    const replaces = memorySourceIds(input.replacesMemoryIds ?? []);
+    if (replaces === false || replaces === null || replaces.length > 20) return rejected;
+    const targets = replaces.map(id=>eligible.find(row=>row.id===id));
+    if (targets.some(row=>!row || !['user','unknown'].includes(row.memory_subject ?? 'unknown')
+      || subject!=='user' || !isRelatedExplicitCorrection(row,checked.evidence,turns))) return rejected;
+    const duplicate = eligible.find(row=>row.memory_subject===subject
+      && normalizedMemoryClaim(row.content)===normalizedMemoryClaim(checked.content));
+    if (duplicate && replaces.includes(duplicate.id)) return rejected;
+    let id = duplicate?.id;
+    if (!id) {
+      const sourceIds = memorySourceIds(input.sourceMemoryIds);
+      if (sourceIds === false) return rejected;
+      const remainingSources = sourceIds?.filter(sourceId=>!replaces.includes(sourceId));
+      id = saveMemory({ ...input, content: checked.content, embedding: null,
+        memoryLayer: input.memoryLayer ?? memoryLayerOfType(input.memoryType),
+        // Real message evidence is independent of the contradicted row, but
+        // unrelated memory dependencies must still propagate later revocations.
+        sourceMemoryIds: replaces.length && !remainingSources?.length ? null : (remainingSources ?? null) });
+      if (!id) return rejected;
+      getDb().prepare('UPDATE companion_memories SET memory_subject=?,memory_evidence=? WHERE id=?')
+        .run(subject,JSON.stringify(checked.evidence),id);
+    }
+    for (const target of targets) patchMemory(target.id,companionId,{memory_status:'contradicted',conflict_of:id});
+    const memory = getDb().prepare('SELECT * FROM companion_memories WHERE id=?').get(id);
+    return {action: replaces.length ? 'corrected' : duplicate ? 'duplicate' : 'inserted',memory};
+  })();
+}
+
+export function updateGroundedMemory(memoryId,input) {
+  const row = getRecallableMemories(input.companionId,input.userId).find(memory=>memory.id===memoryId);
+  if (!row || row.locked || row.pinned || (row.memory_subject !== 'unknown' && row.memory_subject !== input.subject)) {
+    return {action:'rejected',memory:null};
+  }
+  return saveGroundedMemory({...input,replacesMemoryIds:[memoryId]});
 }
 
 // v1.x 修(#1)：memory_type → memory_layer 映射（与 memory_v2.mjs LAYER_MAP 一致，
@@ -3632,21 +3808,9 @@ const LAYER_TO_LEGACY_TYPE = {
 export const legacyTypeForLayer = (layer) => LAYER_TO_LEGACY_TYPE[layer] || null;
 
 export function saveMemories(memories) {
-  const db = getDb();
-  const stmt = db.prepare(`
-    INSERT INTO companion_memories (companion_id, user_id, memory_type, memory_layer, content, importance, pinned, keywords, embedding)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  const tx = db.transaction(list => {
-    for (const m of list) {
-      const imp = m.importance || 5;
-      const pinned = m.pinned !== undefined ? (m.pinned ? 1 : 0) : (imp >= 7 ? 1 : 0);
-      const kw = Array.isArray(m.keywords) ? JSON.stringify(m.keywords) : (m.keywords || null);
-      const emb = m.embedding ? packEmbedding(m.embedding) : null;
-      stmt.run(m.companionId, m.userId, m.memoryType, memoryLayerOfType(m.memoryType), m.content, imp, pinned, kw, emb);
-    }
-  });
-  tx(memories);
+  return getDb().transaction(list => list.map(memory => saveMemory({ ...memory,
+    importance: memory.importance ?? 5, memoryLayer: memory.memoryLayer ?? memoryLayerOfType(memory.memoryType),
+  }))) (memories);
 }
 
 // 语义相似度（余弦），不进行归一化假设
@@ -3668,31 +3832,17 @@ function cosineSimilarity(a, b) {
  * pinned=1 的额外 +0.15 分（确保关键记忆优先）
  */
 export function recallMemoriesSemantic(companionId, userId, queryEmbedding, limit = 7) {
-  const db = getDb();
-  const rows = db.prepare(`
-    SELECT id, memory_type, content, importance, pinned, keywords, embedding, created_at
-    FROM companion_memories
-    WHERE companion_id = ? AND user_id = ? AND embedding IS NOT NULL
-  `).all(companionId, userId);
-
+  const rows = getRecallableMemories(companionId, userId).filter(row => row.embedding != null);
   const qf = new Float32Array(queryEmbedding);
-  const scored = rows.map(r => {
-    const sim = cosineSimilarity(qf, unpackEmbedding(r.embedding));
-    const score = sim * 0.7 + ((r.importance || 5) / 10) * 0.3 + (r.pinned ? 0.15 : 0);
-    return { ...r, similarity: sim, score };
-  }).sort((a, b) => b.score - a.score).slice(0, limit);
-
-  return scored;
+  return rows.map(row => {
+    const sim = cosineSimilarity(qf, unpackEmbedding(row.embedding));
+    const score = sim * 0.7 + ((row.importance || 5) / 10) * 0.3 + (row.pinned ? 0.15 : 0);
+    return { ...row, similarity: sim, score };
+  }).sort((a,b) => b.score-a.score).slice(0, Math.max(0,limit));
 }
 
 export function getMemories(companionId, userId, limit = 50) {
-  const db = getDb();
-  return db.prepare(`
-    SELECT * FROM companion_memories
-    WHERE companion_id = ? AND user_id = ?
-    ORDER BY importance DESC, created_at DESC
-    LIMIT ?
-  `).all(companionId, userId, limit);
+  return getRecallableMemories(companionId,userId).slice(0,Math.max(0,limit));
 }
 
 /**
@@ -3707,18 +3857,9 @@ export function getMemories(companionId, userId, limit = 50) {
  * @returns 数组：{ id, memory_type, content, created_at, ... }
  */
 export function listEpisodicMemoriesOlderThan({ companionId, userId, beforeDateIso, limit = 200 }) {
-  const db = getDb();
-  return db.prepare(`
-    SELECT id, memory_type, content, created_at, importance
-    FROM companion_memories
-    WHERE companion_id = ?
-      AND user_id = ?
-      AND memory_type IN ('fact', 'event', 'emotion')
-      AND COALESCE(pinned, 0) = 0
-      AND created_at < ?
-    ORDER BY created_at ASC
-    LIMIT ?
-  `).all(companionId, userId, beforeDateIso, limit);
+  return getRecallableMemories(companionId,userId).filter(row => ['fact','event','emotion'].includes(row.memory_type)
+    && !row.pinned && Date.parse(row.created_at) < Date.parse(beforeDateIso))
+    .sort((a,b) => a.created_at.localeCompare(b.created_at)).slice(0,limit);
 }
 
 /**
@@ -3738,61 +3879,44 @@ export function deleteMemoriesByIds(ids) {
 }
 
 export function recallMemories(companionId, userId, currentMessage, limit = 7) {
-  const db = getDb();
-  // 提取关键词（2字以上中文词组 & 英文单词）
-  const keywords = (currentMessage || '')
-    .replace(/[^一-龥a-zA-Z0-9]/g, ' ')
-    .split(/\s+/)
-    .filter(w => w.length >= 2)
-    .slice(0, 4);
-
-  // 第一档：pinned=1 永远候选
-  const pinnedRows = db.prepare(`
-    SELECT * FROM companion_memories
-    WHERE companion_id = ? AND user_id = ? AND pinned = 1
-    ORDER BY importance DESC, created_at DESC
-    LIMIT 5
-  `).all(companionId, userId);
-  const seen = new Set(pinnedRows.map(r => r.id));
-
-  // 第二档：关键词命中
-  let keywordRows = [];
-  if (keywords.length > 0) {
-    const conds = keywords.map(() => 'content LIKE ?').join(' OR ');
-    const params = keywords.map(k => `%${k}%`);
-    keywordRows = db.prepare(`
-      SELECT * FROM companion_memories
-      WHERE companion_id = ? AND user_id = ? AND (${conds})
-      ORDER BY importance DESC, created_at DESC
-      LIMIT ?
-    `).all(companionId, userId, ...params, limit).filter(r => !seen.has(r.id));
-    keywordRows.forEach(r => seen.add(r.id));
-  }
-
-  // 第三档：高 importance 兜底
-  const fill = Math.max(0, limit - pinnedRows.length - keywordRows.length);
-  const topRows = fill > 0
-    ? db.prepare(`
-        SELECT * FROM companion_memories
-        WHERE companion_id = ? AND user_id = ?
-        ORDER BY importance DESC, created_at DESC
-        LIMIT ?
-      `).all(companionId, userId, limit * 2)
-        .filter(r => !seen.has(r.id))
-        .slice(0, fill)
-    : [];
-
-  return [...pinnedRows, ...keywordRows, ...topRows].slice(0, limit);
+  const rows = getRecallableMemories(companionId,userId);
+  const keywords = (currentMessage || '').replace(/[^一-龥a-zA-Z0-9]/g,' ').split(/\s+/)
+    .filter(word => word.length >= 2).slice(0,4).map(word => word.toLowerCase());
+  const pinnedRows = rows.filter(row => row.pinned === 1).slice(0,5);
+  const seen = new Set(pinnedRows.map(row => row.id));
+  const keywordRows = rows.filter(row => keywords.some(word => row.content.toLowerCase().includes(word)))
+    .slice(0,limit).filter(row => !seen.has(row.id));
+  keywordRows.forEach(row => seen.add(row.id));
+  return [...pinnedRows,...keywordRows,...rows.filter(row => !seen.has(row.id))].slice(0,Math.max(0,limit));
 }
 
 export function deleteMemory(memoryId, companionId) {
   const db = getDb();
-  db.prepare('DELETE FROM companion_memories WHERE id = ? AND companion_id = ?').run(memoryId, companionId);
+  return db.transaction(() => {
+    const row = db.prepare('SELECT user_id FROM companion_memories WHERE id=? AND companion_id=?').get(memoryId,companionId);
+    if (!row) return 0;
+    const result = db.prepare('DELETE FROM companion_memories WHERE id=? AND companion_id=?').run(memoryId,companionId);
+    recordMemoryRevocation(companionId,row.user_id,memoryId);
+    return result.changes;
+  })();
 }
 
 export function clearMemories(companionId, userId) {
-  const db = getDb();
-  db.prepare('DELETE FROM companion_memories WHERE companion_id = ? AND user_id = ?').run(companionId, userId);
+  return getDb().transaction(() => {
+    const result = getDb().prepare('DELETE FROM companion_memories WHERE companion_id=? AND user_id=?').run(companionId,userId);
+    if (result.changes) recordMemoryRevocation(companionId,userId);
+    return result.changes;
+  })();
+}
+
+export function softClearMemories(companionId,userId) {
+  return getDb().transaction(() => {
+    const result = getDb().prepare(`UPDATE companion_memories SET memory_status='deleted', updated_at=?
+      WHERE companion_id=? AND user_id=? AND COALESCE(memory_status,'active')!='deleted'`)
+      .run(new Date().toISOString(),companionId,userId);
+    if (result.changes) recordMemoryRevocation(companionId,userId);
+    return result.changes;
+  })();
 }
 
 export function summaryMemoryExists(companionId, userId, memoryType, prefix) {
@@ -3811,6 +3935,15 @@ export function summaryMemoryExists(companionId, userId, memoryType, prefix) {
  */
 export function cleanupPlanMemories(now = new Date()) {
   const db = getDb();
+  // Retention must not sever provenance of surviving summaries. Explicit user deletion uses
+  // deleteMemory/clearMemories instead and still invalidates dependent records immediately.
+  const unreferenced = `NOT EXISTS (
+    SELECT 1 FROM companion_memories AS derived,
+      json_each(CASE WHEN json_valid(derived.source_memory_ids) THEN derived.source_memory_ids ELSE '[]' END) AS source
+    WHERE source.value = companion_memories.id
+      AND derived.companion_id = companion_memories.companion_id
+      AND derived.user_id = companion_memories.user_id
+  )`;
   const freeDailyCutoff = toSqlTimestamp(new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000));
   const proDailyCutoff = toSqlTimestamp(new Date(now.getTime() - 180 * 24 * 60 * 60 * 1000));
   const proWeeklyCutoff = toSqlTimestamp(new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000));
@@ -3818,6 +3951,7 @@ export function cleanupPlanMemories(now = new Date()) {
   const freeDaily = db.prepare(`
     DELETE FROM companion_memories
     WHERE memory_type = 'daily_summary'
+      AND ${unreferenced}
       AND created_at < ?
       AND user_id IN (
         SELECT id FROM users
@@ -3829,6 +3963,7 @@ export function cleanupPlanMemories(now = new Date()) {
   const proDaily = db.prepare(`
     DELETE FROM companion_memories
     WHERE memory_type = 'daily_summary'
+      AND ${unreferenced}
       AND created_at < ?
       AND user_id IN (
         SELECT id FROM users
@@ -3840,6 +3975,7 @@ export function cleanupPlanMemories(now = new Date()) {
   const proWeekly = db.prepare(`
     DELETE FROM companion_memories
     WHERE memory_type = 'weekly_summary'
+      AND ${unreferenced}
       AND created_at < ?
       AND user_id IN (
         SELECT id FROM users
@@ -3871,13 +4007,8 @@ export function getAllActiveCompanions() {
 
 /** 取该 companion 最近 N 条已存的指定类型总结，按时间倒序 */
 export function getRecentSummaries(companionId, userId, memoryType, limit = 7) {
-  const db = getDb();
-  return db.prepare(`
-    SELECT * FROM companion_memories
-    WHERE companion_id = ? AND user_id = ? AND memory_type = ?
-    ORDER BY created_at DESC
-    LIMIT ?
-  `).all(companionId, userId, memoryType, limit);
+  return getRecallableMemories(companionId,userId).filter(row => row.memory_type === memoryType)
+    .sort((a,b) => b.created_at.localeCompare(a.created_at) || b.id-a.id).slice(0,Math.max(0,limit));
 }
 
 // ─── image reactions ─────────────────────────────────────────────────────────
@@ -3959,9 +4090,10 @@ export function getConversationTurnsBetween(companionId, startSql, endSql, limit
   const db = getDb();
   const safeLimit = Math.min(Math.max(Number(limit) || 500, 1), 2000);
   return db.prepare(`
-    SELECT role, content, topic, created_at
+    SELECT id, role, content, topic, created_at
     FROM companion_conversation_turns
     WHERE companion_id = ?
+      AND id > COALESCE((SELECT MAX(turn_id_cutoff) FROM memory_recall_barriers WHERE companion_id = companion_conversation_turns.companion_id), 0)
       AND created_at >= ?
       AND created_at < ?
       AND COALESCE(synthetic, 0) = 0   -- v1.6 I: 排除 backfill 虚构历史，防 cron 反思"昨日"误抓 90 天前虚拟事件
@@ -4474,12 +4606,45 @@ export function getUserProfile(userId, companionId) {
   );
 }
 
-export function upsertUserProfile(userId, companionId, data) {
+export function getUserProfileForRecall(userId, companionId) {
+  const profile = getUserProfile(userId,companionId);
+  if (!profile) return null;
+  const allowed = new Set(getRecallableMemories(companionId,userId)
+    .filter(row=>row.memory_subject==='user' && row.memory_evidence).map(row=>row.id));
+  const revision = getMemoryRecallBarrier(companionId,userId).revision;
+  const fields = getDb().prepare('SELECT * FROM user_profile_evidence WHERE companion_id=? AND user_id=?')
+    .all(companionId,String(userId));
+  const result = {};
+  for (const field of fields) {
+    const sources = memorySourceIds(field.source_memory_ids);
+    if ((field.manual_revision != null && field.manual_revision === revision)
+      || (sources?.length && sources.every(id=>allowed.has(id)))) result[field.field] = profile[field.field];
+  }
+  return Object.keys(result).length ? result : null;
+}
+
+export function upsertUserProfile(userId, companionId, data, provenance = {}) {
   const db = getDb();
+  return db.transaction(() => {
+  const revision = getMemoryRecallBarrier(companionId,userId).revision;
+  if (provenance.expectedRecallRevision != null && provenance.expectedRecallRevision !== revision) return null;
+  const sources = memorySourceIds(provenance.sourceMemoryIds);
+  if (sources === false) return null;
+  const sourceRows = sources == null ? [] : getRecallableMemories(companionId,userId)
+    .filter(row=>sources.includes(row.id) && row.memory_subject==='user' && row.memory_evidence);
+  if (sources != null && (!sources.length || sourceRows.length !== sources.length)) return null;
   const allowed = ['user_name', 'user_occupation', 'user_hobbies', 'user_birthday', 'important_dates', 'notes'];
   const cols = [], vals = [];
   for (const k of allowed) {
     if (data[k] === undefined) continue;
+    if (sources != null) {
+      // A keyword occurring in a negated assertion is not a verified profile
+      // value. Automated updates retain whole assertions as notes; structured
+      // fields require an explicit edit through the authenticated profile API.
+      if (k !== 'notes' || typeof data[k] !== 'string') continue;
+      const statements = data[k].split('\n');
+      if (!statements.length || !statements.every(value=>sourceRows.some(row=>row.content === value))) continue;
+    }
     cols.push(k);
     let v = PROFILE_JSON_FIELDS.includes(k) ? toJson(data[k]) : (data[k] ?? null);
     // v1.20 隐私过滤：画像字段（notes/职业等可能引用原话）脱敏；含绝不入库级内容则该字段置空
@@ -4503,7 +4668,18 @@ export function upsertUserProfile(userId, companionId, data) {
     db.prepare(`UPDATE user_profiles SET ${sets}, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND companion_id = ?`)
       .run(...vals, userId, companionId);
   }
+  for (const field of cols) {
+    // Legacy callers may still maintain the raw management record, but cannot
+    // silently carry forward proof that describes an earlier field value.
+    db.prepare('DELETE FROM user_profile_evidence WHERE companion_id=? AND user_id=? AND field=?')
+      .run(companionId,String(userId),field);
+    if (provenance.manual === true || sources != null) {
+      db.prepare(`INSERT INTO user_profile_evidence(companion_id,user_id,field,source_memory_ids,manual_revision)
+        VALUES(?,?,?,?,?)`).run(companionId,String(userId),field,sources == null?null:JSON.stringify(sources),provenance.manual===true?revision:null);
+    }
+  }
   return getUserProfile(userId, companionId);
+  })();
 }
 
 // ─── messages ────────────────────────────────────────────────────────────────
@@ -4683,7 +4859,8 @@ export function getMemoriesV2(companionId, { layer, status = 'active', q, limit 
   const where = parts.join(' AND ');
   const rows = db.prepare(`
     SELECT id, memory_layer, memory_weight, memory_status, memory_source,
-           content, pinned, locked, do_not_mention, importance,
+           content, pinned, locked, do_not_mention, importance, recall_blocked, source_memory_ids, sensitive_flag,
+           memory_subject, memory_evidence,
            use_count, last_used_at, created_at, updated_at
     FROM companion_memories
     WHERE ${where}
@@ -4694,20 +4871,62 @@ export function getMemoriesV2(companionId, { layer, status = 'active', q, limit 
   return { memories: rows, total };
 }
 
-export function patchMemory(memoryId, companionId, fields) {
-  const db  = getDb();
-  const now = new Date().toISOString();
-  const sets = Object.keys(fields).map(k => `${k} = ?`).join(', ');
-  db.prepare(`UPDATE companion_memories SET ${sets}, updated_at = ? WHERE id = ? AND companion_id = ?`)
-    .run(...Object.values(fields), now, memoryId, companionId);
+export function patchMemory(memoryId, companionId, fields, { expectedRecallRevision = null } = {}) {
+  const db = getDb();
+  return db.transaction(() => {
+    const previous = db.prepare('SELECT * FROM companion_memories WHERE id=? AND companion_id=?').get(memoryId,companionId);
+    if (!previous || (expectedRecallRevision != null
+      && getMemoryRecallBarrier(companionId,previous.user_id).revision !== expectedRecallRevision)) return null;
+    const allowed = new Set(['content','keywords','memory_layer','memory_weight','importance','memory_source','memory_status',
+      'pinned','locked','do_not_mention','sensitive_flag','conflict_of','source_memory_ids']);
+    const next = Object.fromEntries(Object.entries(fields).filter(([key]) => allowed.has(key)));
+    if (!Object.keys(next).length) return previous;
+    if ('content' in next || 'keywords' in next) {
+      const prepared = prepareMemoryContent(companionId,next.content ?? previous.content,next.keywords ?? previous.keywords);
+      if (!prepared) return null;
+      next.content = prepared.content; next.keywords = prepared.keywords;
+      if (next.content !== previous.content) next.embedding = null;
+    }
+    if ('source_memory_ids' in next) {
+      const sources = memorySourceIds(next.source_memory_ids);
+      if (sources === false || sources?.includes(memoryId)) return null;
+      const candidates = getRecallableMemories(companionId,previous.user_id);
+      if (sources && sources.some(id => !candidates.some(row => row.id === id))) return null;
+      next.source_memory_ids = sources == null ? null : JSON.stringify(sources);
+      if (sources?.length === 0) {
+        // Explicitly refreshed conversation provenance must match the generation
+        // revision. It will advance with this edit, without reviving older rows.
+        if (expectedRecallRevision == null) return null;
+        next.source_recall_revision = expectedRecallRevision;
+      }
+      const proposed = { ...previous, ...next };
+      if (isMemoryRecallable(proposed) && !filterRecallableMemoryRows(candidates.map(row => row.id === memoryId ? proposed : row),
+        { hasRevocations: getMemoryRecallBarrier(companionId,previous.user_id).revision > 0,
+          recallRevision: getMemoryRecallBarrier(companionId,previous.user_id).revision }).some(row => row.id === memoryId)) return null;
+    }
+    const changedContent = next.content != null && next.content !== previous.content;
+    // A manual/freeform edit cannot inherit proof for the previous wording.
+    if (changedContent && previous.memory_subject !== 'unknown') {
+      next.memory_subject = 'unknown'; next.memory_evidence = null;
+    }
+    const restricted = isMemoryRecallable(previous) && !isMemoryRecallable({ ...previous,...next });
+    db.prepare(`UPDATE companion_memories SET ${Object.keys(next).map(key => key+'=?').join(',')}, updated_at=? WHERE id=? AND companion_id=?`)
+      .run(...Object.values(next),new Date().toISOString(),memoryId,companionId);
+    if (changedContent || restricted) recordMemoryRevocation(companionId,previous.user_id,memoryId);
+    if (next.source_memory_ids === '[]' && expectedRecallRevision != null) {
+      db.prepare('UPDATE companion_memories SET source_recall_revision=? WHERE id=? AND companion_id=?')
+        .run(getMemoryRecallBarrier(companionId,previous.user_id).revision,memoryId,companionId);
+    }
+    return db.prepare('SELECT * FROM companion_memories WHERE id=? AND companion_id=?').get(memoryId,companionId);
+  })();
 }
 
 export function softDeleteMemory(memoryId, companionId) {
-  patchMemory(memoryId, companionId, { memory_status: 'deleted' });
+  return patchMemory(memoryId, companionId, { memory_status: 'deleted' });
 }
 
 export function archiveMemory(memoryId, companionId) {
-  patchMemory(memoryId, companionId, { memory_status: 'archived' });
+  return patchMemory(memoryId, companionId, { memory_status: 'archived' });
 }
 
 export function touchMemory(memoryId, companionId) {

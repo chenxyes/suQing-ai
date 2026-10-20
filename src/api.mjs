@@ -85,7 +85,7 @@ import { getActiveChatProvider, REGISTRY as CHAT_REGISTRY } from './providers/ch
 import { getActiveImageProvider } from './providers/image.mjs';
 import { getActiveVisionProvider, REGISTRY as VISION_REGISTRY } from './providers/vision.mjs';
 import { getActiveAsrProvider, REGISTRY as ASR_REGISTRY } from './providers/asr.mjs';
-import { getActiveEmbeddingProvider } from './providers/embedding.mjs';
+import { getActiveEmbeddingProvider, testEmbeddingProvider } from './providers/embedding.mjs';
 import { downloadImageWithGuards } from './security/netguard.mjs';
 import { synthesizeMp3Only } from './voice_pipeline.mjs';
 import { recognizeVoice } from './ai.mjs';
@@ -145,7 +145,7 @@ import {
   getConversationContext, clearConversationContext,
   GIFT_CATALOG, getGiftById, saveCompanionGift, getCompanionGifts,
   getReminders, createReminder, updateReminder, deleteReminder, getDueReminders,
-  getUserProfile, upsertUserProfile,
+  getUserProfile, getUserProfileForRecall, upsertUserProfile, softClearMemories,
   getDb, // BILLING_DISABLED: 保留 db helper 以便 18 岁后恢复
   getLastVerificationSend, countVerificationSendsSince, saveVerificationCode,
   getVerificationCode, deleteVerificationCode, bumpVerificationAttempt,
@@ -2178,6 +2178,7 @@ router.get('/setup/provider-status', softAuth, (req, res) => {
   }
   const visionActive = getActiveVisionProvider();
   const asrActive    = getActiveAsrProvider();
+  const embeddingActive = getActiveEmbeddingProvider();
   const ttsActive    = getTtsStatus();   // { active, configured, voice_id, ... }
   // 联网搜索 search section（独立结构：无 model 概念，custom provider 是 searxng 用 base URL）
   const searchActive = getActiveSearchProvider();
@@ -2206,8 +2207,10 @@ router.get('/setup/provider-status', softAuth, (req, res) => {
     image: { active: getActiveImageProvider().id, active_model: getActiveImageProvider().model,
       active_configured: getActiveImageProvider().configured,
       providers: { custom: customProviderStatus('image', isAuthed) } },
-    embedding: { active: getActiveEmbeddingProvider().id, active_model: getActiveEmbeddingProvider().model,
-      active_configured: getActiveEmbeddingProvider().configured,
+    embedding: { active: embeddingActive.id, active_model: embeddingActive.model,
+      active_configured: embeddingActive.configured, dim: embeddingActive.dim,
+      config_error: embeddingActive.config_error,
+      ...(isAuthed ? { health: embeddingActive.health } : {}),
       providers: { custom: customProviderStatus('embedding', isAuthed) } },
     tts:    {
       active: ttsActive.active || null,
@@ -2460,6 +2463,10 @@ router.post('/setup/test-provider',
     const name = provider.toLowerCase().trim();
     const cap  = String(capability).toLowerCase();
 
+    if (cap === 'embedding') {
+      try { return ok(res, await testEmbeddingProvider(name)); }
+      catch (error) { return res.status(200).json({ ok: false, error: error.message }); }
+    }
     if (name === 'custom' && CUSTOM_CAPABILITIES.includes(cap)) {
       try { return ok(res, await testCustomProvider(cap)); }
       catch (error) { return res.status(200).json({ ok: false, error: error.message }); }
@@ -2685,7 +2692,7 @@ router.get('/companions/:id/timeline', requireAuth, (req, res) => {
 router.get('/companions/:id/prompt', requireAuth, (req, res) => {
   const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
   const c  = requireOwnedCompanion(req, res, id); if (!c) return;
-  const userProfile = getUserProfile(c.user_id, id);
+  const userProfile = getUserProfileForRecall(c.user_id, id);
   const memories    = recallMemories(id, c.user_id, '', 10);
   const recentTurns = getConversationContext(id, 10);
   const prompt = buildSystemPrompt(c, { memories, userProfile, recentTurns });
@@ -3389,11 +3396,11 @@ router.post('/companions/:id/memories', requireAuth, (req, res) => {
   const types  = ['fact','preference','event','emotion','image','daily_summary','weekly_summary','monthly_summary'];
   const legacyType = types.includes(memory_type) ? memory_type : 'fact';
   const source = MEMORY_SOURCES.includes(memory_source) ? memory_source : 'user';
-  saveMemory({ companionId: id, userId: c.user_id, memoryType: legacyType, content, importance });
-  // Apply v3 fields via patch on the last inserted row
+  const memoryId = saveMemory({ companionId: id, userId: c.user_id, memoryType: legacyType, content, importance,
+    memoryLayer: layer, memoryWeight: weight, memorySource: source });
+  if (!memoryId) return err(res, '记忆未保存：内容为空或包含不可存储的敏感信息');
   const db = getDb();
-  const row = db.prepare('SELECT id FROM companion_memories WHERE companion_id = ? ORDER BY id DESC LIMIT 1').get(id);
-  if (row) patchMemory(row.id, id, { memory_layer: layer, memory_weight: weight, memory_source: source, memory_status: 'active' });
+  const row = db.prepare('SELECT * FROM companion_memories WHERE id=? AND companion_id=?').get(memoryId, id);
   log('info', `[API] 手动添加记忆 companion=${id} layer=${layer}`);
   // 首次记忆保存成就（静默）
   tryAchievement(id, 'first_memory_saved');
@@ -3401,9 +3408,9 @@ router.post('/companions/:id/memories', requireAuth, (req, res) => {
   // 传入 memory_layer meta 作为快速短路；memoryId 存在时 processMemoryForGraph
   // 还会再做一次 DB 查询校验 sensitive_flag / do_not_mention
   try {
-    processMemoryForGraph(id, content, row?.id ?? null, { memory_layer: layer });
+    if (row.memory_subject === 'user') processMemoryForGraph(id, row.content, row.id, { memory_layer: layer });
   } catch { /* 非阻塞 */ }
-  return ok(res, { companion_id: id, memory_layer: layer, content, memory_weight: weight }, 201);
+  return ok(res, { companion_id: id, memory_id: row.id, memory_layer: layer, content: row.content, memory_weight: weight }, 201);
 });
 
 // PUT /api/companions/:id/memories/:memoryId — 编辑内容 / 属性
@@ -3422,9 +3429,10 @@ router.put('/companions/:id/memories/:memoryId', requireAuth, (req, res) => {
     }
   }
   if (Object.keys(fields).length === 0) return err(res, '无可更新字段');
-  patchMemory(mid, id, fields);
+  const updated = patchMemory(mid, id, fields);
+  if (!updated) return err(res, '记忆未更新：记录不存在、内容为空或包含不可存储的敏感信息');
   log('info', `[API] 更新记忆 companion=${id} mid=${mid}`);
-  return ok(res, { updated: true, memory_id: mid, fields });
+  return ok(res, { updated: true, memory_id: mid, fields: Object.fromEntries(Object.keys(fields).map(key => [key, updated[key]])) });
 });
 
 // DELETE /api/companions/:id/memories/:memoryId — 软删除
@@ -3441,10 +3449,7 @@ router.delete('/companions/:id/memories/:memoryId', requireAuth, (req, res) => {
 router.delete('/companions/:id/memories', requireAuth, (req, res) => {
   const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
   const c  = requireOwnedCompanion(req, res, id); if (!c) return;
-  const db = getDb();
-  const changes = db.prepare(
-    "UPDATE companion_memories SET memory_status='deleted', updated_at=datetime('now') WHERE companion_id = ? AND COALESCE(memory_status,'active') != 'deleted'"
-  ).run(id).changes;
+  const changes = softClearMemories(id, c.user_id);
   log('info', `[API] 软清空记忆 companion=${id} changes=${changes}`);
   return ok(res, { companion_id: id, cleared: true, changes });
 });
@@ -3524,7 +3529,7 @@ router.put('/companions/:id/user-profile', requireAuth, (req, res) => {
   const c    = requireOwnedCompanion(req, res, id); if (!c) return;
   const data = req.body || {};
   if (Object.keys(data).length === 0) return err(res, '请求体为空');
-  const profile = upsertUserProfile(c.user_id, id, data);
+  const profile = upsertUserProfile(c.user_id, id, data, { manual: true });
   log('info', `[API] 更新用户画像 companion=${id}`);
   return ok(res, profile);
 });
@@ -3678,7 +3683,7 @@ router.get('/companions/:id/prompt-debug', requireAuth, (req, res) => {
   // 普通用户只能查看自己的 companion prompt（已由 requireOwnedCompanion 保证）
   try {
     const memories      = recallMemories(id, c.user_id, '', 10);
-    const userProfile   = getUserProfile(c.user_id, id);
+    const userProfile   = getUserProfileForRecall(c.user_id, id);
     const recentTurns   = getConversationContext(id, 6);
     const personaFacts  = getPersonaFacts(id);
     const dateKey       = shanghaiDateKey();

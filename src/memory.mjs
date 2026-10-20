@@ -10,11 +10,11 @@
 
 import { log } from './logger.mjs';
 import {
-  saveMemories, recallMemories as upsertShaping,
-  patchCompanion, getUserProfile, upsertUserProfile,
-  saveStageMilestone, shanghaiDateKey, getDb,
+  saveGroundedMemory, getMemoryEvidenceTurns, getRecallableMemories,
+  patchCompanion, upsertUserProfile,
+  saveStageMilestone, shanghaiDateKey, getDb, getMemoryRecallBarrier,
 } from './db.mjs';
-import { extractStructuredInfo, embedText } from './ai.mjs';
+import { extractStructuredInfo } from './ai.mjs';
 import { tryAchievement } from './achievements.mjs';
 import { processMemoryForGraph } from './event_graph.mjs';
 
@@ -341,97 +341,76 @@ export function buildImageReactionText(memories, imageDescription) {
 }
 
 // ─── 记忆提取（异步，调用 AI）────────────────────────────────────────────────
-const MEMORY_SYSTEM_PROMPT = `你是记忆提取助手。分析他（对方）说的话，提取关于他本人的明确信息。
-只提取他主动透露的真实信息，不要推测或虚构。
-
-输出 JSON 对象：
+const MEMORY_SYSTEM_PROMPT = `你是记忆候选提取助手。输入是已落库的真实对话 turns，id 是消息ID，role 是真实说话人；existing_memories 是本次允许更正的已有记录。
+不要把 assistant 自述当作 user 的事实。subject=user 只取对方本人的明确第一人称陈述；subject=companion 只取角色自己的明确自述；subject=shared 需要双方明确支持同一共同事实。
+引述、转述、假设、问题和简短附和不是个人事实证明；没有完整明确证据就不生成候选。证据 quote 必须逐字引用原消息中的完整、自足陈述，不能从假设或引号内摘半句来断言为真。
+只返回 JSON：
 {
-  "current_scene": "他俩此刻所处的场景/地点（如：图书馆、咖啡馆、在路上、公园、电影院、在家）。**只在本轮对话明确表明当前场景或发生位置变化时才填**（如"去图书馆吧""到家了""在咖啡馆等你"）；本轮没有场景信息就留空字符串\"\"。这是'此刻在哪'的**当前状态**，**不是过去事件**——别把'昨天去过XX'写成当前场景。",
-  "memories": [
-    {
-      "memory_type": "fact" | "preference" | "event" | "emotion" | "inside_joke",
-      "content": "20字内简洁描述（第三人称一律用'他'指代对方：'他...'，绝不写'用户'）",
-      "importance": 1-10,
-      "keywords": ["核心词1","核心词2","核心词3"]
-    }
-  ]
+  "current_scene": "仅本轮明确的当前场景/地点变化；过去事件不算，没有就空字符串",
+  "memories": [{
+    "subject": "user|companion|shared",
+    "memory_type": "fact|preference|event|emotion",
+    "content": "简短候选描述，不增加证据未说的事实",
+    "evidence": [{"turn_id": 真实消息ID, "quote": "完整原话"}],
+    "replaces_memory_ids": [],
+    "importance": 1,
+    "keywords": []
+  }]
 }
+replaces_memory_ids 只在对方明确纠正已有错误、且确实是同一事实时填写 existing_memories 中的真实ID；普通补充、不同主体或无关事实不得替换。很短的明确纠错也要处理。不能编造消息ID或记忆ID。
+importance 1-10：身份/家庭/稳定偏好7-9，日常事实5-6，临时情绪3-4，噪音1-2。无可靠候选返回 memories=[]。不要输出无证据的专属梗、画像或隐私信息。`;
 
-importance 评分细则：
-- 9-10：身份核心信息（生日 / 全名 / 家乡 / 重大病史 / 重要日期如纪念日）
-- 7-8：稳定偏好或重要承诺（职业 / 家庭成员 / 长期爱好 / 答应的事 / 重大决定）
-- 5-6：日常喜好（喜欢吃 / 常去的地方 / 看过的剧）
-- 3-4：临时情绪 / 一次性事件（今天累 / 刚刚吃了什么）
-- 1-2：闲聊噪音
-
-特别地，inside_joke = 你们之间的**专属梗 / 黑话 / 自创词 / 只有你俩懂的暗号或称呼**（反复出现的内部笑点）；content 写这个梗本身，importance 给 6。普通聊天里没有就别硬凑。
-只输出 JSON 对象。没有可记的 memories 就 []，没有场景就 current_scene 留空 ""。`;
-
-// 阈值：< MEMORY_MIN_IMPORTANCE 直接丢弃（避免噪音）。importance >= 7 自动 pin
 const MEMORY_MIN_IMPORTANCE = 4;
+const CORRECTION_CANDIDATE_LIMIT = 20;
 
-export async function extractAndSaveMemories(companionId, userId, userMsg, botReply) {
-  if (!userMsg || userMsg.length < 8) return 0;
-
-  const userContent = `他说："${userMsg}"\nAI回复："${botReply?.slice(0, 100)}"`;
+export async function extractAndSaveMemories(companionId, userId, _userMsg, _botReply, options = {}) {
+  const expectedRecallRevision = getMemoryRecallBarrier(companionId, userId).revision;
+  const turns = getMemoryEvidenceTurns(companionId, userId, options.turnIds || []);
+  if (!turns.length) return 0;
+  const allowedTurnIds = turns.map(turn => turn.id);
+  const existing = getRecallableMemories(companionId, userId).slice(0, CORRECTION_CANDIDATE_LIMIT);
+  const shownIds = new Set(existing.map(memory => memory.id));
+  const input = JSON.stringify({
+    turns: turns.map(turn => ({ id: turn.id, role: turn.role, content: turn.content })),
+    existing_memories: existing.map(memory => ({ id: memory.id, subject: memory.memory_subject || 'unknown', content: memory.content })),
+  });
 
   try {
-    const raw = await extractStructuredInfo(MEMORY_SYSTEM_PROMPT, userContent);
+    const raw = await extractStructuredInfo(MEMORY_SYSTEM_PROMPT, input);
+    if (getMemoryRecallBarrier(companionId, userId).revision !== expectedRecallRevision) return 0;
     const obj = safeParseObject(raw);
-    // 兼容：LLM 偶尔回退成裸数组 → 当作 { memories: 数组, 无场景 }
-    const list = Array.isArray(obj.memories) ? obj.memories : safeParseArray(raw);
-    // #324 失忆修：场景搭车本 pass 自动更新（信息本就被提取，只是从前流错了地方）
+    // Scene is a separate mutable state. Preserve its existing update/empty/failure behavior.
     applySceneUpdate(companionId, obj.current_scene);
-    if (list.length === 0) return 0;
-
-    // M2 专属梗：inside_joke 分流到 shaping lexicon（你们俩独有的梗，不进普通记忆库）
-    for (const j of list.filter(m => m.memory_type === 'inside_joke' && m.content && String(m.content).length >= 2)) {
-      try { upsertShaping({ companionId, kind: 'lexicon', content: String(j.content).slice(0, 60), rawMsg: userMsg }); } catch (e) { /* 静默 */ }
+    const candidates = Array.isArray(obj.memories) ? obj.memories : [];
+    const saved = [];
+    for (const candidate of candidates) {
+      if (!candidate || !['fact', 'preference', 'event', 'emotion'].includes(candidate.memory_type)) continue;
+      const replacesMemoryIds = candidate.replaces_memory_ids ?? [];
+      if (!Array.isArray(replacesMemoryIds)
+        || replacesMemoryIds.some(id => !Number.isSafeInteger(id) || !shownIds.has(id))) continue;
+      const importance = Math.min(Math.max(Number(candidate.importance) || 5, 1), 10);
+      if (importance < MEMORY_MIN_IMPORTANCE && !replacesMemoryIds.length) continue;
+      const result = saveGroundedMemory({
+        companionId, userId, expectedRecallRevision, allowedTurnIds,
+        memoryType: candidate.memory_type, subject: candidate.subject,
+        content: typeof candidate.content === 'string' ? candidate.content : '',
+        evidence: candidate.evidence, replacesMemoryIds, importance,
+        keywords: Array.isArray(candidate.keywords) ? candidate.keywords.slice(0, 5).map(keyword => String(keyword).slice(0, 12)) : [],
+      });
+      if (['inserted', 'corrected'].includes(result.action) && result.memory) saved.push(result.memory);
     }
-
-    const candidates = list
-      .filter(m => m.content && m.content.length >= 2 && m.memory_type && m.memory_type !== 'inside_joke')
-      .map(m => ({
-        companionId,
-        userId,
-        memoryType: ['fact','preference','event','emotion'].includes(m.memory_type) ? m.memory_type : 'fact',
-        content:    m.content.slice(0, 50),
-        importance: Math.min(Math.max(Number(m.importance) || 5, 1), 10),
-        keywords:   Array.isArray(m.keywords) ? m.keywords.slice(0, 5).map(k => String(k).slice(0, 12)) : [],
-      }))
-      .filter(m => m.importance >= MEMORY_MIN_IMPORTANCE);
-
-    if (candidates.length === 0) {
-      log('debug', `[Memory] 提取到 ${list.length} 条但都低于阈值 importance>=${MEMORY_MIN_IMPORTANCE}`);
-      return 0;
-    }
-
-    // 给每条记忆生成 embedding（并发但限制）
-    await Promise.all(candidates.map(async m => {
-      try {
-        m.embedding = await embedText(m.content);
-      } catch { m.embedding = null; }
-    }));
-
-    saveMemories(candidates);
-    const pinnedCount = candidates.filter(m => m.importance >= 7).length;
-    log('info', `[Memory] +${candidates.length} 记忆 (pinned=${pinnedCount}, with_embedding=${candidates.filter(m=>m.embedding).length}) companion=${companionId}`);
-
-    // 首次记忆保存成就（静默）
+    if (!saved.length) return 0;
+    log('info', `[Memory] +${saved.length} grounded 记忆 companion=${companionId}`);
     tryAchievement(companionId, 'first_memory_saved');
-
-    // 轻量事件图谱：从新增记忆文本提取实体（静默，不阻塞）
-    // 传入 memoryMeta 让守卫函数跳过 emotion 类型，无需额外 DB 查询
-    for (const m of candidates) {
-      try {
-        processMemoryForGraph(companionId, m.content, null, { memoryType: m.memoryType });
-      } catch { /* 非阻塞 */ }
+    for (const memory of saved) {
+      // The existing graph always uses the user as its subject. Keep other subjects in memories only.
+      if (memory.memory_subject !== 'user') continue;
+      try { processMemoryForGraph(companionId, memory.content, memory.id, memory); } catch { /* 非阻塞 */ }
     }
-
-    return candidates.length;
-  } catch (e) {
-    log('warn', `[Memory] 记忆提取失败: ${e.message}`);
-    applySceneUpdate(companionId, null, { extractionFailed: true });   // 抽取失败→回落"日常"，不留可能过期的旧场景
+    return saved.length;
+  } catch (error) {
+    log('warn', `[Memory] 记忆提取失败: ${error.message}`);
+    applySceneUpdate(companionId, null, { extractionFailed: true });
     return 0;
   }
 }
@@ -485,53 +464,27 @@ export function resetScenesForNewDay() {
   }
 }
 
-// ─── 用户画像提取（异步，调用 AI）───────────────────────────────────────────
-const PROFILE_SYSTEM_PROMPT = `你是信息提取助手。从他（对方）的发言中提取他自身的个人信息。
-只提取他明确说出的信息，不要推测。
-以JSON对象返回（只包含能提取到的字段）：
-{
-  "user_name": "他的名字或昵称（如有）",
-  "user_occupation": "职业或学生身份（如有）",
-  "user_birthday": "生日，格式MM-DD或YYYY-MM-DD（如有）",
-  "hobbies_to_add": ["新提到的爱好（如有）"],
-  "important_date": {"label":"事件名","date":"日期"} 或null,
-  "notes": "其他值得记录的重要信息（如有）"
-}
-没有任何个人信息时返回{}。只输出JSON，无其他内容。`;
-
-export async function extractAndUpdateUserProfile(companionId, userId, userMsg) {
-  if (!userMsg || userMsg.length < 5) return;
-
+// ─── 用户画像：只从本轮已验证的用户记忆派生，不另做无证据推断 ───────────────
+export async function extractAndUpdateUserProfile(companionId, userId, _userMsg, options = {}) {
   try {
-    const raw  = await extractStructuredInfo(PROFILE_SYSTEM_PROMPT, `他说："${userMsg}"`);
-    const info = safeParseObject(raw);
-    if (Object.keys(info).length === 0) return;
-
-    const existing   = getUserProfile(userId, companionId);
-    const patchData  = {};
-
-    if (info.user_name)       patchData.user_name = info.user_name;
-    if (info.user_occupation) patchData.user_occupation = info.user_occupation;
-    if (info.user_birthday)   patchData.user_birthday = info.user_birthday;
-    if (info.notes)           patchData.notes = info.notes;
-
-    if (info.hobbies_to_add?.length > 0) {
-      const cur = existing?.user_hobbies || [];
-      patchData.user_hobbies = [...new Set([...cur, ...info.hobbies_to_add])];
-    }
-
-    if (info.important_date?.label && info.important_date?.date) {
-      const cur = existing?.important_dates || [];
-      const dup = cur.some(d => d.label === info.important_date.label);
-      if (!dup) patchData.important_dates = [...cur, info.important_date];
-    }
-
-    if (Object.keys(patchData).length > 0) {
-      upsertUserProfile(userId, companionId, patchData);
-      log('info', `[Memory] 用户画像更新 user=${userId} keys=${Object.keys(patchData).join(',')}`);
-    }
-  } catch (e) {
-    log('warn', `[Memory] 用户画像提取失败: ${e.message}`);
+    const expectedRecallRevision = getMemoryRecallBarrier(companionId, userId).revision;
+    const turns = getMemoryEvidenceTurns(companionId, userId, options.turnIds || []);
+    if (!turns.length) return;
+    const turnIds = new Set(turns.filter(turn => turn.role === 'user').map(turn => turn.id));
+    const sources = getRecallableMemories(companionId, userId).filter(memory => {
+      if (memory.memory_subject !== 'user') return false;
+      try {
+        const evidence = JSON.parse(memory.memory_evidence || '[]');
+        return Array.isArray(evidence) && evidence.length > 0
+          && evidence.every(item => turnIds.has(item.turn_id));
+      } catch { return false; }
+    });
+    if (!sources.length) return;
+    upsertUserProfile(userId, companionId, { notes: sources.map(memory => memory.content).join('\n') }, {
+      sourceMemoryIds: sources.map(memory => memory.id), expectedRecallRevision,
+    });
+  } catch (error) {
+    log('warn', `[Memory] 有证据画像更新失败: ${error.message}`);
   }
 }
 
@@ -539,14 +492,6 @@ export async function extractAndUpdateUserProfile(companionId, userId, userMsg) 
 export { recallMemories } from './db.mjs';
 
 // ─── 工具 ────────────────────────────────────────────────────────────────────
-function safeParseArray(text) {
-  if (!text) return [];
-  const m = text.match(/\[[\s\S]*\]/);
-  if (!m) return [];
-  try { const v = JSON.parse(m[0]); return Array.isArray(v) ? v : []; }
-  catch { return []; }
-}
-
 function safeParseObject(text) {
   if (!text) return {};
   const m = text.match(/\{[\s\S]*\}/);

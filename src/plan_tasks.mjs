@@ -11,7 +11,7 @@
  * 双层存储：
  *   1. companion_memories 表：供 AI 实时召回（速度快）
  *   2. <DATA_DIR>/user_memories/<companion_id>/{daily|weekly|monthly}/<date>.md
- *      供运维/审阅/备份；同时 buildLongTermDigest() 也会从这里读取
+ *      供运维/审阅/备份；buildLongTermDigest() 读取数据库中的可召回摘要
   *
  * Copyright (c) 2026 溪语 AI Contributors. MIT License.
  */
@@ -21,7 +21,7 @@ import path from 'node:path';
 import {
   cleanupPlanMemories, getAllActiveCompanions, getConversationTurnsBetween,
   saveMemory, summaryMemoryExists, getDb, shanghaiDateKey, shanghaiBoundsForDateKey,
-  getRecentSummaries,
+  getRecentSummaries, getRecallableMemories, getMemoryRecallBarrier,
   saveDailySchedule, getDailySchedule,
   listEpisodicMemoriesOlderThan, deleteMemoriesByIds,   // v1.9.8 老记忆压缩
   cleanupProcessedMessages,                              // Issue #1 去重表清理
@@ -559,17 +559,22 @@ async function runDaily(todayKey) {
     try {
       if (summaryMemoryExists(companion.id, companion.user_id, 'daily_summary', `${targetKey} 日记忆：`)) continue;
 
+      const { revision } = getMemoryRecallBarrier(companion.id, companion.user_id);
       const turns = getConversationTurnsBetween(companion.id, startSql, endSql, 800);
       if (turns.length === 0) continue;
 
       const summary = await summarizeDaily(targetKey, turns);
-      saveMemory({
+      const memoryId = saveMemory({
         companionId: companion.id,
         userId: companion.user_id,
         memoryType: 'daily_summary',
+        memorySource: 'summary',
+        sourceMemoryIds: [],
+        expectedRecallRevision: revision,
         content: `${targetKey} 日记忆：${summary}`,
         importance: 8,
       });
+      if (!memoryId) continue; // Rejected/stale output must not be published to backup files.
       await writeMemoryFile(companion.id, 'daily', targetKey, summary, {
         companionName: companion.name,
         wechatUserId: companion.wechat_user_id,
@@ -612,17 +617,22 @@ async function runWeekly(todayKey) {
       const prefix = `${startKey}~${endKey} 周记忆：`;
       if (summaryMemoryExists(companion.id, companion.user_id, 'weekly_summary', prefix)) continue;
 
+      const { revision } = getMemoryRecallBarrier(companion.id, companion.user_id);
       const daily = getSummaryMemoriesInRange(companion.id, companion.user_id, 'daily_summary', startKey, endKey, 7);
       if (daily.length === 0) continue;
 
       const summary = await summarizeMemoryList('周记忆', `${startKey} 到 ${endKey}`, daily);
-      saveMemory({
+      const memoryId = saveMemory({
         companionId: companion.id,
         userId: companion.user_id,
         memoryType: 'weekly_summary',
+        memorySource: 'summary',
+        sourceMemoryIds: daily.map(row => row.id),
+        expectedRecallRevision: revision,
         content: `${prefix}${summary}`,
         importance: 9,
       });
+      if (!memoryId) continue; // Rejected/stale output must not be published to backup files.
       const weekLabel = isoWeekLabel(endKey);
       await writeMemoryFile(companion.id, 'weekly', weekLabel, summary, {
         companionName: companion.name,
@@ -646,17 +656,22 @@ async function runMonthly(todayKey) {
       const prefix = `${month} 月记忆：`;
       if (summaryMemoryExists(companion.id, companion.user_id, 'monthly_summary', prefix)) continue;
 
+      const { revision } = getMemoryRecallBarrier(companion.id, companion.user_id);
       const weekly = getSummaryMemoriesInRange(companion.id, companion.user_id, 'weekly_summary', `${month}-01`, `${month}-31`, 6);
       if (weekly.length === 0) continue;
 
       const summary = await summarizeMemoryList('月记忆', month, weekly);
-      saveMemory({
+      const memoryId = saveMemory({
         companionId: companion.id,
         userId: companion.user_id,
         memoryType: 'monthly_summary',
+        memorySource: 'summary',
+        sourceMemoryIds: weekly.map(row => row.id),
+        expectedRecallRevision: revision,
         content: `${prefix}${summary}`,
         importance: 10,
       });
+      if (!memoryId) continue; // Rejected/stale output must not be published to backup files.
       await writeMemoryFile(companion.id, 'monthly', month, summary, {
         companionName: companion.name,
         month,
@@ -713,14 +728,17 @@ async function compactOldEpisodicMemories(companion) {
     if (summaryMemoryExists(companion.id, companion.user_id, 'monthly_summary', prefix)) continue;
 
     try {
+      const { revision } = getMemoryRecallBarrier(companion.id, companion.user_id);
       const summary = await summarizeMemoryList('老记忆压缩', groupMonth, groupRows);
-      saveMemory({
+      const memoryId = saveMemory({
         companionId: companion.id,
         userId: companion.user_id,
         memoryType: 'monthly_summary',
         content: `${prefix}${summary}`,
+        expectedRecallRevision: revision,
         importance: 15,  // 高于普通月总结（这是压缩后的精华，回忆时优先召回）
       });
+      if (!memoryId) continue;
       // 摘要落地成功才删原条目（防摘要失败导致数据丢失）
       const ids = groupRows.map(r => r.id);
       const deleted = deleteMemoriesByIds(ids);
@@ -832,17 +850,12 @@ export async function buildLongTermDigest(companionId, userId, { excludeUsedIds 
 // companion 一视同仁触发，不再按账号付费层级过滤。
 
 function getSummaryMemoriesInRange(companionId, userId, memoryType, startKey, endKey, limit) {
-  const db = getDb();
-  return db.prepare(`
-    SELECT * FROM companion_memories
-    WHERE companion_id = ?
-      AND user_id = ?
-      AND memory_type = ?
-      AND substr(content, 1, 10) >= ?
-      AND substr(content, 1, 10) <= ?
-    ORDER BY content ASC
-    LIMIT ?
-  `).all(companionId, userId, memoryType, startKey, endKey, limit);
+  return getRecallableMemories(companionId, userId)
+    .filter(row => row.memory_type === memoryType
+      && String(row.content || '').slice(0, 10) >= startKey
+      && String(row.content || '').slice(0, 10) <= endKey)
+    .sort((a, b) => String(a.content).localeCompare(String(b.content)))
+    .slice(0, limit);
 }
 
 function shanghaiParts(date) {

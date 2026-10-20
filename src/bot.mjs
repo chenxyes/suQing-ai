@@ -21,7 +21,7 @@ import {
   isIntentCooled, isAck, buildIntentDedupHint, pickMicroAck,
 } from './intent_dedup.mjs';
 import {
-  saveMessage, getRecentHistory, findRecentInboundCandidate, getUserProfile, recallMemories, recallMemoriesSemantic,
+  saveMessage, getRecentHistory, findRecentInboundCandidate, getUserProfileForRecall, recallMemories, recallMemoriesSemantic,
   getConversationContext, saveConversationTurn,
   getActiveWechatBinding, getCompanionById, consumePendingBindSessionForWechat,
   isAccountBanned, getDailySchedule, shanghaiDateKey, getRecentSchedules, getPersonaFacts,
@@ -782,7 +782,7 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
         memories = recallMemories(companion.id, companion.user_id, userText, 7);
       }
     }
-    const userProfile = getUserProfile(companion.user_id, companion.id);
+    const userProfile = getUserProfileForRecall(companion.user_id, companion.id);
     // v1.2.10: 10 → 16 轮，对话连续感明显更好；companion.mjs 系统提示里的
     // slice 已同步上调到 -16，多取的 6 轮全部进 prompt。
     const recentTurns = getConversationContext(companion.id, 16);
@@ -1141,8 +1141,8 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
       }
     }
 
-    saveConversationTurn(companion.id, 'user', userText, companion.chat_mode_active);
-    saveConversationTurn(companion.id, 'assistant', reply, companion.chat_mode_active);
+    const memoryUserTurn = saveConversationTurn(companion.id, 'user', userText, companion.chat_mode_active);
+    const memoryAssistantTurn = saveConversationTurn(companion.id, 'assistant', reply, companion.chat_mode_active);
 
     log('info', `[Bot] 已回复 → ${msg.fromUser}`);
 
@@ -1168,7 +1168,7 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
     }
 
     // ── 异步后处理（不阻塞主流程）───────────────────────────────────────────
-    postProcess(companion, userText, reply).catch(err =>
+    postProcess(companion, userText, reply, { turnIds: [memoryUserTurn?.id,memoryAssistantTurn?.id].filter(Boolean) }).catch(err =>
       log('error', `[Bot] postProcess 异常: ${err.message}`)
     );
 
@@ -1301,9 +1301,9 @@ async function sendStickerAndRecord(ctx, toUser, picked, contextToken) {
  * 回复发送后异步执行：
  * 1. 同步更新好感度 + 心情（规则，极快）
  * 2. 异步记忆提取（调用 AI）
- * 3. 异步用户画像更新（调用 AI）
+ * 3. 从已验证用户记忆更新画像备注
  */
-async function postProcess(companion, userMsg, botReply) {
+async function postProcess(companion, userMsg, botReply, memoryOptions = {}) {
   // v1.10.32: 检测 AI 是否在日常对话里"突然表白" — proactive confession kind 之外的
   // 自然路径。命中即 markCompanionConfessed，让后续 syncUpdateCompanionState 的
   // hasConfession gate（v1.10.24）能放行升"恋人"。
@@ -1337,8 +1337,8 @@ async function postProcess(companion, userMsg, botReply) {
 
   // 异步：记忆提取
   if (companion.memory_enabled) {
-    await extractAndSaveMemories(companion.id, companion.user_id, userMsg, botReply);
-    await extractAndUpdateUserProfile(companion.id, companion.user_id, userMsg);
+    await extractAndSaveMemories(companion.id, companion.user_id, userMsg, botReply, memoryOptions);
+    await extractAndUpdateUserProfile(companion.id, companion.user_id, userMsg, memoryOptions);
   }
 
   // v1.8.0 #4: open loops — 抽取"未完成的事" + auto-resolve

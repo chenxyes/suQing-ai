@@ -54,3 +54,21 @@ assert.equal(messages.at(-1)[2], 'ok', 'successful search save must remain succe
 assert.equal(fields['s2-search-key'].value, '', 'saved search key must be cleared');
 assert.equal(refreshed, 1, 'successful save must refresh metadata');
 console.log('setup UI: search save behavior passed');
+
+const testOptional = /async function testOptional\(cap\) \{[\s\S]*?\n\}/.exec(html)?.[0];
+const embeddingFields = { 's2-embedding-provider': { value: '' }, 's2-embedding-test': { disabled: false } };
+let testedProvider = '';
+let embeddingRefreshed = 0;
+await vm.runInNewContext(`${testOptional}; testOptional('embedding');`, {
+  document: { getElementById: id => embeddingFields[id] },
+  S: { embeddingProvider: 'gemini' }, setMsg() {}, authHeaders: () => ({}),
+  fetch: async (_url, options) => {
+    testedProvider = JSON.parse(options.body).provider;
+    return { json: async () => ({ ok: true, data: { ok: true, latency_ms: 2 } }) };
+  },
+  refreshOptional: async () => { embeddingRefreshed++; },
+});
+assert.equal(testedProvider, 'gemini', 'environment embedding provider must be testable');
+assert.equal(embeddingRefreshed, 1, 'probe refreshes current health');
+assert.equal(embeddingFields['s2-embedding-test'].disabled, false);
+console.log('setup UI: native embedding probe and health refresh passed');

@@ -42,6 +42,23 @@ jobs:
         run: |
           node scripts/custom_provider_check.mjs
           node scripts/provider_review_check.mjs
+          node scripts/embedding_config_check.mjs
+
+      - name: 记忆写入与召回限制回归
+        run: |
+          node scripts/memory_admission_check.mjs
+          node scripts/memory_api_check.mjs
+          node --experimental-vm-modules scripts/memory_consumers_check.mjs
+          node scripts/memory_rebind_check.mjs
+
+      - name: 记忆主体与证据回归
+        run: |
+          node scripts/memory_provenance_check.mjs
+          node scripts/memory_provenance_review_check.mjs
+          node --experimental-vm-modules scripts/memory_extraction_ownership_check.mjs
+          node scripts/memory_reflection_ownership_check.mjs
+          node scripts/memory_subject_prompt_check.mjs
+          node scripts/memory_provenance_audit_check.mjs
 
       - name: Fish Audio 原生 TTS 回归
         run: node scripts/fish_tts_check.mjs

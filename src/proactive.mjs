@@ -3,7 +3,7 @@
  * Copyright (c) 2026 溪语 AI Contributors. MIT License.
  */
 import {
-  getActiveBotAccounts, getRecentHistory, getUserProfile, recallMemories,
+  getActiveBotAccounts, getRecentHistory, getUserProfileForRecall, recallMemories,
   getConversationContext, getDueReminders, markRemindersTriggered, ensureRelationshipReminders,
   saveMessage, saveConversationTurn,
   getCompanionById, getBotContextForCompanion, getDb,
@@ -690,7 +690,7 @@ async function sendProactiveMessage(companion, kind, account, opts = {}) {
     );
   }
 
-  const userProfile = getUserProfile(companion.user_id, companion.id);
+  const userProfile = getUserProfileForRecall(companion.user_id, companion.id);
   const timeContext = buildTimeContext(userProfile, getDueReminders(companion.id, formatDateKey()));
   const recentTurns = getConversationContext(companion.id, 10);
   // v1.21.3 素材冷却：N 天内主动消息引用过的记忆不再进候选（看不到就说不出）。
@@ -1245,7 +1245,7 @@ async function sendScenePhoto(companion, ctx) {
       const pick = selectThoughtMaterial({
         likes: listPreferences(companion.id, { type: 'like' }),
         lexicon: listShaping(companion.id, { kind: 'lexicon' }),
-        memories: getMemories(companion.id, companion.wechat_user_id, 20).filter(m => (m.importance ?? 0) >= 7),
+        memories: getMemories(companion.id, companion.user_id, 20).filter(m => (m.importance ?? 0) >= 7),
         tabooTerms: [
           ...listPreferences(companion.id, { type: 'taboo' }).map(p => p.target),
           ...listShaping(companion.id, { kind: 'taboo' }).map(s => s.content),

@@ -7,7 +7,8 @@
  */
 
 import { log } from './logger.mjs';
-import { patchMemory, touchMemory, getDb } from './db.mjs';
+import { getRecallableMemories, getMemoryRecallBarrier } from './db.mjs';
+import { isMemoryRecallable } from './memory_admission.mjs';
 import { embedText } from './ai.mjs';
 
 // ─── Allowed enumerations ──────────────────────────────────────────────────────
@@ -90,11 +91,7 @@ export function rankMemoriesForRecall(memories, context = '') {
   const ctx = (context || '').toLowerCase();
 
   return memories
-    .filter(m => {
-      if (m.memory_status && m.memory_status !== 'active') return false;
-      if (m.do_not_mention) return false;
-      return true;
-    })
+    .filter(isMemoryRecallable)
     .map(m => {
       const decay   = computeMemoryDecay(m);
       const weight  = normalizeMemoryWeight(m.memory_weight ?? 3) / 5;
@@ -119,19 +116,31 @@ export function rankMemoriesForRecall(memories, context = '') {
 
 /**
  * Simple deduplication: returns a subset where content is not "too similar".
- * For same companion_id + same memory_layer, strings sharing > 70% of tokens
- * count as duplicate. Keeps the higher-weight one.
+ * Only identical content with the same explicit subject and scope can collapse.
+ * Unknown legacy ownership is never inferred from textual similarity.
  */
 export function dedupeMemories(memories) {
   const keep = [];
-  for (const m of memories) {
+  for (const m of memories.filter(isMemoryRecallable)) {
     const isDup = keep.some(k => {
+      if (k.companion_id !== m.companion_id || k.user_id !== m.user_id) return false;
       if (k.memory_layer !== m.memory_layer) return false;
-      return tokenSimilarity(k.content || '', m.content || '') > 0.7;
+      if (!sameKnownSubject(k, m)) return false;
+      return Boolean(k.content) && k.content === m.content;
     });
     if (!isDup) keep.push(m);
   }
   return keep;
+}
+
+function knownSubject(memory) {
+  const subject = memory.memory_subject ?? memory.subject;
+  return ['user', 'companion', 'shared'].includes(subject) ? subject : null;
+}
+
+function sameKnownSubject(a, b) {
+  const subject = knownSubject(a);
+  return subject !== null && subject === knownSubject(b);
 }
 
 function tokenSimilarity(a, b) {
@@ -239,26 +248,22 @@ function parseEmbeddingBlob(buf) {
 export async function findSimilarMemoryByEmbedding(companionId, content, options = {}) {
   const layer = options.layer;
   const threshold = options.threshold ?? EMBEDDING_SIM_THRESHOLD;
-  const db = options.db ?? getDb();
+  const subject = knownSubject(options);
 
-  if (!content || !companionId) return null;
+  if (!content || !companionId || !subject) return null;
+  const revision = options.expectedRecallRevision ?? getMemoryRecallBarrier(companionId, options.userId).revision;
 
   let queryEmb = null;
   try {
     queryEmb = await embedText(content);
   } catch { /* embedding unavailable → use token fallback */ }
+  if (getMemoryRecallBarrier(companionId, options.userId).revision !== revision) return null;
 
-  const whereLayer = layer ? `AND memory_layer = ?` : '';
-  const params = [companionId, ...(layer ? [layer] : [])];
-  const candidates = db.prepare(`
-    SELECT id, companion_id, memory_layer, memory_weight, content, embedding, memory_status
-    FROM companion_memories
-    WHERE companion_id = ?
-      AND memory_status = 'active'
-      ${whereLayer}
-    ORDER BY created_at DESC
-    LIMIT 500
-  `).all(...params);
+  const candidates = getRecallableMemories(companionId, options.userId)
+    .filter(row => knownSubject(row) === subject)
+    .filter(row => !layer || row.memory_layer === layer)
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+    .slice(0, 500);
 
   if (candidates.length === 0) return null;
 
@@ -281,58 +286,28 @@ export async function findSimilarMemoryByEmbedding(companionId, content, options
 }
 
 /**
- * Add a new memory or merge into an existing similar one.
- * If a similar memory is found: bump its weight and update content note.
- * If not: insert the new memory row.
+ * Compatibility helper: prepare a candidate without modifying an existing fact.
+ * Grounded DB admission owns canonical exact dedup and evidence validation.
  */
 export async function addOrMergeMemory(companionId, memoryInput, options = {}) {
-  const db = options.db ?? getDb();
+  const expectedRecallRevision = options.expectedRecallRevision
+    ?? getMemoryRecallBarrier(companionId, options.userId).revision;
   const layer = normalizeMemoryLayer(memoryInput.memory_layer || memoryInput.memoryType || 'event');
   const content = memoryInput.content;
 
   if (!content) return { action: 'skip', reason: 'empty_content' };
 
-  const similar = await findSimilarMemoryByEmbedding(companionId, content, { layer, db });
-
-  if (similar) {
-    const newWeight = Math.min(5, (similar.memory_weight ?? 3) + 1);
-    try {
-      patchMemory(similar.id, companionId, { memory_weight: newWeight });
-      touchMemory(similar.id, companionId);
-      log('info', `[MemoryDedup] companion=${companionId} merged into id=${similar.id} layer=${layer}`);
-    } catch (e) {
-      log('warn', `[MemoryDedup] merge 失败 id=${similar.id}: ${e.message}`);
-    }
-    return { action: 'merged', existingId: similar.id };
+  if (getMemoryRecallBarrier(companionId, options.userId).revision !== expectedRecallRevision) {
+    return { action: 'skip', reason: 'recall_revision_changed' };
   }
 
   return { action: 'insert', memory: { ...memoryInput, memory_layer: layer } };
 }
 
 /**
- * Given a list of newly extracted memories and existing memories for a companion,
- * filter out near-duplicates. If duplicate found, bumps weight of existing instead.
+ * Preserve candidates for grounded admission. Pre-validation fuzzy filtering can
+ * swallow a different subject's fact or strengthen unsupported legacy content.
  */
-export function filterNewMemoriesAgainstExisting(newMemories, existingMemories, db, companionId) {
-  const toInsert = [];
-  for (const nm of newMemories) {
-    const dup = existingMemories.find(em => {
-      if (em.memory_status === 'deleted') return false;
-      if (em.memory_layer !== normalizeMemoryLayer(nm.memoryType || nm.memory_layer || 'event')) return false;
-      return tokenSimilarity(em.content || '', nm.content || '') > 0.65;
-    });
-    if (dup) {
-      // Bump weight and use_count of existing rather than inserting
-      try {
-        const newWeight = Math.min(5, (dup.memory_weight ?? 3) + 1);
-        patchMemory(dup.id, companionId, { memory_weight: newWeight });
-        touchMemory(dup.id, companionId);
-      } catch (e) {
-        log('warn', `[MemoryV2] 更新重复记忆权重失败: ${e.message}`);
-      }
-    } else {
-      toInsert.push(nm);
-    }
-  }
-  return toInsert;
+export function filterNewMemoriesAgainstExisting(newMemories) {
+  return [...newMemories];
 }
