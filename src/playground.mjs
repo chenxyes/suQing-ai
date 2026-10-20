@@ -14,10 +14,10 @@
  */
 
 import { log } from './logger.mjs';
-import { generateReply, embedText } from './ai.mjs';
+import { generateReply, embedTextWithDescriptor } from './ai.mjs';
 import { isChatFallback } from './chat_response.mjs';
 import {
-  recallMemoriesSemantic, recallMemories, getUserProfile, getConversationContext,
+  recallMemoriesHybrid, touchRecalledMemories, getUserProfileForRecall, getConversationContext,
   getDailySchedule, getRecentSchedules, getPersonaFacts, shanghaiDateKey,
   saveConversationTurn, getCompanionById, patchCompanion,
   getCompanionPreferencesForPrompt,
@@ -105,23 +105,13 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
   // ── 召回长期记忆 ───────────────────────────────────────────────────────────
   let memories = [];
   if (companion.memory_enabled) {
-    try {
-      const qEmb = await embedText(text);
-      if (qEmb) {
-        memories = recallMemoriesSemantic(companion.id, companion.user_id, qEmb, 7);
-        if (memories.length === 0) {
-          memories = recallMemories(companion.id, companion.user_id, text, 7);
-        }
-      } else {
-        memories = recallMemories(companion.id, companion.user_id, text, 7);
-      }
-    } catch (e) {
-      log('warn', `[Playground] semantic recall 失败: ${e.message}`);
-      memories = recallMemories(companion.id, companion.user_id, text, 7);
-    }
+    let queryEmbedding = null;
+    try { queryEmbedding = await embedTextWithDescriptor(text); }
+    catch (e) { log('warn', '[Memory] query embedding unavailable'); }
+    memories = recallMemoriesHybrid(companion.id, companion.user_id, text, { queryEmbedding, limit: 7 });
   }
 
-  const userProfile = getUserProfile(companion.user_id, companion.id);
+  const userProfile = getUserProfileForRecall(companion.user_id, companion.id);
   const recentTurns = getConversationContext(companion.id, 10);
   const todayKey = shanghaiDateKey();
   const dailyRaw = getDailySchedule(companion.id, todayKey);
@@ -204,6 +194,7 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
 
   let reply;
   try {
+    if (!probe) touchRecalledMemories(companion.id, companion.user_id, memories.map(row => row.id));
     reply = await generateReply(systemPrompt, history, text, {
       temperature: companion.temperature,
       max_tokens: companion.max_tokens,
@@ -245,9 +236,11 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
 
   // 写入对话历史，让长期记忆系统能继续工作（探针模式零持久化，整段跳过）
   if (!probe) {
+    const memoryTurnIds = [];
     try {
-      saveConversationTurn(companion.id, 'user', text, companion.chat_mode_active);
-      saveConversationTurn(companion.id, 'assistant', reply, companion.chat_mode_active);
+      const userTurn = saveConversationTurn(companion.id, 'user', text, companion.chat_mode_active);
+      const assistantTurn = saveConversationTurn(companion.id, 'assistant', reply, companion.chat_mode_active);
+      memoryTurnIds.push(...[userTurn?.id,assistantTurn?.id].filter(Boolean));
     } catch (e) {
       log('warn', `[Playground] saveConversationTurn 失败: ${e.message}`);
     }
@@ -261,8 +254,8 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
       try {
         syncUpdateCompanionState(companion, text, reply);
         if (companion.memory_enabled) {
-          await extractAndSaveMemories(companion.id, companion.user_id, text, reply);
-          await extractAndUpdateUserProfile(companion.id, companion.user_id, text);
+          await extractAndSaveMemories(companion.id, companion.user_id, text, reply, { turnIds: memoryTurnIds });
+          await extractAndUpdateUserProfile(companion.id, companion.user_id, text, { turnIds: memoryTurnIds });
           extractOpenLoops(companion.id, text, reply).catch(err =>
             log('warn', `[Playground] extract loop: ${err.message}`)
           );

@@ -8,9 +8,12 @@
  */
 
 import { getDb } from './db.mjs';
+import { readMemoryTransfer, validateMemoryTransfer, importMemoryTransfer } from './persona_memory_transfer.mjs';
+import { filterForStorage } from './privacy_filter.mjs';
 
-const EXPORT_SCHEMA = 'xiyu_companion_export_v1';
-const MAX_IMPORT_BYTES = 512 * 1024; // 512 KB
+const EXPORT_SCHEMA = 'xiyu_companion_export_v2';
+const LEGACY_SCHEMA = 'xiyu_companion_export_v1';
+const MAX_IMPORT_BYTES = 32 * 1024 * 1024;
 
 const PERSONA_FIELDS = [
   'name', 'age', 'role_title',
@@ -77,13 +80,20 @@ const SENSITIVE_PATTERN = /api[_-]?key|secret|token|password|bearer\s+[a-z0-9]/i
  * @param {{ includeMemories?: boolean }} options
  */
 export function buildCompanionExport(companionId, options = {}) {
-  const db = getDb();
-  const c = db.prepare(`SELECT ${PERSONA_FIELDS.join(', ')} FROM companions WHERE id = ?`).get(companionId);
+  return buildCompanionExportFromDb(getDb(), companionId, options);
+}
+
+/** Offline export accepts a read-only connection and never runs runtime migrations. */
+export function buildCompanionExportFromDb(db, companionId, options = {}) {
+  return db.transaction(() => {
+  const available = new Set(db.prepare('PRAGMA table_info(companions)').all().map(column => column.name));
+  const columns = PERSONA_FIELDS.map(field => available.has(field) ? field : `NULL AS ${field}`);
+  const c = db.prepare(`SELECT ${columns.join(', ')} FROM companions WHERE id = ?`).get(companionId);
   if (!c) throw Object.assign(new Error('Companion not found'), { status: 404 });
 
-  const facts = db.prepare(
-    `SELECT category, content, sort_order FROM companion_persona_facts WHERE companion_id = ? ORDER BY sort_order`
-  ).all(companionId);
+  const facts = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='companion_persona_facts'").get() ? db.prepare(
+    `SELECT category, content, sort_order FROM companion_persona_facts WHERE companion_id = ? ORDER BY sort_order, id`
+  ).all(companionId) : [];
 
   const payload = {
     schema: EXPORT_SCHEMA,
@@ -94,27 +104,21 @@ export function buildCompanionExport(companionId, options = {}) {
     settings: {},
   };
 
-  if (options.includeMemories) {
-    const memories = db.prepare(
-      `SELECT memory_layer, content, importance, memory_weight, memory_status, pinned, created_at
-       FROM companion_memories
-       WHERE companion_id = ? AND memory_status = 'active'
-       ORDER BY importance DESC, created_at DESC
-       LIMIT 200`
-    ).all(companionId);
-    payload.core_memories = memories;
-  }
-
+  if (options.includeMemories) Object.assign(payload, readMemoryTransfer(db, companionId));
   return payload;
+  })();
 }
 
 /**
  * Validate a raw parsed import payload.
  * Returns { valid: true } or { valid: false, error: string }.
  */
-export function validateCompanionImport(payload) {
+export function validateCompanionImport(payload, { maxBytes = MAX_IMPORT_BYTES } = {}) {
   if (!payload || typeof payload !== 'object') return { valid: false, error: 'payload must be an object' };
-  if (payload.schema !== EXPORT_SCHEMA) return { valid: false, error: `unsupported schema: ${payload.schema}` };
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 256 * 1024 * 1024) return { valid: false, error: 'invalid import size limit' };
+  try { if (Buffer.byteLength(JSON.stringify(payload)) > maxBytes) return { valid: false, error: `payload exceeds ${maxBytes / 1024 / 1024} MiB` }; }
+  catch { return { valid: false, error: 'payload must be serializable JSON' }; }
+  if (![EXPORT_SCHEMA, LEGACY_SCHEMA].includes(payload.schema)) return { valid: false, error: 'unsupported schema' };
   if (!payload.companion || typeof payload.companion !== 'object') return { valid: false, error: 'missing companion object' };
   if (typeof payload.companion.name !== 'string' || !payload.companion.name.trim()) {
     return { valid: false, error: 'companion.name is required' };
@@ -124,6 +128,26 @@ export function validateCompanionImport(payload) {
   }
   if (payload.core_memories !== undefined && !Array.isArray(payload.core_memories)) {
     return { valid: false, error: 'core_memories must be an array' };
+  }
+  const invalidText = text => { const result = filterForStorage(text); return !result.store || result.text !== text; };
+  for (const row of payload.core_memories || []) {
+    if (!row || typeof row.content !== 'string' || !row.content.trim() || invalidText(row.content)) return { valid: false, error: 'invalid or private memory content' };
+    if (row.memory_evidence != null && typeof row.memory_evidence === 'string' && invalidText(row.memory_evidence)) return { valid: false, error: 'private evidence content' };
+    for (const key of ['keywords', 'origin_metadata', 'embedding_meta']) {
+      if (typeof row[key] === 'string' && invalidText(row[key])) return { valid: false, error: 'private memory metadata' };
+    }
+  }
+  if (payload.evidence_turns !== undefined && !Array.isArray(payload.evidence_turns)) return { valid: false, error: 'evidence_turns must be an array' };
+  for (const turn of payload.evidence_turns || []) {
+    if (typeof turn?.content === 'string' && invalidText(turn.content)) return { valid: false, error: 'private conversation content' };
+    if (typeof turn?.topic === 'string' && invalidText(turn.topic)) return { valid: false, error: 'private conversation topic' };
+  }
+  for (const fact of payload.persona_facts || []) {
+    if (!fact || typeof fact.content !== 'string' || invalidText(fact.content)) return { valid: false, error: 'invalid or private persona fact' };
+  }
+  if (payload.schema === EXPORT_SCHEMA) {
+    const error = validateMemoryTransfer(payload);
+    if (error) return { valid: false, error };
   }
   return { valid: true };
 }
@@ -163,23 +187,13 @@ export function sanitizeImportedCompanion(payload) {
   }
 
   const personaFacts = (Array.isArray(payload.persona_facts) ? payload.persona_facts : [])
-    .slice(0, 500)
     .map(f => ({
-      category: String(f.category ?? 'general').slice(0, 100),
-      content: String(f.content ?? '').slice(0, 1000),
+      category: String(f.category ?? 'general'),
+      content: String(f.content ?? ''),
       sort_order: parseInt(f.sort_order, 10) || 0,
-    }))
-    .filter(f => f.content && !SENSITIVE_PATTERN.test(f.content));
+    }));
 
-  const coreMemories = (Array.isArray(payload.core_memories) ? payload.core_memories : [])
-    .slice(0, 200)
-    .map(m => ({
-      memory_layer: String(m.memory_layer ?? 'core').slice(0, 50),
-      content: String(m.content ?? '').slice(0, 2000),
-      importance: Math.min(10, Math.max(1, parseInt(m.importance, 10) || 5)),
-      memory_weight: Math.min(5, Math.max(1, parseInt(m.memory_weight, 10) || 3)),
-    }))
-    .filter(m => m.content && !SENSITIVE_PATTERN.test(m.content));
+  const coreMemories = (Array.isArray(payload.core_memories) ? payload.core_memories : []).map(row => ({ ...row }));
 
   return { companionFields, personaFacts, coreMemories };
 }
@@ -194,6 +208,8 @@ export function sanitizeImportedCompanion(payload) {
  * @param {{ importMemories?: boolean }} options
  */
 export async function importCompanionForUser(userId, accountId, botId, payload, options = {}) {
+  const validation = validateCompanionImport(payload, { maxBytes: options.maxImportBytes ?? MAX_IMPORT_BYTES });
+  if (!validation.valid) throw Object.assign(new Error(validation.error), { status: 400 });
   const db = getDb();
   const { companionFields, personaFacts, coreMemories } = sanitizeImportedCompanion(payload);
 
@@ -232,6 +248,7 @@ export async function importCompanionForUser(userId, accountId, botId, payload, 
   };
 
   const row = { ...defaults, ...companionFields, user_id: userId, bot_id: botId, created_at: now, updated_at: now };
+  return db.transaction(() => {
   const result = insertCompanion.run(row);
   const companionId = result.lastInsertRowid;
 
@@ -244,18 +261,11 @@ export async function importCompanionForUser(userId, accountId, botId, payload, 
     }
   }
 
-  if (options.importMemories && coreMemories.length) {
-    const insertMem = db.prepare(`
-      INSERT INTO companion_memories
-        (companion_id, user_id, memory_type, memory_layer, content, importance, memory_weight, memory_status, created_at)
-      VALUES (?, ?, 'fact', ?, ?, ?, ?, 'active', ?)
-    `);
-    for (const m of coreMemories) {
-      insertMem.run(companionId, userId, m.memory_layer, m.content, m.importance, m.memory_weight, now);
-    }
-  }
-
-  return { companionId };
+  const memoryResult = options.importMemories
+    ? importMemoryTransfer(db, companionId, userId, { ...payload, core_memories: coreMemories }, { trustReviewedHistory: options.trustReviewedHistory === true })
+    : { importedMemories: 0, importedEvidenceTurns: 0, quarantinedMemories: 0, warnings: [] };
+  return { companionId, ...memoryResult };
+  })();
 }
 
 export {

@@ -19,15 +19,16 @@ assert.equal((await inner({ companion: { id: 1 }, userText: 'fixture' })).though
 
 const planSource = readFileSync(new URL('../src/plan_tasks.mjs', import.meta.url), 'utf8');
 const summaryFunctions = planSource.slice(planSource.indexOf('async function compactOldEpisodicMemories('), planSource.indexOf('// ─── 文件存储'));
-const originals = Array.from({ length: 5 }, (_, id) => ({ id, content: `真实记忆 ${id}`, created_at: '2025-01-01' }));
+const originals = Array.from({ length: 5 }, (_, index) => ({ id: index + 1, content: `合成记忆 ${index}`, created_at: '2025-01-01' }));
 const writes = [], deletes = [];
 reply = CHAT_FALLBACK;
 const { summarize, compactOldEpisodicMemories } = vm.runInNewContext(`${summaryFunctions}\n({ summarize, compactOldEpisodicMemories })`, {
   process, Date, Map, Math, isChatFallback,
   generateReply: async () => reply,
-  listEpisodicMemoriesOlderThan: () => originals,
-  summaryMemoryExists: () => false,
-  saveMemory: value => writes.push(value),
+  getDb: () => ({ prepare: () => ({ get: () => ({ id: 5 }) }) }),
+  getMemoryRecallBarrier: () => ({ revision: 0 }),
+  listEpisodicMemoriesOlderThan: ({ afterId, upperId }) => originals.filter(row => row.id > afterId && row.id <= upperId),
+  compactMemories: value => { writes.push(value); return { id: 6 }; },
   deleteMemoriesByIds: ids => { deletes.push(...ids); return ids.length; },
   log() {},
 });
@@ -39,5 +40,6 @@ reply = '有效总结';
 await compactOldEpisodicMemories({ id: 1, user_id: 1 });
 assert.equal(writes.length, 1, 'successful summary still persists');
 assert.ok(writes[0].content.endsWith(reply));
-assert.deepEqual(deletes, originals.map(row => row.id), 'successful compaction still follows existing behavior');
-console.log('auxiliary chat failures: no fallback thought or summary, originals preserved; valid results unchanged');
+assert.deepEqual(Array.from(writes[0].sourceIds), originals.map(row => row.id), 'successful compaction registers actual sources');
+assert.equal(deletes.length, 0, 'successful compaction also preserves source evidence');
+console.log('auxiliary chat failures: no fallback thought or summary; valid compaction registers sources without deletion');

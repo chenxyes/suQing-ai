@@ -41,6 +41,8 @@ const SRC_LINE_EXEMPT = [
   '用户需求、技术架构、产品定位',                   // AI 味反例话术（教她别说的）
   "'弱答应 + 用户在要看'",                          // photo_intent 内部 reason（进日志）
 ];
+// 精确到文件和整行：仅兼容旧记录中的第三人称标签，不放行新增提示词/模板。
+const PROVENANCE_COMPAT_LINE = "const topic=s=>normalizedMemoryClaim(s).replace(/用户|本人|我们|咱们|一个|一位|不是|没有|不再|已经|更正|纠正|记错|说错|喜欢|有|是|我|他|她|你|的|了|并/g,'');";
 // 系统层 API 响应（auth/admin 错误消息）：账号语境不是她的台词，不算穿帮路径
 const SRC_SYSTEM_CALLS = /authErr\(|err\(res,|ok\(res,|res\.status\(|new Error\(|note:/;
 
@@ -69,6 +71,7 @@ function scanSrcFile(file, src) {
     if (idx === -1) return;
     if (isCommentOrLogLine(l, idx)) return;
     if (SRC_LINE_EXEMPT.some(e => line.includes(e))) return;
+    if (file === 'src/memory_provenance.mjs' && line.trim() === PROVENANCE_COMPAT_LINE) return;
     if (SRC_SYSTEM_CALLS.test(l) && l.search(SRC_SYSTEM_CALLS) < idx) return;
     leaks.push(`${file}:${i + 1}: ${line.trim().slice(0, 80)}`);
   });
@@ -126,6 +129,13 @@ const OLD_SAMPLES = [
 ];
 const redHits = scanSrcFile('red_check.mjs', OLD_SAMPLES.join('\n'));
 ok(redHits.length === OLD_SAMPLES.length, `红色验证：改造前 ${OLD_SAMPLES.length} 条样本全部被扫描抓到（实抓 ${redHits.length}）`);
+
+ok(scanSrcFile('src/memory_provenance.mjs', PROVENANCE_COMPAT_LINE).length === 0,
+   '旧文案归一化正则的精确行可豁免');
+ok(scanSrcFile('src/memory_provenance.mjs', OLD_SAMPLES.join('\n')).length === OLD_SAMPLES.length &&
+   scanSrcFile('src/memory_provenance.mjs', `${PROVENANCE_COMPAT_LINE} const content = '用户养了一只猫';`).length === 1 &&
+   scanSrcFile('src/memory.mjs', PROVENANCE_COMPAT_LINE).length === 1,
+   '兼容正则豁免不放行内容模板、同一行追加的台词或其他文件');
 
 // ─── 3. 写入端功能测（临时 DB 真函数）──────────────────────────────────────
 const { getDb, saveMemory, upsertShaping, upsertPreference, saveOpenLoop, listShaping } =

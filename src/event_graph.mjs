@@ -166,6 +166,7 @@ export function getCompanionEventGraph(companionId, options = {}) {
  */
 export function shouldProcessMemoryForGraph(memory) {
   if (!memory) return false;
+  if (memory.memory_origin === 'synthetic' || memory.memory_source === 'synthetic' || memory.recall_blocked) return false;
   if (memory.sensitive_flag) return false;
   if (memory.do_not_mention) return false;
   if (memory.memory_status && memory.memory_status !== 'active') return false;
@@ -193,7 +194,7 @@ export function processMemoryForGraph(companionId, memoryText, memoryId = null, 
   if (memoryId) {
     try {
       const dbRow = getDb().prepare(
-        `SELECT sensitive_flag, do_not_mention, memory_status, memory_layer
+        `SELECT sensitive_flag, do_not_mention, memory_status, memory_layer, memory_origin, memory_source, recall_blocked
          FROM companion_memories WHERE id = ? AND companion_id = ?`
       ).get(memoryId, companionId);
       if (!dbRow || !shouldProcessMemoryForGraph(dbRow)) return;

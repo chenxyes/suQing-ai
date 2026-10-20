@@ -42,9 +42,52 @@ jobs:
         run: |
           node scripts/custom_provider_check.mjs
           node scripts/provider_review_check.mjs
+          node scripts/embedding_config_check.mjs
+
+      - name: 记忆写入与召回限制回归
+        run: |
+          node scripts/memory_admission_check.mjs
+          node scripts/memory_api_check.mjs
+          node --experimental-vm-modules scripts/memory_consumers_check.mjs
+          node scripts/memory_rebind_check.mjs
+
+      - name: 记忆主体与证据回归
+        run: |
+          node scripts/memory_provenance_check.mjs
+          node scripts/memory_provenance_review_check.mjs
+          node --experimental-vm-modules scripts/memory_multi_correction_check.mjs
+          node --experimental-vm-modules scripts/memory_extraction_ownership_check.mjs
+          node scripts/memory_reflection_ownership_check.mjs
+          node scripts/memory_subject_prompt_check.mjs
+          node scripts/memory_provenance_audit_check.mjs
+
+      - name: 记忆向量、混合召回与维护回归
+        run: |
+          node scripts/memory_retrieval_check.mjs
+          node scripts/memory_retrieval_review_check.mjs
+          node scripts/memory_indexing_check.mjs
+          node scripts/memory_vector_backfill_check.mjs
+          node --experimental-vm-modules scripts/memory_maintenance_check.mjs
+          node scripts/memory_runtime_check.mjs
 
       - name: Fish Audio 原生 TTS 回归
         run: node scripts/fish_tts_check.mjs
+
+      - name: 虚构历史隔离与完整迁移回归
+        run: |
+          node --experimental-vm-modules scripts/synthetic_history_generation_check.mjs
+          node --experimental-vm-modules scripts/synthetic_history_review_check.mjs
+          node scripts/memory_synthetic_isolation_check.mjs
+          node --experimental-vm-modules scripts/memory_synthetic_review_check.mjs
+          node scripts/memory_synthetic_audit_check.mjs
+          node scripts/persona_memory_transfer_check.mjs
+          node scripts/persona_transfer_review_check.mjs
+          node scripts/persona_transfer_cli_review_check.mjs
+
+      - name: 回复长度和完整发送回归
+        run: |
+          node scripts/reply_style_check.mjs
+          node scripts/reply_segments_check.mjs
 
       - name: 设置向导脚本与控件回归
         run: node scripts/setup_ui_check.mjs
@@ -103,7 +146,11 @@ jobs:
         run: node scripts/safety_smoke.mjs
 
       - name: 未成年人保护 minor guard 护栏
-        run: node scripts/minor_guard_smoke.mjs
+        run: |
+          node --experimental-vm-modules scripts/minor_guard_ownership_check.mjs
+          node --experimental-vm-modules scripts/minor_guard_review_check.mjs
+          node --experimental-vm-modules scripts/minor_guard_runtime_check.mjs
+          node --experimental-vm-modules scripts/minor_guard_mixed_clause_check.mjs
 
       - name: 隐私过滤 privacy filter 护栏
         run: node scripts/privacy_filter_guard.mjs
@@ -188,6 +235,13 @@ jobs:
 
       - name: current_works 表达层（v1.21.4 PR-W2 注入排序/冷却放行双向/存量退场/归档）
         run: node scripts/current_works_expression_smoke.mjs
+
+      - name: 作品类别降级与主动消费回归
+        run: |
+          DB_PATH=:memory: node scripts/current_works_generic_smoke.mjs
+          DB_PATH=:memory: node scripts/current_works_proactive_smoke.mjs
+          DB_PATH=:memory: node scripts/current_works_review_check.mjs
+          node --experimental-vm-modules scripts/current_works_runtime_check.mjs
 
       - name: current_works 日程结构化（v1.21.4 PR-W5 日程消费档案/progress 渐进/life_state 预留）
         run: node scripts/works_schedule_smoke.mjs
