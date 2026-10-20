@@ -1,4 +1,4 @@
-/** Offline: Node22 --experimental-vm-modules scripts/memory_maintenance_check.mjs */
+/** Offline: Node20/22 --experimental-vm-modules scripts/memory_maintenance_check.mjs */
 import assert from 'node:assert/strict';
 import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import path from 'node:path';
@@ -25,6 +25,8 @@ async function load(file) {
   const module = new vm.SourceTextModule(source, { context, identifier: file }); modules.set(file, module);
   await module.link(async spec => {
     if (['./memory_v2.mjs', './privacy_filter.mjs', './memory_admission.mjs', './memory_vectors.mjs', './memory_retrieval.mjs'].includes(spec)) return load(spec.slice(2));
+    const stubKey = `stub:${file}:${spec}`;
+    if (modules.has(stubKey)) return modules.get(stubKey);
     const names = [...source.matchAll(/(?:import|export)\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]/g)]
       .filter(m => m[2] === spec).flatMap(m => m[1].replace(/\/\/[^\n]*/g, '').split(',').map(s => s.trim().split(/\s+as\s+/)[0]).filter(Boolean));
     const values = Object.fromEntries(names.map(name => [name, () => { throw new Error(`Unexpected ${spec}:${name}`); }]));
@@ -43,7 +45,11 @@ async function load(file) {
     if (spec === './chat_response.mjs') values.isChatFallback = result => result === 'FALLBACK';
     if (spec === 'node:fs/promises') Object.assign(values, { mkdir: async () => {}, writeFile: async () => {} });
     if (spec === 'node:path') values.default = path;
-    return new vm.SyntheticModule(Object.keys(values), function () { for (const [key, value] of Object.entries(values)) this.setExport(key, value); }, { context });
+    const stub = new vm.SyntheticModule(Object.keys(values), function () { for (const [key, value] of Object.entries(values)) this.setExport(key, value); }, { context });
+    // Node 20 can crash during evaluate if an unretained synthetic module wrapper
+    // is collected after linking. Keep every module alive for the complete run.
+    modules.set(stubKey, stub);
+    return stub;
   });
   return module;
 }
