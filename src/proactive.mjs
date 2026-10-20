@@ -23,7 +23,7 @@ import {
   getActiveLifeStates,                        // v1.22 PR-L1: #317 四档身体事件闸查档案
 } from './db.mjs';
 import { getActivePeriodContext, isPeriodHeavyWindow, isPmsActive } from './life_state.mjs';   // v1.22 PR-L3 经期情绪路由
-import { buildWorksPromptHint, worksSceneSeed, pickProactiveWork, workMaterialId, worksConfig } from './current_works.mjs';  // v1.21.4 PR-W2 表达层
+import { buildWorksPromptHint, buildProactiveWorkHint, isWorkPhotoEligible, worksSceneSeed, pickProactiveWork, workMaterialId, worksConfig } from './current_works.mjs';  // v1.21.4 PR-W2 表达层
 import { pickProactiveCategory, cappedCategoryIds } from './photo_categories.mjs';  // v1.21.6 PR-A 照片品类加权采样（默认关）
 import { selectThoughtMaterial, thoughtSceneSeed } from './photo_thought.mjs';      // v1.21.6 PR-B 想到你素材选择
 import { filterForStorage } from './privacy_filter.mjs';                            // v1.21.6 PR-B 隐私命中判定
@@ -922,10 +922,7 @@ ${recallLoop.expected_followup ? `你心里想：${recallLoop.expected_followup}
       });
       if (pick) {
         chosenWorkMatId = workMaterialId(pick.id);
-        const _label = pick.verify_status === 'generic'
-          ? `你最近在看的那本${String(pick.title || '书').replace(/[《》]/g, '')}`
-          : `你最近在看的《${String(pick.title || '').replace(/[《》]/g, '')}》`;
-        systemPrompt += `\n\n【★ 可选话题 · 手头的事】这次**可以**很自然地聊一句${_label}（随口说说进度/感想，像"刚看完一章"），也可以不聊、说你更想说的。别像念书评、别硬贴、一句带过就好。`;
+        systemPrompt += buildProactiveWorkHint(pick);
       }
     } catch (e) {
       log('warn', `[CurrentWorks] proactive 话题供给失败（不影响发送）companion=${companion.id}: ${e.message}`);
@@ -1279,7 +1276,7 @@ async function sendScenePhoto(companion, ctx) {
       const pick = pickProactiveWork(works, {
         usedIds: getRecentlyUsedMaterialIds(companion.id, { days: Math.max(0, _wcfg.mentionCooldownH / 24) }),
         weeklyCount: (matId) => countRecentMaterialUse(companion.id, matId, { days: 7 }),
-        eligible: (w) => w.verify_status === 'verified' || String(w.kind || '').toLowerCase() === 'craft',
+        eligible: isWorkPhotoEligible,
         cfg: _wcfg,
       });
       if (pick) {

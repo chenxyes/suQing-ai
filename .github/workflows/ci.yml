@@ -218,6 +218,13 @@ jobs:
       - name: current_works 表达层（v1.21.4 PR-W2 注入排序/冷却放行双向/存量退场/归档）
         run: node scripts/current_works_expression_smoke.mjs
 
+      - name: 作品类别降级与主动消费回归
+        run: |
+          DB_PATH=:memory: node scripts/current_works_generic_smoke.mjs
+          DB_PATH=:memory: node scripts/current_works_proactive_smoke.mjs
+          DB_PATH=:memory: node scripts/current_works_review_check.mjs
+          node --experimental-vm-modules scripts/current_works_runtime_check.mjs
+
       - name: current_works 日程结构化（v1.21.4 PR-W5 日程消费档案/progress 渐进/life_state 预留）
         run: node scripts/works_schedule_smoke.mjs
 
