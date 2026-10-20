@@ -129,7 +129,10 @@ jobs:
         run: node scripts/safety_smoke.mjs
 
       - name: 未成年人保护 minor guard 护栏
-        run: node scripts/minor_guard_smoke.mjs
+        run: |
+          node --experimental-vm-modules scripts/minor_guard_ownership_check.mjs
+          node --experimental-vm-modules scripts/minor_guard_review_check.mjs
+          node --experimental-vm-modules scripts/minor_guard_runtime_check.mjs
 
       - name: 隐私过滤 privacy filter 护栏
         run: node scripts/privacy_filter_guard.mjs
