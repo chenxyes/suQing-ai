@@ -47,7 +47,11 @@ async function load(file) {
   });
   return module;
 }
-const planModule = await load('plan_tasks.mjs'); await planModule.evaluate();
+console.log('memory_maintenance_check: loading production modules');
+const planModule = await load('plan_tasks.mjs');
+console.log('memory_maintenance_check: evaluating production modules');
+await planModule.evaluate();
+console.log('memory_maintenance_check: production modules ready');
 const plan = planModule.namespace, memory = modules.get('memory_v2.mjs').namespace;
 let passed = 0, failed = 0, sequence = 920000;
 const sqlTime = date => date.toISOString().slice(0, 19).replace('T', ' ');
@@ -68,6 +72,7 @@ function fixture() {
   return { companion, add, turn };
 }
 async function check(name, fn) {
+  console.log(`RUN ${name}`);
   db.prepare('DELETE FROM companion_memories').run(); db.prepare('DELETE FROM companion_conversation_turns').run();
   db.prepare('UPDATE wechat_accounts SET is_active=0').run();
   active=[]; modelCalls=0; modelInputs=[]; modelHook=()=>{}; monthlyExists=false; providerResult=null; providerHook=()=>{}; logs.length=0;
