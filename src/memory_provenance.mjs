@@ -22,7 +22,7 @@ export function validateMemoryEvidence({subject,evidence,turns}) {
   for (const item of evidence) {
     if (!item || !Number.isSafeInteger(item.turn_id) || typeof item.quote!=='string') return null;
     const turn=byId.get(item.turn_id); const quote=item.quote.trim();
-    if (!turn || Number(turn.synthetic || 0)!==0 || !['user','assistant'].includes(turn.role)
+    if (!turn || Number(turn.synthetic || 0)!==0 || Number(turn.import_unverified || 0)!==0 || !['user','assistant'].includes(turn.role)
       || quote.length<3 || quote.length>500 || !turn.content.includes(quote)) return null;
     if ((subject==='user' && turn.role!=='user') || (subject==='companion' && turn.role!=='assistant')) return null;
     if (!standaloneAssertion(turn,quote,subject==='shared')) return null;

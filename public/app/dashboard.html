@@ -1050,7 +1050,10 @@
           <i data-lucide="archive" class="w-5 h-5 text-sakura-deep"></i>
           <h3 class="text-[15px] font-bold">角色备份</h3>
         </div>
-        <p class="text-[12px] text-mute mb-4 leading-relaxed">将角色人设导出为 JSON 文件，可迁移或分享。导入时只恢复人设设定，不包含账号信息。</p>
+        <p class="text-[12px] text-mute mb-4 leading-relaxed">默认只迁移角色人设，不包含账号信息。勾选下方选项可一并备份全部记忆和历史，文件包含私人内容，请妥善保存。导入的历史先保留待审阅，不会直接用于聊天。</p>
+        <label class="flex items-center gap-2 text-[12px] mb-4">
+          <input id="transfer-include-memories" type="checkbox" /> 导出或导入时包含全部记忆与历史
+        </label>
         <div class="flex flex-col gap-2">
           <button id="btn-export-persona" class="w-full py-2.5 text-[13px] font-semibold rounded-xl bg-sakura-soft text-sakura-deep hover:bg-sakura/30 transition-all">
             <i data-lucide="download" class="inline w-4 h-4 align-[-3px]"></i>
@@ -2604,7 +2607,8 @@
           try {
             exportBtn.disabled = true;
             exportBtn.textContent = '导出中...';
-            const r = await fetch(`/api/companions/${companionId}/export`, {
+            const includeMemories = document.getElementById('transfer-include-memories')?.checked;
+            const r = await fetch(`/api/companions/${companionId}/export${includeMemories ? '?include_memories=1' : ''}`, {
               headers: { Authorization: `Bearer ${token}` },
             });
             if (!r.ok) throw new Error('导出失败');
@@ -2635,9 +2639,11 @@
           importStatus.classList.remove('hidden');
           importStatus.textContent = '解析中...';
           try {
+            if (file.size > 32 * 1024 * 1024) throw new Error('网页导入最大支持 32 MiB；更大的备份请使用本地迁移工具');
             const text = await file.text();
-            const payload = JSON.parse(text);
-            const r = await fetch('/api/companions/import', {
+            JSON.parse(text);
+            const includeMemories = document.getElementById('transfer-include-memories')?.checked;
+            const r = await fetch('/api/companions/import' + (includeMemories ? '?include_memories=1' : ''), {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
               body: text,
@@ -2645,6 +2651,7 @@
             const d = await r.json();
             if (!r.ok || !d.ok) throw new Error(d.error || '导入失败');
             importStatus.textContent = `✓ 导入成功，角色 ID: ${d.data.companion_id}`;
+            if (includeMemories) importStatus.textContent += `；${d.data.quarantined_memories || 0} 条记忆及导入历史已保留待审阅，暂不用于聊天`;
             showToast('导入成功！');
           } catch (e2) {
             importStatus.textContent = '✗ ' + e2.message;

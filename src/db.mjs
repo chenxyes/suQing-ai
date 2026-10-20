@@ -530,6 +530,7 @@ export function getRecentProactiveTexts(companionId, { days = 7, limit = 10 } = 
     return getDb().prepare(`
       SELECT content FROM companion_conversation_turns
       WHERE companion_id = ? AND role = 'assistant'
+        AND COALESCE(synthetic,0)=0 AND COALESCE(import_unverified,0)=0
         AND topic IN ('主动消息','晚安','早安','纪念日祝福','recall 关心','轻声问候','主动告白')
         AND created_at >= datetime('now', ?)
       ORDER BY id DESC LIMIT ?
@@ -583,13 +584,13 @@ export function listAnnotatableTurns({ companionId = null, limit = 100, contextN
     SELECT t.id, t.companion_id, t.content, t.created_at, c.name AS companion_name,
            COALESCE(c.arc_state, 'normal') AS arc_state
     FROM companion_conversation_turns t JOIN companions c ON c.id = t.companion_id
-    WHERE t.role = 'assistant' AND COALESCE(t.synthetic, 0) = 0
+    WHERE t.role = 'assistant' AND COALESCE(t.synthetic, 0) = 0 AND COALESCE(t.import_unverified, 0) = 0
       ${companionId ? 'AND t.companion_id = ?' : ''}
     ORDER BY t.id DESC LIMIT ?
   `).all(...(companionId ? [companionId, limit] : [limit]));
   const ctxStmt = db.prepare(`
     SELECT role, content, created_at FROM companion_conversation_turns
-    WHERE companion_id = ? AND id < ? AND COALESCE(synthetic, 0) = 0
+    WHERE companion_id = ? AND id < ? AND COALESCE(synthetic, 0) = 0 AND COALESCE(import_unverified, 0) = 0
     ORDER BY id DESC LIMIT ?`);
   const annStmt = db.prepare('SELECT label, tags, note, annotated_at FROM annotation_corpus WHERE turn_id = ?');
   return turns.map(t => ({
@@ -618,10 +619,11 @@ export function listAnnotationsForExport({ contextN = 4 } = {}) {
   const rows = db.prepare(`
     SELECT a.*, t.content AS reply FROM annotation_corpus a
     JOIN companion_conversation_turns t ON t.id = a.turn_id
+    WHERE COALESCE(t.synthetic,0)=0 AND COALESCE(t.import_unverified,0)=0
     ORDER BY a.id`).all();
   const ctxStmt = db.prepare(`
     SELECT role, content FROM companion_conversation_turns
-    WHERE companion_id = ? AND id < ? AND COALESCE(synthetic, 0) = 0
+    WHERE companion_id = ? AND id < ? AND COALESCE(synthetic, 0) = 0 AND COALESCE(import_unverified, 0) = 0
     ORDER BY id DESC LIMIT ?`);
   return rows.map(r => ({
     context: ctxStmt.all(r.companion_id, r.turn_id, contextN).reverse(),
@@ -1522,6 +1524,8 @@ function migrateMemoryAdmission() {
   addColIfMissing('companion_memories', 'compacted_into', 'INTEGER');
   addColIfMissing('companion_memories', 'memory_subject', "TEXT DEFAULT 'unknown'");
   addColIfMissing('companion_memories', 'memory_evidence', 'TEXT');
+  addColIfMissing('companion_memories', 'memory_origin', "TEXT DEFAULT 'unknown'");
+  addColIfMissing('companion_memories', 'origin_metadata', 'TEXT');
   db.exec(`CREATE TABLE IF NOT EXISTS user_profile_evidence (
     companion_id INTEGER NOT NULL REFERENCES companions(id) ON DELETE CASCADE,
     user_id TEXT NOT NULL, field TEXT NOT NULL, source_memory_ids TEXT,
@@ -3689,7 +3693,9 @@ function prepareMemoryContent(companionId, content, keywords = null) {
 }
 
 export function saveMemory({ companionId, userId, memoryType, content, importance = 5, keywords = null, embedding = null, embeddingMeta = null, pinned = null,
-  memorySource = null, memoryLayer = null, memoryWeight = null, sourceMemoryIds = null, expectedRecallRevision = null }) {
+  memorySource = null, memoryLayer = null, memoryWeight = null, sourceMemoryIds = null, expectedRecallRevision = null,
+  memoryOrigin = 'unknown', originMetadata = null }) {
+  if (!['unknown','conversation','synthetic','persona','imported'].includes(memoryOrigin)) return null;
   const prepared = prepareMemoryContent(companionId, content, keywords);
   if (!prepared) return null;
   const db = getDb();
@@ -3713,6 +3719,8 @@ export function saveMemory({ companionId, userId, memoryType, content, importanc
     if (memorySource != null) { cols.push('memory_source'); vals.push(memorySource); }
     if (memoryLayer != null) { cols.push('memory_layer'); vals.push(memoryLayer); }
     if (memoryWeight != null) { cols.push('memory_weight'); vals.push(memoryWeight); }
+    cols.push('memory_origin', 'origin_metadata');
+    vals.push(memoryOrigin, originMetadata == null ? null : JSON.stringify(originMetadata));
     if (embeddingMeta && !prepared.changed) { cols.push('embedding_meta'); vals.push(JSON.stringify(embeddingMeta)); }
     const inserted = db.prepare(`INSERT INTO companion_memories (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(...vals);
     return Number(inserted.lastInsertRowid);
@@ -3746,7 +3754,7 @@ export function getMemoryEvidenceTurns(companionId, userId, turnIds) {
   const ids = [...new Set(turnIds)];
   const cutoff = getMemoryRecallBarrier(companionId,userId).turn_id_cutoff;
   const turns = db.prepare(`SELECT id,companion_id,role,content,synthetic FROM companion_conversation_turns
-    WHERE companion_id=? AND COALESCE(synthetic,0)=0 AND id>? AND id IN (${ids.map(()=>'?').join(',')})
+    WHERE companion_id=? AND COALESCE(synthetic,0)=0 AND COALESCE(import_unverified,0)=0 AND id>? AND id IN (${ids.map(()=>'?').join(',')})
     ORDER BY id`).all(companionId,cutoff,...ids);
   return turns.length === ids.length ? turns : [];
 }
@@ -3780,7 +3788,7 @@ export function saveGroundedMemory(input) {
       const sourceIds = memorySourceIds(input.sourceMemoryIds);
       if (sourceIds === false) return rejected;
       const remainingSources = sourceIds?.filter(sourceId=>!replaces.includes(sourceId));
-      id = saveMemory({ ...input, content: checked.content, embedding: null,
+      id = saveMemory({ ...input, content: checked.content, embedding: null, memoryOrigin: 'conversation', originMetadata: null,
         memoryLayer: input.memoryLayer ?? memoryLayerOfType(input.memoryType),
         // Real message evidence is independent of the contradicted row, but
         // unrelated memory dependencies must still propagate later revocations.
@@ -4135,7 +4143,7 @@ export function getConversationContext(companionId, limit = 10) {
   return db.prepare(`
     SELECT id, companion_id, role, content, topic, created_at
     FROM companion_conversation_turns
-    WHERE companion_id = ?
+    WHERE companion_id = ? AND COALESCE(synthetic, 0) = 0 AND COALESCE(import_unverified, 0) = 0
     ORDER BY created_at DESC, id DESC
     LIMIT ?
   `).all(companionId, safeLimit).reverse();
@@ -4151,7 +4159,7 @@ export function getConversationTurnsBetween(companionId, startSql, endSql, limit
       AND id > COALESCE((SELECT MAX(turn_id_cutoff) FROM memory_recall_barriers WHERE companion_id = companion_conversation_turns.companion_id), 0)
       AND created_at >= ?
       AND created_at < ?
-      AND COALESCE(synthetic, 0) = 0   -- v1.6 I: 排除 backfill 虚构历史，防 cron 反思"昨日"误抓 90 天前虚拟事件
+      AND COALESCE(synthetic, 0) = 0 AND COALESCE(import_unverified, 0) = 0   -- v1.6 I: 排除 backfill 虚构历史，防 cron 反思"昨日"误抓 90 天前虚拟事件
     ORDER BY created_at ASC
     LIMIT ?
   `).all(companionId, startSql, endSql, safeLimit);
@@ -4915,7 +4923,7 @@ export function getMemoriesV2(companionId, { layer, status = 'active', q, limit 
   const rows = db.prepare(`
     SELECT id, memory_layer, memory_weight, memory_status, memory_source,
            content, pinned, locked, do_not_mention, importance, recall_blocked, source_memory_ids, sensitive_flag,
-           memory_subject, memory_evidence,
+           memory_subject, memory_evidence, memory_origin, origin_metadata,
            use_count, last_used_at, created_at, updated_at
     FROM companion_memories
     WHERE ${where}
@@ -4936,6 +4944,8 @@ export function patchMemory(memoryId, companionId, fields, { expectedRecallRevis
       'pinned','locked','do_not_mention','sensitive_flag','conflict_of','source_memory_ids']);
     const next = Object.fromEntries(Object.entries(fields).filter(([key]) => allowed.has(key)));
     if (!Object.keys(next).length) return previous;
+    // Editing a legacy source label must not turn fiction into a factual memory.
+    if (previous.memory_source === 'synthetic') next.memory_origin = 'synthetic';
     if ('content' in next || 'keywords' in next) {
       const prepared = prepareMemoryContent(companionId,next.content ?? previous.content,next.keywords ?? previous.keywords);
       if (!prepared) return null;
@@ -5268,6 +5278,7 @@ export function hardDeleteRelationalDiaryByKey(companionId, dateKey) {
 // conversation_turns 加 synthetic 列，让 reflection / diary cron 跳过虚构历史
 function migrateConversationTurnSynthetic() {
   addColIfMissing('companion_conversation_turns', 'synthetic', 'INTEGER DEFAULT 0');
+  addColIfMissing('companion_conversation_turns', 'import_unverified', 'INTEGER DEFAULT 0');
 }
 
 // companions 表标记是否已 backfill 过（防重复运行）
@@ -5299,6 +5310,68 @@ export function bulkInsertSyntheticTurns(companionId, turns) {
   return turns.length;
 }
 
+/** Persist an explicitly requested fictional batch in one transaction after generation. */
+export function saveSyntheticHistory({ companionId, userId, tier, turns, memoryEvents,
+  expectedRecallRevision, force = false }) {
+  if (!['thin','full'].includes(tier) || !Number.isSafeInteger(expectedRecallRevision)
+    || !Array.isArray(turns) || !turns.length || turns.length > 180
+    || !Array.isArray(memoryEvents) || memoryEvents.length > 60) return null;
+  const db = getDb();
+  return db.transaction(() => {
+    const owner = db.prepare('SELECT user_id FROM companions WHERE id=?').get(companionId);
+    if (!owner || String(owner.user_id) !== String(userId)
+      || getMemoryRecallBarrier(companionId,userId).revision !== expectedRecallRevision) return null;
+    const status = getCompanionBackfillStatus(companionId);
+    if (!force && status?.backfilledAt && (status.tier === 'full' || status.tier === tier)) return null;
+    const safeTurns = [];
+    for (const t of turns) {
+      if (!['user','assistant'].includes(t?.role) || typeof t.content !== 'string'
+        || typeof t.created_at !== 'string' || !Number.isFinite(Date.parse(t.created_at))) return null;
+      const filtered = filterForStorage(t.content);
+      const topic = t.topic == null ? null : filterForStorage(String(t.topic).slice(0,100));
+      if (!filtered.store || !filtered.text.trim() || (topic && !topic.store)) continue;
+      safeTurns.push({...t, content:filtered.text.slice(0,2000),topic:topic?.text ?? null});
+    }
+    if (!safeTurns.length) return null;
+    const stmt = db.prepare(`INSERT INTO companion_conversation_turns
+      (companion_id,role,content,topic,synthetic,created_at) VALUES (?,?,?,?,1,?)`);
+    const turnIds = safeTurns.map(t=>Number(stmt.run(companionId,t.role,t.content,t.topic,t.created_at).lastInsertRowid));
+    let memoryCount = 0;
+    for (const event of memoryEvents) {
+      const id = saveMemory({companionId,userId,memoryType:'event',content:String(event.content || ''),
+        importance:Math.max(1,Math.min(10,Number(event.importance) || 5)), pinned:false,
+        memoryOrigin:'synthetic', memorySource:'system', expectedRecallRevision,
+        originMetadata:{generator:'backfill_history',tier,turn_ids:turnIds}});
+      if (id != null) memoryCount++;
+    }
+    markCompanionBackfilled(companionId,tier);
+    return {turnCount:turnIds.length,memoryCount};
+  })();
+}
+
+/** Explicitly reviewed classification. Intended for new-copy migration, never guessed on startup. */
+export function quarantineSyntheticMemories(companionId,userId,entries,{expectedRecallRevision}={}) {
+  if (!Number.isSafeInteger(expectedRecallRevision) || !Array.isArray(entries) || !entries.length
+    || new Set(entries.map(e=>e?.id)).size !== entries.length) return null;
+  return getDb().transaction(()=>{
+    const db = getDb();
+    const owner = db.prepare('SELECT user_id FROM companions WHERE id=?').get(companionId);
+    if (!owner || String(owner.user_id) !== String(userId)
+      || getMemoryRecallBarrier(companionId,userId).revision !== expectedRecallRevision) return null;
+    for (const entry of entries) {
+      if (!Number.isSafeInteger(entry?.id) || !/^[a-f0-9]{64}$/.test(entry.contentHash || '')) return null;
+      const row = db.prepare('SELECT * FROM companion_memories WHERE id=? AND companion_id=? AND user_id=?').get(entry.id,companionId,userId);
+      if (!row || crypto.createHash('sha256').update(row.content).digest('hex') !== entry.contentHash) return null;
+    }
+    for (const entry of entries) {
+      db.prepare('UPDATE companion_memories SET memory_origin=?,origin_metadata=?,updated_at=CURRENT_TIMESTAMP WHERE id=?')
+        .run('synthetic',JSON.stringify({generator:'reviewed_legacy_migration',content_hash:entry.contentHash}),entry.id);
+    }
+    recordMemoryRevocation(companionId,userId);
+    return entries.length;
+  })();
+}
+
 export function markCompanionBackfilled(companionId, tier = 'full') {
   const now = Math.floor(Date.now() / 1000);
   getDb().prepare(`UPDATE companions SET history_backfilled_at = ?, history_backfill_tier = ? WHERE id = ?`)
@@ -5323,7 +5396,7 @@ export function getCompanionBackfillStatus(companionId) {
 export function countRealUserTurns(companionId) {
   return getDb().prepare(`
     SELECT COUNT(*) AS n FROM companion_conversation_turns
-    WHERE companion_id = ? AND role = 'user' AND COALESCE(synthetic, 0) = 0
+    WHERE companion_id = ? AND role = 'user' AND COALESCE(synthetic, 0) = 0 AND COALESCE(import_unverified, 0) = 0
   `).get(companionId)?.n || 0;
 }
 

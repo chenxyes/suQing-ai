@@ -1622,14 +1622,6 @@ router.post('/auth/wechat-bind', requireAuth, (req, res) => {
       });
       if (sessionId) wechatLoginSessions.delete(sessionId);
       log('info', `[API] 微信重新绑定成功 account=${accountId} companion=${result.companionId ?? 'none'}`);
-      // v1.21.3 PR-D: 重绑同样算"绑定微信"触发
-      if (result.companionId) {
-        import('./backfill_history.mjs').then(async m => {
-          const { getCompanionById } = await import('./db.mjs');
-          const rc = getCompanionById(result.companionId);
-          if (rc) m.maybeAutoBackfill(rc, { justBound: true, reason: 'rebind' });
-        }).catch(() => {});
-      }
       return res.json({
         ok: true,
         success: true,
@@ -1663,8 +1655,6 @@ router.post('/auth/wechat-bind', requireAuth, (req, res) => {
     const existing = getWechatAccountByAccountId(accountId);
     if (sessionId) wechatLoginSessions.delete(sessionId);
     log('info', `[API] 微信绑定成功 account=${accountId}`);
-    // v1.21.3 PR-D: 绑定微信 = 全量回填先到者之一
-    import('./backfill_history.mjs').then(m => m.maybeAutoBackfill(companion, { justBound: true, reason: 'bind' })).catch(() => {});
     return res.json({
       success: true,
       message: '微信绑定成功',
@@ -2816,8 +2806,6 @@ router.post('/companions', requireAuth, (req, res) => {
     log('info', `[API] 创建 companion id=${c.id} user=${wechat_user_id}`);
     // 异步生成"元认知 / 人生背景"——不阻塞返回
     asyncGeneratePersonaFacts(c);
-    // v1.21.3 PR-D: 创建即生成 7 天薄版历史（异步秒级，失败由消息水位自动重试）
-    import('./backfill_history.mjs').then(m => m.maybeAutoBackfill(c, { reason: 'create' })).catch(() => {});
     return ok(res, c, 201);
   } catch (e) {
     if (e.code === 'EXISTS') return err(res, e.message, 409, { existing_id: e.id });
@@ -3799,9 +3787,10 @@ router.post('/companions/import', requireAuth, async (req, res) => {
     const importMemories = req.query.include_memories === '1';
     const result = await importCompanionForUser(userId, accountId, botId, body, { importMemories });
     log('info', `[API] 导入角色 account=${accountId} new_companion=${result.companionId}`);
-    return ok(res, { companion_id: result.companionId });
+    return ok(res, { companion_id: result.companionId, quarantined_memories: result.quarantinedMemories ?? 0 });
   } catch (e) {
     log('error', `[API] import 失败 account=${accountId}: ${e.message}`);
+    if (e.status === 400) return err(res, `导入格式无效: ${e.message}`, 400);
     return err(res, '导入失败', 500);
   }
 });
@@ -3852,14 +3841,15 @@ router.get('/companions/:id/backfill-status', requireAuth, async (req, res) => {
 });
 
 // POST /api/companions/:id/backfill-history
-// body: { days_back?: number, event_count?: number, force?: boolean, tier?: 'thin'|'full' }
-// v1.21.3 PR-D: admin-only——用户侧按钮已撤（创建薄版+水位全量自动化），admin 保留手动重生成
+// Explicit fictional setting generation; never triggered by creation, binding or chat.
+// body: { confirm_synthetic: true, days_back?, event_count?, force?, tier? }
 router.post('/companions/:id/backfill-history',
   rateLimit({ scope: 'backfill-history', maxPerWindow: 10, windowMs: 24 * 60 * 60 * 1000, message: '每日最多生成 10 次' }),
   requireAdmin,
   async (req, res) => {
     const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
     const c  = getCompanionById(id); if (!c) return err(res, 'companion 不存在', 404);
+    if (req.body?.confirm_synthetic !== true) return err(res, '需要明确确认生成虚构共同经历；这些内容不会作为真实记忆使用', 400);
     const daysBack   = Number(req.body?.days_back) || 90;
     const eventCount = Number(req.body?.event_count) || 35;
     const force      = !!req.body?.force;
@@ -3867,13 +3857,14 @@ router.post('/companions/:id/backfill-history',
     try {
       const { backfillTimelineForCompanion } = await import('./backfill_history.mjs');
       const r = await backfillTimelineForCompanion(c, {
-        daysBack, eventCount, force, tier,
+        daysBack, eventCount, force, tier, confirmSynthetic: true,
         accountId: null,
       });
       if (r.error) return err(res, r.error, 500);
       if (r.skipped === 'already-backfilled' && !force) {
-        return err(res, '已经生成过历史时间线了，加 force=true 可覆盖重生', 409);
+        return err(res, '已经生成过虚构设定；明确确认后加 force=true 可追加，已有记录会保留', 409);
       }
+      if (r.skipped) return err(res, '生成期间归属或记忆状态已变化，或已完成同类生成；本次没有写入', 409);
       return ok(res, r);
     } catch (e) {
       log('error', `[API] backfill-history failed companion=${id}: ${e.message}`);
@@ -4395,6 +4386,9 @@ export function startApiServer() {
     app.set('trust proxy', process.env.TRUST_PROXY === 'true' ? 'loopback' : process.env.TRUST_PROXY);
   }
 
+  // Full memory migrations may exceed the ordinary chat/config body size.
+  // Authenticate before allocating the larger import body; the default stays bounded.
+  app.post('/api/companions/import', requireAuth, express.json({ limit: MAX_IMPORT_BYTES }));
   app.use(express.json({ limit: '2mb' }));
   app.use(express.urlencoded({ extended: false, limit: '2mb' }));   // 支付宝异步通知用 form 编码
   app.use((req, _res, next) => { log('debug', `[API] ${req.method} ${req.path}`); next(); });

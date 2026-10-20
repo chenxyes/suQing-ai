@@ -1,6 +1,7 @@
 /** Shared, IO-free memory admission rules. Management readers deliberately do not use these. */
 export function isMemoryRecallable(row) {
   return !!row && (row.memory_status ?? 'active') === 'active'
+    && row.memory_origin !== 'synthetic' && row.memory_source !== 'synthetic'
     && Number(row.do_not_mention ?? 0) === 0 && Number(row.recall_blocked ?? 0) === 0;
 }
 
