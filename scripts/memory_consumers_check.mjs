@@ -45,6 +45,7 @@ const dbFns = {
     const id = dbFns.saveMemory({ ...input, content: input.evidence[0].quote });
     return { action: id ? 'inserted' : 'rejected', memory: id ? db.prepare('SELECT * FROM companion_memories WHERE id=?').get(id) : null };
   },
+  saveGroundedMemories: inputs => inputs.map(input => dbFns.saveGroundedMemory(input)),
   patchMemory: (id, cid, fields, options = {}) => {
     if (rejectPatch || (options.expectedRecallRevision != null && options.expectedRecallRevision !== revision)) return null;
     const row = scopeRows(cid).find(r => r.id === id);

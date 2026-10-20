@@ -106,7 +106,7 @@ await test('reply-style changes preserve subject evidence, uncertain history and
   ];
   for (const { value } of settings) {
     const text = prompt(value, { memories, longTermDigest: '历史摘要己' });
-    for (const [label, content] of [['对方本人原话', '用户证据甲'], ['角色自身原话', '角色证据乙'],
+    for (const [label, content] of [['对方本人的陈述', '用户证据甲'], ['角色自身的陈述', '角色证据乙'],
       ['双方共同陈述', '共同陈述丙'], ['归属待核实', '未知记录丁']]) {
       assert.ok(text.indexOf(label) >= 0 && text.indexOf(label) < text.indexOf(content));
     }

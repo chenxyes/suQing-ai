@@ -88,6 +88,71 @@ try {
     const result = await importPayload(payload, { trustReviewedHistory: true }), rows = load(result.companionId);
     assert.equal(rows[0].recall_blocked, 1); assert.equal(rows[1].recall_blocked, 1);
   });
+  function compactedPayload(subject = 'user') {
+    const scope = Number(db.prepare('INSERT INTO companions(user_id,bot_id,name) VALUES(?,?,?)').run(uid, 'summary-fixture', '摘要迁移角色').lastInsertRowid);
+    const sourceIds = ['我喜欢骑车', '我喜欢爬山', '我喜欢游泳'].map(text => {
+      const content = subject === 'shared' ? text.replace(/^我/, '我们') : text;
+      const roles = subject === 'shared' ? ['user', 'assistant'] : [subject === 'companion' ? 'assistant' : 'user'];
+      const turns = roles.map(role => m.saveConversationTurn(scope, role, content));
+      return m.saveGroundedMemory({ companionId: scope, userId: uid, subject, memoryType: 'fact',
+        evidence: turns.map(turn => ({ turn_id: turn.id, quote: content })), allowedTurnIds: turns.map(turn => turn.id),
+        expectedRecallRevision: 0, importance: 5, pinned: false }).memory.id;
+    });
+    const summary = m.compactMemories({ companionId: scope, userId: uid, sourceIds,
+      content: '我喜欢户外运动', expectedRecallRevision: 0 });
+    assert.ok(m.getRecallableMemories(scope, uid).some(row => row.id === summary.id));
+    return transfer.buildCompanionExport(scope, { includeMemories: true });
+  }
+  for (const subject of ['user', 'companion', 'shared']) await test(`reviewed ${subject} summary transfer preserves verified source lineage without inventing quotes`, async () => {
+    const payload = compactedPayload(subject);
+    const result = await importPayload(payload, { trustReviewedHistory: true });
+    const rows = load(result.companionId), summary = rows.find(row => row.memory_type === 'monthly_summary');
+    assert.equal(summary.memory_subject, subject);
+    assert.equal(summary.memory_evidence, null);
+    assert.equal(summary.recall_blocked, 0);
+    assert.ok(m.getRecallableMemories(result.companionId, uid).some(row => row.id === summary.id));
+    assert.equal(result.quarantinedMemories, 0);
+    assert.deepEqual(JSON.parse(summary.source_memory_ids), rows.filter(row => row.memory_type === 'fact').map(row => row.id));
+    m.softDeleteMemory(JSON.parse(summary.source_memory_ids)[0], result.companionId);
+    assert.ok(!m.getRecallableMemories(result.companionId, uid).some(row => row.id === summary.id));
+  });
+  await test('summary transfer never trusts default imports or restricted, missing, cross-subject, unverified or cyclic sources', async () => {
+    const original = compactedPayload();
+    for (const variant of ['default', 'blocked-summary', 'deleted', 'hidden', 'synthetic', 'missing', 'cross-subject', 'unknown', 'unverified', 'unverified-turn', 'cycle', 'indirect-cycle']) {
+      const payload = structuredClone(original), summary = payload.core_memories.find(row => row.memory_type === 'monthly_summary');
+      const source = payload.core_memories.find(row => row.memory_type === 'fact');
+      if (variant === 'blocked-summary') summary.recall_blocked = 1;
+      if (variant === 'deleted') source.memory_status = 'deleted';
+      if (variant === 'hidden') source.do_not_mention = 1;
+      if (variant === 'synthetic') source.memory_origin = 'synthetic';
+      if (variant === 'missing') summary.source_memory_ids = '[999999999]';
+      if (variant === 'cross-subject') {
+        source.memory_subject = 'companion';
+        payload.evidence_turns.find(turn => turn.id === JSON.parse(source.memory_evidence)[0].turn_id).role = 'assistant';
+      }
+      if (variant === 'unknown') source.memory_subject = 'unknown';
+      if (variant === 'unverified') source.memory_evidence = null;
+      if (variant === 'unverified-turn') payload.evidence_turns[0].import_unverified = 1;
+      if (variant === 'cycle') summary.source_memory_ids = JSON.stringify([summary.id]);
+      if (variant === 'indirect-cycle') source.source_memory_ids = JSON.stringify([summary.id]);
+      const result = await importPayload(payload, { trustReviewedHistory: variant !== 'default' });
+      const restored = load(result.companionId).find(row => row.memory_type === 'monthly_summary');
+      assert.equal(restored.recall_blocked, 1, variant);
+      assert.ok(!m.getRecallableMemories(result.companionId, uid).some(row => row.id === restored.id), variant);
+    }
+  });
+  await test('reviewed nested summaries retain only complete verified lineage and unknown subject stays unknown', async () => {
+    const payload = compactedPayload(), summary = payload.core_memories.find(row => row.memory_type === 'monthly_summary');
+    payload.core_memories.push({ ...summary, id: Math.max(...payload.core_memories.map(row => row.id)) + 1,
+      content: '户外运动偏好的综合摘要', source_memory_ids: JSON.stringify([summary.id]) });
+    const result = await importPayload(payload, { trustReviewedHistory: true });
+    assert.equal(m.getRecallableMemories(result.companionId, uid).filter(row => row.memory_type === 'monthly_summary').length, 2);
+    summary.memory_subject = 'unknown';
+    const unknownResult = await importPayload(payload, { trustReviewedHistory: true });
+    const restored = load(unknownResult.companionId).filter(row => row.memory_type === 'monthly_summary');
+    assert.equal(restored[0].memory_subject, 'unknown');
+    assert.equal(restored[1].recall_blocked, 1, 'a known-subject summary cannot use unknown-subject lineage');
+  });
   await test('v1 remains accepted without promoting claimed proof or silently truncating records', async () => {
     const payload = { schema: 'xiyu_companion_export_v1', companion: { name: '旧格式' },
       core_memories: Array.from({ length: 240 }, (_, i) => ({ content: `旧导入${i}`, memory_subject: 'user', pinned: 1, memory_status: i ? 'active' : 'deleted' })) };

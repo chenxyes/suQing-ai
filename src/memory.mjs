@@ -11,7 +11,7 @@
 import { log } from './logger.mjs';
 import { indexMemory } from './memory_indexing.mjs';
 import {
-  saveGroundedMemory, getMemoryEvidenceTurns, getRecallableMemories,
+  saveGroundedMemories, getMemoryEvidenceTurns, getRecallableMemories,
   patchCompanion, upsertUserProfile,
   saveStageMilestone, shanghaiDateKey, getDb, getMemoryRecallBarrier,
 } from './db.mjs';
@@ -383,7 +383,7 @@ export async function extractAndSaveMemories(companionId, userId, _userMsg, _bot
     // Scene is a separate mutable state. Preserve its existing update/empty/failure behavior.
     applySceneUpdate(companionId, obj.current_scene);
     const candidates = Array.isArray(obj.memories) ? obj.memories : [];
-    const saved = [];
+    const inputs = [];
     for (const candidate of candidates) {
       if (!candidate || !['fact', 'preference', 'event', 'emotion'].includes(candidate.memory_type)) continue;
       const replacesMemoryIds = candidate.replaces_memory_ids ?? [];
@@ -391,15 +391,17 @@ export async function extractAndSaveMemories(companionId, userId, _userMsg, _bot
         || replacesMemoryIds.some(id => !Number.isSafeInteger(id) || !shownIds.has(id))) continue;
       const importance = Math.min(Math.max(Number(candidate.importance) || 5, 1), 10);
       if (importance < MEMORY_MIN_IMPORTANCE && !replacesMemoryIds.length) continue;
-      const result = saveGroundedMemory({
+      inputs.push({
         companionId, userId, expectedRecallRevision, allowedTurnIds,
         memoryType: candidate.memory_type, subject: candidate.subject,
         content: typeof candidate.content === 'string' ? candidate.content : '',
         evidence: candidate.evidence, replacesMemoryIds, importance,
         keywords: Array.isArray(candidate.keywords) ? candidate.keywords.slice(0, 5).map(keyword => String(keyword).slice(0, 12)) : [],
       });
-      if (['inserted', 'corrected'].includes(result.action) && result.memory) saved.push(result.memory);
     }
+    const saved = saveGroundedMemories(inputs)
+      .filter(result => ['inserted', 'corrected'].includes(result.action) && result.memory)
+      .map(result => result.memory);
     if (!saved.length) return 0;
     log('info', `[Memory] +${saved.length} grounded 记忆 companion=${companionId}`);
     tryAchievement(companionId, 'first_memory_saved');

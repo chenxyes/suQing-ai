@@ -58,8 +58,20 @@ const STRONG_PATTERNS = [
 const WEAK_HINT_RE = /(?:[6-9]|1[0-7])\s*岁|初[一二三]|高[一二三]|初中|高中|中学|中考|未成年|成年|班主任|期末考|月考|寒假作业|暑假作业/;
 
 // 引用和非当下自述不能穿过 strong 层或成为 LLM 的有效证据。
-// 按句保守排除；一条混合消息仍可通过另一句独立自述提供证据。
+// 非自述范围从所在分句向后延续；不能让后面的爱好/回忆抹掉前面的独立自述。
 const NON_ASSERTION_RE = /如果|假如|假设|要是|倘若|万一|假装|扮演|角色|剧本|小说|台词|引用|转述|回忆|想起|想当年|当年|以前|曾经|那时候?|那会儿|小时候|过去|当时|(?:你|他|她|它|助手|AI)(?:刚才|之前|曾经)?(?:说|问|觉得|认为)|(?:说|问|写道|表示|告诉我)[：:，,\s]*(?:我|人家)|(?:说|写|提到)过|(?:岁|初中|高中|高[一二三]|初[一二三])(?:时|的时候|那年)/i;
+// 后置归因仍能限定前文：“我16岁，这句话是小说台词”不是实际年龄声明。
+const ATTRIBUTION_PREFIX_RE = /^(?:(?:其实|刚才|刚刚|我|也|都|只)\s*)+/;
+const ATTRIBUTION_REFERENCE_RE = /^(?:(?:这|那)(?:句(?:话)?|段(?:话)?)?|(?:前|上)(?:一)?(?:句(?:话)?|段(?:话)?)|前面|上面)\s*/;
+function isRetroactiveAttribution(clause) {
+  let text = clause.trim();
+  if (/^(?:那时候?|那会儿|当时|那年)/.test(text)) return true;
+  // Adverbs can precede or follow the reference: “其实刚才那句话只是…” / “前一句其实是…”.
+  text = text.replace(ATTRIBUTION_PREFIX_RE, '').replace(ATTRIBUTION_REFERENCE_RE, '')
+    .replace(ATTRIBUTION_PREFIX_RE, '');
+  // “我在看小说” describes an activity; only attribution/roleplay uses of 在 refer back.
+  return /^(?:是|出自|属于|在(?=引用|转述|假装|扮演|角色扮演))[^。！？!?，,；;]{0,24}(?:小说|台词|角色|剧本|引用|转述|假设|假装|扮演)/.test(text);
+}
 const OTHER_PERSON_RE = /你|他|她|弟弟?|妹妹?|儿子|女儿|侄|外甥|孙子|孙女|孩子|小孩|学生们/;
 const SCHOOL_SELF_RE = /我(?:们)?(?:的)?[^。！？!?，,]{0,24}(?:中考|初[一二三]|高[一二三]|初中|高中|中学|班主任|晚自习|寒假作业|暑假作业|月考)/;
 const ADULT_AGE_RE = /(?:我|人家)(?:今年|现在|已经|已满|刚满|刚|已|才)*\s*(?:1[89]|[2-9][0-9]|1[01][0-9]|120)\s*岁/;
@@ -71,10 +83,19 @@ function selfAssertionClauses(text) {
     .replace(/^\s*>.*$/gm, ' ');
   // Keep question punctuation so "我16岁吗？" cannot become an assertion by splitting.
   return (unquoted.match(/[^。！？!?\n]+[。！？!?]?/g) || [])
-    .filter(sentence => !NON_ASSERTION_RE.test(sentence)
-      // A speaker label can be a pasted conversation; it is not proof of the sender's age.
-      && !/[：:]/.test(sentence))
-    .flatMap(sentence => sentence.split(/[，,；;]+/))
+    .flatMap(sentence => {
+      // A speaker label can be a pasted conversation, not proof of the sender's age.
+      if (/[：:]/.test(sentence)) return [];
+      const clauses = sentence.split(/[，,；;]+/);
+      if (clauses.some(isRetroactiveAttribution)) return [];
+      const nonAssertion = NON_ASSERTION_RE.exec(sentence);
+      if (!nonAssertion) return clauses;
+      // Match on the whole sentence first so “朋友说，我16岁” retains its scope.
+      // Only complete clauses strictly before that scope remain usable evidence.
+      const prefix = sentence.slice(0, nonAssertion.index);
+      const boundary = Math.max(prefix.lastIndexOf('，'), prefix.lastIndexOf(','), prefix.lastIndexOf('；'), prefix.lastIndexOf(';'));
+      return boundary < 0 ? [] : prefix.slice(0, boundary).split(/[，,；;]+/);
+    })
     .map(clause => clause.trim())
     .filter(Boolean);
 }

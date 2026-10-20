@@ -378,14 +378,17 @@ export function buildSystemPrompt(companion, { memories = [], userProfile = null
       daily_summary:'日记忆', weekly_summary:'周记忆', monthly_summary:'月记忆',
     };
     const subjectLabels = {
-      user: '对方本人原话（其中“我”指对方）',
-      companion: '角色自身原话（其中“我”指你，不是对方）',
+      user: '对方本人的陈述（其中“我”指对方）',
+      companion: '角色自身的陈述（其中“我”指你，不是对方）',
       shared: '双方共同陈述（保留各自说话人）',
       unknown: '归属待核实（旧记录或手动自由文本，不能当作对方的事实）',
     };
     const groups = Object.entries(subjectLabels).map(([subject,label]) => {
       const rows = memories.filter(m => (m.memory_subject || 'unknown') === subject);
-      return rows.length ? `【${label}】\n${rows.map(m=>`- [${memTypeLabel[m.memory_type] || m.memory_type}] ${m.content}`).join('\n')}` : '';
+      return rows.length ? `【${label}】\n${rows.map(m=>{
+        const derived=m.memory_layer==='summary'||/_summary$/.test(m.memory_type||'');
+        return `- [${memTypeLabel[m.memory_type] || m.memory_type}${derived?'；摘要，非逐字原话':''}] ${m.content}`;
+      }).join('\n')}` : '';
     }).filter(Boolean);
     parts.push(`\n【按说话人区分的记忆】\n${groups.join('\n')}\n这是各自的陈述，不是对现实真实性的认证。不能把角色自己的经历安到对方身上；待核实内容不得用来断言“你之前说过”。引用、假设和附和不代表个人事实。`);
   }

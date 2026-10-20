@@ -87,6 +87,29 @@ try{
   }
   assert.equal(hash(source),originalHash);
  });
+ for(const mode of ['report','output-db']){
+  await test(`configured and default runtime database paths and sidecars reject ${mode} output`,()=>{
+   const script=path.resolve('scripts/memory_synthetic_audit.mjs');
+   const manifest=path.join(dir,`runtime-${mode}-manifest.json`);fs.writeFileSync(manifest,JSON.stringify(manifestFor()));
+   for(const configured of [true,false]){
+    const cwd=path.join(dir,`runtime-${mode}-${configured}`);fs.mkdirSync(path.join(cwd,'data'),{recursive:true});
+    const runtime=path.join(cwd,configured?'runtime.db':'data/bot.db');fs.copyFileSync(source,runtime);
+    const alias=path.join(cwd,'alias');fs.symlinkSync(path.dirname(runtime),alias);
+    const env={...process.env,LOG_DIR:path.join(cwd,'logs')};
+    if(configured)env.DB_PATH=runtime;else delete env.DB_PATH;
+    for(const suffix of ['-wal','-shm','-journal','']){
+     const output=path.join(alias,path.basename(runtime)+suffix);
+     const args=['--db',source,...(mode==='report'?['--report',output]:['--manifest',manifest,'--output-db',output])];
+     const result=spawnSync(process.execPath,[script,...args],{cwd,env,encoding:'utf8'});
+     assert.notEqual(result.status,0,`${mode} must reject runtime ${suffix || 'main file'}`);
+     assert.match(result.stderr,/database_or_sidecar_output_forbidden/);
+     assert.equal(hash(runtime),originalHash);
+     if(suffix)assert.equal(fs.existsSync(runtime+suffix),false,'rejection must leave runtime sidecars absent');
+    }
+   }
+   assert.equal(hash(source),originalHash);
+  });
+ }
  await test('stale source identity, row hash, scope and recall revision reject the complete manifest',()=>{
   for(const mutate of [
    manifest=>{manifest.source_identity={...manifest.source_identity,database_sha256:'0'.repeat(64)};},

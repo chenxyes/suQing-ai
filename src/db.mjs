@@ -3761,6 +3761,57 @@ export function getMemoryEvidenceTurns(companionId, userId, turnIds) {
 
 /** Store an attributed assertion from persisted evidence, never from a model paraphrase. */
 export function saveGroundedMemory(input) {
+  return saveGroundedMemoryCandidate(input);
+}
+
+/** One model result owns one synchronous transaction. Its own corrections must
+ * not invalidate the remaining, already supplied message evidence midway through
+ * the batch. External edits still fail the original revision check. */
+export function saveGroundedMemories(inputs) {
+  if (!Array.isArray(inputs) || !inputs.length) return [];
+  const rejected = () => inputs.map(() => ({ action: 'rejected', memory: null }));
+  const { companionId, userId, expectedRecallRevision } = inputs[0];
+  if (inputs.length > 160 || inputs.some(input => input.companionId !== companionId
+    || String(input.userId) !== String(userId) || input.expectedRecallRevision !== expectedRecallRevision)) return rejected();
+  const db = getDb();
+  return db.transaction(() => {
+    if (!Number.isSafeInteger(expectedRecallRevision)
+      || getMemoryRecallBarrier(companionId,userId).revision !== expectedRecallRevision) return rejected();
+    const pending = new Map();
+    const results = inputs.map(input => saveGroundedMemoryCandidate(input, pending));
+    if (!pending.size) return results.map(({ created: _created, ...result }) => result);
+    const correctedIds = new Set(pending.values());
+    // All targets below have individually passed explicit correction/evidence
+    // checks. Corrected assertions may drop those targets, but must retain every
+    // unrelated dependency. Never rewrite provenance on a pre-existing duplicate.
+    for (const result of results) {
+      if (!result.created || !correctedIds.has(result.memory.id)) continue;
+      const sources = memorySourceIds(result.memory.source_memory_ids);
+      if (!sources) continue;
+      const remaining = sources.filter(id => !pending.has(id));
+      db.prepare('UPDATE companion_memories SET source_memory_ids=? WHERE id=?')
+        .run(remaining.length ? JSON.stringify(remaining) : null,result.memory.id);
+    }
+    for (const [targetId, replacementId] of pending) {
+      patchMemory(targetId,companionId,{memory_status:'contradicted',conflict_of:replacementId});
+    }
+    const revision = getMemoryRecallBarrier(companionId,userId).revision;
+    for (const result of results) {
+      if (!result.memory) continue;
+      // Fresh conversation-only assertions were validated before OUR atomic
+      // revocations. Advance only these new rows, never old summaries/duplicates
+      // or rows with dependencies invalidated by the corrections above.
+      if (result.created && result.memory.source_memory_ids === '[]' && !correctedIds.has(result.memory.id)) {
+        db.prepare('UPDATE companion_memories SET source_recall_revision=?,recall_blocked=0 WHERE id=?')
+          .run(revision,result.memory.id);
+      }
+      result.memory = db.prepare('SELECT * FROM companion_memories WHERE id=?').get(result.memory.id);
+    }
+    return results.map(({ created: _created, ...result }) => result);
+  })();
+}
+
+function saveGroundedMemoryCandidate(input, pendingCorrections = null) {
   const rejected = { action: 'rejected', memory: null };
   const { companionId, userId, subject, evidence, allowedTurnIds, expectedRecallRevision } = input;
   if (!Number.isSafeInteger(expectedRecallRevision)) return rejected;
@@ -3778,6 +3829,7 @@ export function saveGroundedMemory(input) {
     const replaces = memorySourceIds(input.replacesMemoryIds ?? []);
     if (replaces === false || replaces === null || replaces.length > 20) return rejected;
     const targets = replaces.map(id=>eligible.find(row=>row.id===id));
+    if (pendingCorrections && replaces.some(id => pendingCorrections.has(id))) return rejected;
     if (targets.some(row=>!row || !['user','unknown'].includes(row.memory_subject ?? 'unknown')
       || subject!=='user' || !isRelatedExplicitCorrection(row,checked.evidence,turns))) return rejected;
     const duplicate = eligible.find(row=>row.memory_subject===subject
@@ -3797,9 +3849,13 @@ export function saveGroundedMemory(input) {
       getDb().prepare('UPDATE companion_memories SET memory_subject=?,memory_evidence=? WHERE id=?')
         .run(subject,JSON.stringify(checked.evidence),id);
     }
-    for (const target of targets) patchMemory(target.id,companionId,{memory_status:'contradicted',conflict_of:id});
+    for (const target of targets) {
+      if (pendingCorrections) pendingCorrections.set(target.id,id);
+      else patchMemory(target.id,companionId,{memory_status:'contradicted',conflict_of:id});
+    }
     const memory = getDb().prepare('SELECT * FROM companion_memories WHERE id=?').get(id);
-    return {action: replaces.length ? 'corrected' : duplicate ? 'duplicate' : 'inserted',memory};
+    return {action: replaces.length ? 'corrected' : duplicate ? 'duplicate' : 'inserted',memory,
+      ...(pendingCorrections ? {created: !duplicate} : {})};
   })();
 }
 
@@ -3902,6 +3958,9 @@ export function compactMemories({companionId,userId,sourceIds,content,expectedRe
     if(getMemoryRecallBarrier(companionId,userId).revision!==expectedRecallRevision)return null;
     const rows=getRecallableMemories(companionId,userId);const sources=ids.map(id=>rows.find(row=>row.id===id));
     if(sources.some(row=>!row || row.locked || row.pinned || !['fact','event','emotion'].includes(row.memory_type)))return null;
+    const subject = row => ['user','companion','shared'].includes(row.memory_subject) ? row.memory_subject : 'unknown';
+    const summarySubject = subject(sources[0]);
+    if(sources.some(row=>subject(row)!==summarySubject))return null;
     if(sources.every(row=>row.compacted_into && row.compacted_into===sources[0].compacted_into)){
       const summary=rows.find(row=>row.id===sources[0].compacted_into);
       const previous=memorySourceIds(summary?.source_memory_ids);
@@ -3911,6 +3970,7 @@ export function compactMemories({companionId,userId,sourceIds,content,expectedRe
     const summaryId=saveMemory({companionId,userId,memoryType:'monthly_summary',memoryLayer:'summary',memorySource:'summary',
       content,importance:10,pinned:false,sourceMemoryIds:ids,expectedRecallRevision});
     if(!summaryId)return null;
+    getDb().prepare('UPDATE companion_memories SET memory_subject=? WHERE id=?').run(summarySubject,summaryId);
     const update=getDb().prepare('UPDATE companion_memories SET compacted_into=? WHERE id=? AND companion_id=? AND user_id=?');
     for(const id of ids)update.run(summaryId,id,companionId,userId);
     return getDb().prepare('SELECT * FROM companion_memories WHERE id=?').get(summaryId);
@@ -3967,7 +4027,10 @@ export function deleteMemory(memoryId, companionId) {
 export function clearMemories(companionId, userId) {
   return getDb().transaction(() => {
     const result = getDb().prepare('DELETE FROM companion_memories WHERE companion_id=? AND user_id=?').run(companionId,userId);
-    if (result.changes) recordMemoryRevocation(companionId,userId);
+    // An explicit clear also cancels generation that has not saved its first row.
+    if (result.changes || getDb().prepare('SELECT 1 FROM companions WHERE id=? AND user_id=?').get(companionId,userId)) {
+      recordMemoryRevocation(companionId,userId);
+    }
     return result.changes;
   })();
 }
@@ -3977,7 +4040,9 @@ export function softClearMemories(companionId,userId) {
     const result = getDb().prepare(`UPDATE companion_memories SET memory_status='deleted', updated_at=?
       WHERE companion_id=? AND user_id=? AND COALESCE(memory_status,'active')!='deleted'`)
       .run(new Date().toISOString(),companionId,userId);
-    if (result.changes) recordMemoryRevocation(companionId,userId);
+    if (result.changes || getDb().prepare('SELECT 1 FROM companions WHERE id=? AND user_id=?').get(companionId,userId)) {
+      recordMemoryRevocation(companionId,userId);
+    }
     return result.changes;
   })();
 }

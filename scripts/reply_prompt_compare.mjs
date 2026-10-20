@@ -131,7 +131,7 @@ for (let i = 0; i < cases.length; i++) {
   assert.ok(newPrompt.includes('不要自己编造拍摄进度'));
   if (cases[i].id === 'safe-mode') assert.ok(newPrompt.includes('安全模式') && newPrompt.includes('是他的**朋友**'));
   if (cases[i].id === 'speaker-correction') {
-    assert.ok(newPrompt.includes('角色自身原话') && newPrompt.includes('对方本人原话'));
+    assert.ok(newPrompt.includes('角色自身的陈述') && newPrompt.includes('对方本人的陈述'));
     assert.ok(!newPrompt.includes('合成虚构共同旅行禁止注入'));
   }
   const oldChars = [...oldPrompt].length, newChars = [...newPrompt].length;

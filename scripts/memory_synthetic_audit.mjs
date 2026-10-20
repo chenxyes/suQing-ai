@@ -76,7 +76,10 @@ export async function auditSyntheticMemories({dbPath,manifestPath=null,outputDb=
   if(!dbPath || !fs.existsSync(dbPath)||!fs.statSync(dbPath).isFile())fail('existing_source_database_required');
   if(!!manifestPath!==!!outputDb)fail('manifest_and_new_output_required_together');
   const input=fs.realpathSync(dbPath);
-  if(outputDb)protectDatabasePaths(outputDb,input);
+  if(outputDb){
+    protectDatabasePaths(outputDb,input);
+    protectDatabasePaths(outputDb,process.env.DB_PATH || path.resolve('data/bot.db'));
+  }
   // Shared snapshot reader never opens SQLite at the source path.
   const snapshot=openOfflineSqliteSnapshot(input);
   const source=snapshot.db,initialIdentity=snapshot.sourceIdentity;
@@ -126,6 +129,7 @@ if(process.argv[1] && import.meta.url===pathToFileURL(path.resolve(process.argv[
     }
     if(args['--report'] && args['--db'] && fs.existsSync(args['--db'])){
       protectDatabasePaths(args['--report'],fs.realpathSync(args['--db']));
+      protectDatabasePaths(args['--report'],process.env.DB_PATH || path.resolve('data/bot.db'));
       if(args['--output-db'])protectDatabasePaths(args['--report'],args['--output-db']);
     }
     const report=await auditSyntheticMemories({dbPath:args['--db'],manifestPath:args['--manifest'],outputDb:args['--output-db']});

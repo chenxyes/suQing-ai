@@ -734,10 +734,12 @@ async function compactOldEpisodicMemories(companion) {
     for (const row of rows) {
       const month = String(row.created_at || '').slice(0, 7);
       if (!/^\d{4}-\d{2}$/.test(month)) continue;
-      if (!groups.has(month)) groups.set(month, []);
-      groups.get(month).push(row);
+      const key = `${month}:${compactionSubject(row)}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(row);
     }
-    for (const [month, groupSources] of groups) {
+    for (const groupSources of groups.values()) {
+      const month = String(groupSources[0].created_at).slice(0, 7);
       for (const sources of completeCompactionBatches(groupSources)) {
         if (getMemoryRecallBarrier(companion.id, companion.user_id).revision !== revision) return;
         const sourceIds = sources.map(row => row.id);
@@ -759,11 +761,19 @@ async function compactOldEpisodicMemories(companion) {
   if (compactedGroups) log('info', '[PlanTasks] compact done companion=' + companion.id + ' groups=' + compactedGroups);
 }
 
+function compactionSubject(row) {
+  return ['user', 'companion', 'shared'].includes(row.memory_subject) ? row.memory_subject : 'unknown';
+}
+
+function memorySummaryLine(row) {
+  return `- [subject=${compactionSubject(row)}] ${row.content}`;
+}
+
 function completeCompactionBatches(rows) {
   const batches = [];
   let batch = [], length = 0;
   for (const row of rows) {
-    const lineLength = `- ${row.content}`.length;
+    const lineLength = memorySummaryLine(row).length;
     if (lineLength > 12000) continue; // Never hide a partially presented source.
     if (length + (batch.length ? 1 : 0) + lineLength > 12000) {
       if (batch.length >= 3) batches.push(batch);
@@ -782,11 +792,11 @@ async function summarizeDaily(dateKey, turns) {
 }
 
 async function summarizeMemoryList(kind, label, rows) {
-  const fullText = rows.map(r => `- ${r.content}`).join('\n');
+  const fullText = rows.map(memorySummaryLine).join('\n');
   if (kind === '老记忆压缩' && fullText.length > 12000) throw new Error('compaction input exceeds full-source budget');
   const text = fullText.slice(0, 12000);
-  const sourceKind = kind === '周记忆' ? '日记忆' : '周记忆';
-  return summarize(kind, `请把这些${sourceKind}汇总成${label}的${kind}。突出稳定偏好、重要事件、情绪趋势和关系进展。控制在 160 字内，只输出总结正文，不要客套。`, text);
+  const sourceKind = kind === '老记忆压缩' ? '来源事实' : kind === '周记忆' ? '日记忆' : '周记忆';
+  return summarize(kind, `请把这些${sourceKind}汇总成${label}的${kind}。subject=user 表示对方本人，companion 表示角色自身，shared 表示双方共同事实，unknown 表示归属待核实。必须保留事实主体，不能把角色的第一人称经历改成对方经历，也不能把 unknown 推断为任何一方；来源已经是摘要时保留其中明确的主体归属。突出稳定偏好、重要事件、情绪趋势和关系进展。控制在 160 字内，只输出总结正文，不要客套。`, text);
 }
 
 async function summarize(kind, instruction, text) {

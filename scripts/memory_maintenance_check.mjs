@@ -124,6 +124,34 @@ try {
     dbApi.softDeleteMemory(ids[0],f.companion.id);
     assert.ok(!dbApi.getRecallableMemories(f.companion.id,f.companion.user_id).some(row=>row.id===summary.id));
   });
+  await check('compaction keeps each subject separate and labels the complete input', async () => {
+    const f=fixture(), groups=new Map();
+    for(const subject of ['user','companion','shared','unknown']) {
+      groups.set(subject,Array.from({length:3},(_,i)=>f.add(`我是${subject}来源的第${i}条合成事实`,{memory_subject:subject})));
+    }
+    await plan.compactOldEpisodicMemories(f.companion);
+    const summaries=db.prepare("SELECT * FROM companion_memories WHERE memory_type='monthly_summary'").all();
+    assert.equal(summaries.length,4,'do not mix speakers into a single unknown summary');
+    for(const [subject,ids] of groups) {
+      const summary=summaries.find(row=>row.memory_subject===subject);
+      assert.ok(summary,`retain ${subject} subject`);
+      assert.deepEqual(JSON.parse(summary.source_memory_ids),ids);
+      const call=Number(summary.content.match(/合成的压缩摘要 (\d+)$/)[1]);
+      const input=modelInputs[call-1];
+      assert.ok(input.includes(`[subject=${subject}]`),'model sees authoritative subject');
+      for(const other of groups.keys())if(other!==subject)assert.ok(!input.includes(`[subject=${other}]`));
+      assert.ok(dbApi.getMemories(f.companion.id,f.companion.user_id).some(row=>row.id===summary.id));
+    }
+  });
+  await check('sparse mixed subjects stay uncompressed and direct mixed batches are rejected', async () => {
+    const f=fixture(),ids=['user','companion','unknown'].map((subject,i)=>f.add(`来源${i}`,{memory_subject:subject}));
+    await plan.compactOldEpisodicMemories(f.companion);
+    assert.equal(modelCalls,0);
+    const revision=dbApi.getMemoryRecallBarrier(f.companion.id,f.companion.user_id).revision;
+    assert.equal(dbApi.compactMemories({companionId:f.companion.id,userId:f.companion.user_id,sourceIds:ids,
+      content:'不可混合第一人称',expectedRecallRevision:revision}),null);
+    assert.ok(dbApi.getMemories(f.companion.id,f.companion.user_id).every(row=>!row.compacted_into));
+  });
   await check('compaction marking failure rolls back summary and retries without losing sources', async () => {
     const f=fixture(); for(let i=0;i<5;i++)f.add(`old event ${i}`);
     db.exec("CREATE TEMP TRIGGER reject_compaction BEFORE UPDATE OF compacted_into ON companion_memories WHEN NEW.compacted_into IS NOT NULL BEGIN SELECT RAISE(ABORT,'injected failure'); END");

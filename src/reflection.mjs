@@ -17,7 +17,7 @@ import {
   normalizeMemoryLayer, normalizeMemoryWeight,
   isSensitiveMemoryContent, sanitizeMemoryContent,
 } from './memory_v2.mjs';
-import { saveGroundedMemory, updateGroundedMemory, getRecallableMemories, getMemoryRecallBarrier, legacyTypeForLayer } from './db.mjs';
+import { saveGroundedMemories, getRecallableMemories, getMemoryRecallBarrier, legacyTypeForLayer } from './db.mjs';
 import { isMemoryRecallable } from './memory_admission.mjs';
 import { processMemoryForGraph } from './event_graph.mjs';
 import { formatReflectRejectMapping, formatReflectInsertFail } from './reflection_heartbeat.mjs';
@@ -172,6 +172,7 @@ export async function applyReflectionMemoryUpdates(companionId, updates, options
     sourceMemoryIds: sourceMemoryIds?.filter(id => !targets.includes(id)) ?? null,
   });
 
+  const prepared = [];
   for (const m of (updates.new_memories || [])) {
     const targets = m.replaces_memory_ids ?? [];
     if (!inputsStillValid() || !validTargets(targets)) { rejected++; continue; }
@@ -179,11 +180,7 @@ export async function applyReflectionMemoryUpdates(companionId, updates, options
       if (!legacyTypeForLayer(m.memory_layer)) {
         rejected++; log('warn', formatReflectRejectMapping(companionId, m.memory_layer)); continue;
       }
-      const result = saveGroundedMemory(groundedInput(m, targets, m.content, m.memory_layer));
-      if (result.action === 'inserted' || result.action === 'corrected') {
-        inserted++; graphAdmitted(result);
-        await indexMemory(result.memory.id, companionId, userId);
-      } else if (result.action !== 'duplicate') rejected++;
+      prepared.push({ kind: 'insert', input: groundedInput(m, targets, m.content, m.memory_layer) });
     } catch (e) {
       rejected++; log('warn', formatReflectInsertFail(companionId, e.message));
     }
@@ -198,15 +195,31 @@ export async function applyReflectionMemoryUpdates(companionId, updates, options
         ? existing.source_memory_ids : JSON.parse(existing.source_memory_ids || '[]');
       input.sourceMemoryIds = [...new Set([...priorSources, ...(input.sourceMemoryIds || [])])]
         .filter(id => id !== u.memory_id);
-      const result = updateGroundedMemory(u.memory_id, input);
-      if (result.action === 'corrected') {
-        updated++; graphAdmitted(result);
-        await indexMemory(result.memory.id, companionId, userId);
-      } else if (result.action !== 'duplicate') rejected++;
+      prepared.push({ kind: 'update', input });
     } catch (e) {
       rejected++; log('warn', '[Reflection] grounded update 失败 id=' + u.memory_id + ': ' + e.message);
     }
   }
+
+  // Validate and save the complete generation before its own corrections move
+  // the evidence cutoff. No provider awaits occur inside the transaction.
+  const indexed = [];
+  try {
+    const results = saveGroundedMemories(prepared.map(entry => entry.input));
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i];
+      if (result.action === 'inserted' || result.action === 'corrected') {
+        if (prepared[i].kind === 'update') updated++;
+        else inserted++;
+        graphAdmitted(result);
+        indexed.push(result.memory.id);
+      } else if (result.action !== 'duplicate') rejected++;
+    }
+  } catch (e) {
+    rejected += prepared.length;
+    log('warn', formatReflectInsertFail(companionId, e.message));
+  }
+  for (const id of indexed) await indexMemory(id, companionId, userId);
 
   const merged = 0; // Exact duplicates are inert; they never strengthen a prior fact.
   log('info', '[Reflection] companion=' + companionId + ' candidates=' + candidates + ' inserted=' + inserted + ' merged=0 rejected=' + rejected + ' updated=' + updated);

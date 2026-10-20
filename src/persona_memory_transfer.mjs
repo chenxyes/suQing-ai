@@ -1,6 +1,7 @@
 /** Portable memory records. JSON declares history; only explicit offline review trusts it. */
 import { validateMemoryEvidence } from './memory_provenance.mjs';
 import { filterForStorage } from './privacy_filter.mjs';
+import { isMemoryRecallable, memorySourceIds, filterRecallableMemoryRows } from './memory_admission.mjs';
 
 export const MEMORY_FIELDS = ['id', 'memory_type', 'memory_layer', 'content', 'importance', 'memory_weight', 'memory_status',
   'memory_source', 'memory_subject', 'memory_evidence', 'memory_origin', 'origin_metadata', 'pinned', 'locked',
@@ -145,6 +146,7 @@ export function validateMemoryTransfer(payload) {
 export function importMemoryTransfer(db, companionId, userId, payload, { trustReviewedHistory = false } = {}) {
   const isV2 = payload.schema === 'xiyu_companion_export_v2';
   const turnMap = new Map(), memoryMap = new Map(), importedTurns = new Map();
+  const verifiedIds = new Set(), derivedCandidates = new Set();
   const rows = payload.core_memories || [], now = new Date().toISOString();
   let quarantined = 0;
   if (isV2) {
@@ -207,6 +209,12 @@ export function importMemoryTransfer(db, companionId, userId, payload, { trustRe
       transfer_import: { schema: payload.schema, trust: trustReviewedHistory ? 'reviewed' : 'unverified',
         declared_recall_blocked: original.recall_blocked ?? 0, unresolved_references: unresolved,
         evidence_validated: !!checked && checked.content === row.content } });
+    if (checked?.content === row.content) verifiedIds.add(row.id);
+    // Compacted summaries retain their subject but are not verbatim quotes.
+    // Defer proof until every mapped source has been imported and checked.
+    if (isV2 && trustReviewedHistory && !original.recall_blocked && !unresolved && unproven
+      && row.memory_evidence == null && (row.memory_layer === 'summary' || /_summary$/.test(row.memory_type))
+      && memorySourceIds(row.source_memory_ids)?.length) derivedCandidates.add(row.id);
     if (row.recall_blocked) quarantined++;
     update.run(row);
   }
@@ -215,6 +223,35 @@ export function importMemoryTransfer(db, companionId, userId, payload, { trustRe
   const cutoff = [...turnMap].reduce((highest, [oldId, id]) => oldId <= (barrier?.turn_id_cutoff ?? 0) ? Math.max(highest, id) : highest, 0);
   if (barrier) db.prepare('INSERT INTO memory_recall_barriers(companion_id,user_id,revision,revoked_at,turn_id_cutoff) VALUES(?,?,?,?,?)')
     .run(companionId, String(userId), revision, barrier.revoked_at ?? now, cutoff);
+  if (derivedCandidates.size) {
+    const records = db.prepare('SELECT * FROM companion_memories WHERE companion_id=? AND user_id=?').all(companionId, userId)
+      .map(row => derivedCandidates.has(row.id) ? { ...row, recall_blocked: 0 } : row);
+    const byId = new Map(records.map(row => [row.id, row]));
+    const admitted = new Set(filterRecallableMemoryRows(records, {
+      recallRevision: revision, hasRevocations: revision > 0 || records.some(row => !isMemoryRecallable(row)),
+    }).map(row => row.id));
+    const memo = new Map(), visiting = new Set();
+    const proven = (id, subject) => {
+      const row = byId.get(id);
+      if (!admitted.has(id) || row?.memory_subject !== subject || subject === 'unknown' || visiting.has(id)) return false;
+      if (memo.has(id)) return memo.get(id);
+      if (!verifiedIds.has(id) && !derivedCandidates.has(id)) return false;
+      visiting.add(id);
+      const sources = memorySourceIds(row.source_memory_ids);
+      const valid = sources !== false && (sources || []).every(sourceId => proven(sourceId, subject));
+      visiting.delete(id); memo.set(id, valid);
+      return valid;
+    };
+    for (const id of derivedCandidates) {
+      const row = byId.get(id);
+      if (!proven(id, row.memory_subject)) continue;
+      const origin = JSON.parse(row.origin_metadata);
+      origin.transfer_import.derived_sources_validated = true;
+      db.prepare('UPDATE companion_memories SET recall_blocked=0,origin_metadata=? WHERE id=?')
+        .run(JSON.stringify(origin), id);
+      quarantined--;
+    }
+  }
   return { importedMemories: rows.length, importedEvidenceTurns: turnMap.size, quarantinedMemories: quarantined,
     warnings: quarantined ? ['Imported history contains quarantined records; declared subjects are not proof of historical truth.'] : [] };
 }
