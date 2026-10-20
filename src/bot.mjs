@@ -299,9 +299,8 @@ function computeReplyDelay(text) {
   return Math.max(REPLY_DELAY_MIN_MS, Math.min(REPLY_DELAY_MAX_MS, base + jitter));
 }
 
-// 把 AI 回复按 || 拆成多条短消息 + 强制后处理（去 kaomoji、长段拆分）
+// 保留模型给出的段落/显式分段，最多四条消息；超额内容合并而不截断。
 const MAX_SEGMENTS = 4;
-const MAX_SEG_LEN = 25;  // 单段强制上限（超过会再拆）
 
 // kaomoji 标识符（含这些字符的括号内容必删）
 const KAOMOJI_INNER_CHARS = /[ω♥♡♬♪σ＞＜ヽノ٩ʕɞ´`¸∇∀＾·•・˘ﾟ]/;
@@ -333,74 +332,20 @@ function postProcessReply(reply) {
   text = text.replace(/[?？]{2,}/g, '？');
   text = text.replace(/[…\.]{4,}/g, '…');
   text = text.replace(/～+/g, '～').replace(/~+/g, '~');  // 波浪线归一
-  // 注意：换行先保留 — v1.10.13 用它做最高优先级分段
+  // 保留换行，由发送分段处理；不按正文长度或句末标点自动拆分。
   text = text.replace(/[ \t]+/g, ' ').replace(/^[ \t]+|[ \t]+$/gm, '').trim();
-
-  // v1.10.13: 优先用 AI 输出的换行作为段落分隔（最自然、最少破坏语义）。
-  // 之前 postProcessReply 完全不看 \n —— AI 用换行分了完美 3 段，被整串塞进
-  // splitReplySegments 二次处理 → 没 || 也没句末标点 → 落到按 25 字硬切 →
-  // 把「怎么一点都不|听话」这种短语腰斩成两段。
-  if (/\n/.test(text) && !/\|\|/.test(text)) {
-    const lines = text.split(/\n+/).map(s => s.trim()).filter(Boolean);
-    if (lines.length >= 2 && lines.length <= MAX_SEGMENTS && lines.every(l => l.length <= 60)) {
-      return lines.join('||');
-    }
-  }
-
-  // 没有 || 但 > 20 字 → 按句尾自动拆
-  if (!/\|\|/.test(text) && text.length > 20) {
-    const parts = text.split(/(?<=[。！？!?])/).map(s => s.trim()).filter(Boolean);
-    if (parts.length > 1) {
-      text = parts.slice(0, MAX_SEGMENTS).join('||');
-    }
-  }
   return text;
 }
 
 function splitReplySegments(reply) {
   if (!reply || typeof reply !== 'string') return [reply || ''];
-  // 先后处理（去 kaomoji + 长段自动拆）
+  // 保留既有 kaomoji、标点和空白清理。
   const processed = postProcessReply(reply);
-  // 支持半角 ||、全角 ｜｜
-  let raw = processed.split(/\s*(?:\|\||｜｜)\s*/g).map(s => s.trim()).filter(Boolean);
+  // 支持半角 ||、全角 ｜｜及段落换行，不在句子或 URL 中间新增边界。
+  const raw = processed.split(/\s*(?:\|\||｜｜|\r?\n+)\s*/g).map(s => s.trim()).filter(Boolean);
   if (raw.length === 0) return [processed.trim()];
-
-  // 二次强制：每段超过 MAX_SEG_LEN 字 → 按内部句末标点再拆
-  // v1.10.13: 取消按 `，`/`,` 拆 —— 中文逗号是子句分隔，按它切会腰斩主谓宾
-  // （比如「她说，他来了」会被切成「她说，」「他来了」）。
-  const expanded = [];
-  for (const seg of raw) {
-    if (seg.length <= MAX_SEG_LEN) { expanded.push(seg); continue; }
-    const subs = seg.split(/(?<=[。！？!?])/).map(s => s.trim()).filter(Boolean);
-    if (subs.length > 1) {
-      // 累计拼回去，每个 sub 不超过 MAX
-      let cur = '';
-      for (const s of subs) {
-        if ((cur + s).length > MAX_SEG_LEN && cur) {
-          expanded.push(cur);
-          cur = s;
-        } else {
-          cur += s;
-        }
-      }
-      if (cur) expanded.push(cur);
-    } else {
-      // v1.10.13: 没分隔符的长段，宁愿整段发也不腰斩 —— 用户看一条长消息
-      // 比看「怎么一点都不」「听话」这种诡异腰斩好得多。
-      expanded.push(seg);
-    }
-  }
-  raw = expanded;
-
-  // v1.10.13: 兜底合并 — 末段 < 3 字时合并到上一段，避免「听话」式 hard-slice 残尾。
-  // 阈值刻意保守，让 AI 主动用 || 分的「好的」「明白了」这种短确认段能保留。
-  while (raw.length >= 2 && raw[raw.length - 1].length < 3) {
-    const tail = raw.pop();
-    raw[raw.length - 1] = `${raw[raw.length - 1]}${tail}`;
-  }
-
   if (raw.length > MAX_SEGMENTS) {
-    return [...raw.slice(0, MAX_SEGMENTS - 1), raw.slice(MAX_SEGMENTS - 1).join('')];
+    return [...raw.slice(0, MAX_SEGMENTS - 1), raw.slice(MAX_SEGMENTS - 1).join('\n')];
   }
   return raw;
 }
