@@ -10,6 +10,7 @@
  */
 
 import { log } from './logger.mjs';
+import { indexMemory } from './memory_indexing.mjs';
 import { getDb, getConversationTurnsBetween, shanghaiBoundsForDateKey, shanghaiDateKey } from './db.mjs';
 import { extractStructuredInfo } from './ai.mjs';
 import {
@@ -181,6 +182,7 @@ export async function applyReflectionMemoryUpdates(companionId, updates, options
       const result = saveGroundedMemory(groundedInput(m, targets, m.content, m.memory_layer));
       if (result.action === 'inserted' || result.action === 'corrected') {
         inserted++; graphAdmitted(result);
+        await indexMemory(result.memory.id, companionId, userId);
       } else if (result.action !== 'duplicate') rejected++;
     } catch (e) {
       rejected++; log('warn', formatReflectInsertFail(companionId, e.message));
@@ -199,6 +201,7 @@ export async function applyReflectionMemoryUpdates(companionId, updates, options
       const result = updateGroundedMemory(u.memory_id, input);
       if (result.action === 'corrected') {
         updated++; graphAdmitted(result);
+        await indexMemory(result.memory.id, companionId, userId);
       } else if (result.action !== 'duplicate') rejected++;
     } catch (e) {
       rejected++; log('warn', '[Reflection] grounded update 失败 id=' + u.memory_id + ': ' + e.message);

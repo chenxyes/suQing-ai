@@ -11,7 +11,7 @@
 
 import { parseMessage, sendTextMessage, sendTyping, sendMessageItem, rememberContextToken, peekSendQuota } from './ilink.mjs';
 import { stripCurrentTurnFromHistory, isProtocolDuplicate } from './inbound_dedup.mjs';   // v1.21.4 #279
-import { generateReply, recognizeImage, embedText } from './ai.mjs';
+import { generateReply, recognizeImage, embedTextWithDescriptor } from './ai.mjs';
 import { isChatFallback } from './chat_response.mjs';
 import { downloadInboundVoiceToMp3 } from './voice_inbound.mjs';
 import { analyzeVoiceWithQwen } from './voice_emotion.mjs';
@@ -21,7 +21,7 @@ import {
   isIntentCooled, isAck, buildIntentDedupHint, pickMicroAck,
 } from './intent_dedup.mjs';
 import {
-  saveMessage, getRecentHistory, findRecentInboundCandidate, getUserProfileForRecall, recallMemories, recallMemoriesSemantic,
+  saveMessage, getRecentHistory, findRecentInboundCandidate, getUserProfileForRecall, recallMemoriesHybrid, touchRecalledMemories,
   getConversationContext, saveConversationTurn,
   getActiveWechatBinding, getCompanionById, consumePendingBindSessionForWechat,
   isAccountBanned, getDailySchedule, shanghaiDateKey, getRecentSchedules, getPersonaFacts,
@@ -764,24 +764,15 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
       log('warn', `[Safety] detect failed companion=${companion.id}: ${e.message}`);
     }
 
-    // ── 召回长期记忆：优先语义检索，失败兜底关键词 ─────────────────────────
+    // ── 召回长期记忆：语义与关键词共同排序 ─────────────────────────
     let memories = [];
     if (companion.memory_enabled) {
-      try {
-        const qEmb = await embedText(userText);
-        if (qEmb) {
-          memories = recallMemoriesSemantic(companion.id, companion.user_id, qEmb, 7);
-          if (memories.length === 0) {
-            memories = recallMemories(companion.id, companion.user_id, userText, 7);
-          }
-        } else {
-          memories = recallMemories(companion.id, companion.user_id, userText, 7);
-        }
-      } catch (e) {
-        log('warn', `[Bot] semantic recall 失败, 退回关键词: ${e.message}`);
-        memories = recallMemories(companion.id, companion.user_id, userText, 7);
-      }
+      let queryEmbedding = null;
+      try { queryEmbedding = await embedTextWithDescriptor(userText); }
+      catch (e) { log('warn', '[Memory] query embedding unavailable'); }
+      memories = recallMemoriesHybrid(companion.id, companion.user_id, userText, { queryEmbedding, limit: 7 });
     }
+
     const userProfile = getUserProfileForRecall(companion.user_id, companion.id);
     // v1.2.10: 10 → 16 轮，对话连续感明显更好；companion.mjs 系统提示里的
     // slice 已同步上调到 -16，多取的 6 轮全部进 prompt。
@@ -994,6 +985,7 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
     let reply;
     // ★ 危机干预：检测到自伤/自杀(结合最近多轮上下文) → 退出角色、直接给求助资源，覆盖 LLM，绝不继续演
     // （v1.21: _crisisLevel 的检测已前置到 arc tick 之前——危机下 arc 冷淡表达被挂起）
+    if (_crisisLevel !== 'high') touchRecalledMemories(companion.id, companion.user_id, memories.map(row => row.id));
     const genReplyOnce = () => _crisisLevel === 'high'
       ? buildCrisisReply()
       : generateReply(

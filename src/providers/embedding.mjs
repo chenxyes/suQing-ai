@@ -6,10 +6,10 @@
 import { createHash } from 'node:crypto';
 import { log } from '../logger.mjs';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { customConfig, customEmbedding, readProviderSetting as setting } from './custom.mjs';
+import { customConfig, readProviderSetting as setting } from './custom.mjs';
 
 const NATIVE = {
-  gemini: { key: 'GEMINI_API_KEY', model: 'gemini-embedding-001' },
+  gemini: { key: 'GEMINI_API_KEY', model: 'gemini-embedding-001', baseURL: 'https://generativelanguage.googleapis.com/v1beta' },
   openai: { key: 'OPENAI_API_KEY', model: 'text-embedding-3-small', baseURL: 'https://api.openai.com/v1' },
   zhipu: { key: 'ZHIPU_API_KEY', model: 'embedding-3', baseURL: 'https://open.bigmodel.cn/api/paas/v4' },
   qwen: { key: 'QWEN_API_KEY', model: 'text-embedding-v3', baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
@@ -85,7 +85,6 @@ function validateVector(vector, dim) {
 }
 async function requestVector(config, text, timeoutMs) {
   const { id, apiKey, model, dim, baseURL } = config;
-  if (id === 'custom') return customEmbedding(text, { timeoutMs });
   if (id === 'gemini') {
     const client = new GoogleGenerativeAI(apiKey).getGenerativeModel({ model }, { signal: AbortSignal.timeout(timeoutMs) });
     const result = await client.embedContent({ content: { parts: [{ text }] }, outputDimensionality: dim });
@@ -94,7 +93,7 @@ async function requestVector(config, text, timeoutMs) {
   const response = await fetch(`${baseURL}/embeddings`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, input: text, dimensions: dim }),
+    body: JSON.stringify({ model, input: text, ...(dim === null ? {} : { dimensions: dim }) }),
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) {
@@ -104,16 +103,28 @@ async function requestVector(config, text, timeoutMs) {
   return (await response.json())?.data?.[0]?.embedding;
 }
 
+function descriptorFor(config, dimension = config.dim) {
+  return { version: 1, provider: config.id, model: config.model, dimension,
+    endpointId: createHash('sha256').update(config.baseURL).digest('hex') };
+}
+
+/** Public space configuration; custom dimensions are only known after a response. */
+export function getEmbeddingSpaceConfig() {
+  const { config, error } = resolveConfig();
+  return error ? null : descriptorFor(config);
+}
+
 async function runEmbedding(text, timeoutMs) {
   const { config, error, identity } = resolveConfig();
   const health = healthFor(identity);
   try {
     if (error) { health.blocked++; throw error; }
     health.attempts++;
-    const vector = validateVector(await requestVector(config, text, timeoutMs), config.dim);
+    const vector = validateVector(await requestVector(config, text.trim().slice(0, 2000), timeoutMs), config.dim);
     health.state = 'ok'; health.successes++; health.last_error = null;
     health.last_success_at = new Date().toISOString();
-    return vector;
+    return { vector, descriptor: descriptorFor(config, vector.length),
+      contentHash: createHash('sha256').update(text).digest('hex') };
   } catch (err) {
     const safe = safeError(err);
     health.state = error ? 'blocked' : 'error';
@@ -124,8 +135,13 @@ async function runEmbedding(text, timeoutMs) {
 }
 
 export async function embedText(text) {
+  return (await embedTextWithDescriptor(text))?.vector ?? null;
+}
+
+/** Descriptor and content hash come from this request, never from later settings. */
+export async function embedTextWithDescriptor(text) {
   if (typeof text !== 'string' || !text.trim()) return null;
-  try { return await runEmbedding(text.trim().slice(0, 2000), 30_000); }
+  try { return await runEmbedding(text, 30_000); }
   catch { return null; }
 }
 
@@ -141,6 +157,6 @@ export function getActiveEmbeddingProvider() {
 export async function testEmbeddingProvider(provider) {
   if (provider !== getActiveEmbeddingProvider().id) throw problem('provider_mismatch', '请先保存所选向量 provider，再测试当前配置');
   const started = Date.now();
-  const vector = await runEmbedding('connection test', 15_000);
+  const { vector } = await runEmbedding('connection test', 15_000);
   return { ok: true, provider, dim: vector.length, latency_ms: Date.now() - started };
 }

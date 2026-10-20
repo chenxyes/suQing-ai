@@ -13,6 +13,8 @@ import { estimateProviderCost, loadProviderPricing } from './provider_costs.mjs'
 import { filterForStorage, redactSensitiveInfo, replaceUserWording } from './privacy_filter.mjs';
 import { isMemoryRecallable, memorySourceIds, filterRecallableMemoryRows } from './memory_admission.mjs';
 import { validateMemoryEvidence, normalizedMemoryClaim, isRelatedExplicitCorrection } from './memory_provenance.mjs';
+import { validMemoryVector, storedMemoryVector, sameEmbeddingSpace, memoryCosine } from './memory_vectors.mjs';
+import { rankMemoryCandidates } from './memory_retrieval.mjs';
 
 const DB_PATH = process.env.DB_PATH || path.resolve(process.cwd(), 'data/bot.db');
 // 确保 data 目录存在
@@ -1516,6 +1518,8 @@ function migrateMemoryV3() {
 
 // A durable barrier keeps hard deletion/restoration from silently re-approving old derivatives.
 function migrateMemoryAdmission() {
+  addColIfMissing('companion_memories', 'embedding_meta', 'TEXT');
+  addColIfMissing('companion_memories', 'compacted_into', 'INTEGER');
   addColIfMissing('companion_memories', 'memory_subject', "TEXT DEFAULT 'unknown'");
   addColIfMissing('companion_memories', 'memory_evidence', 'TEXT');
   db.exec(`CREATE TABLE IF NOT EXISTS user_profile_evidence (
@@ -3684,7 +3688,7 @@ function prepareMemoryContent(companionId, content, keywords = null) {
   return { content: final.text, keywords: checkedKeywords?.text ?? null, changed: final.text !== content };
 }
 
-export function saveMemory({ companionId, userId, memoryType, content, importance = 5, keywords = null, embedding = null, pinned = null,
+export function saveMemory({ companionId, userId, memoryType, content, importance = 5, keywords = null, embedding = null, embeddingMeta = null, pinned = null,
   memorySource = null, memoryLayer = null, memoryWeight = null, sourceMemoryIds = null, expectedRecallRevision = null }) {
   const prepared = prepareMemoryContent(companionId, content, keywords);
   if (!prepared) return null;
@@ -3694,6 +3698,7 @@ export function saveMemory({ companionId, userId, memoryType, content, importanc
     if (expectedRecallRevision != null && owner && String(owner.user_id) !== String(userId)) return null;
     const revision = getMemoryRecallBarrier(companionId, userId).revision;
     if (expectedRecallRevision != null && revision !== expectedRecallRevision) return null;
+    if (embeddingMeta && !validMemoryVector({...embeddingMeta,vector:embedding},content)) return null;
     const sources = memorySourceIds(sourceMemoryIds);
     if (sources === false) return null;
     if (sources) {
@@ -3708,8 +3713,25 @@ export function saveMemory({ companionId, userId, memoryType, content, importanc
     if (memorySource != null) { cols.push('memory_source'); vals.push(memorySource); }
     if (memoryLayer != null) { cols.push('memory_layer'); vals.push(memoryLayer); }
     if (memoryWeight != null) { cols.push('memory_weight'); vals.push(memoryWeight); }
+    if (embeddingMeta && !prepared.changed) { cols.push('embedding_meta'); vals.push(JSON.stringify(embeddingMeta)); }
     const inserted = db.prepare(`INSERT INTO companion_memories (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(...vals);
     return Number(inserted.lastInsertRowid);
+  })();
+}
+
+/** Compare-and-set only the vector of a still eligible, unchanged memory. */
+export function writeMemoryEmbedding(memoryId,companionId,userId,result,{expectedContent,expectedRecallRevision}={}) {
+  if (!Number.isSafeInteger(expectedRecallRevision) || !validMemoryVector(result,expectedContent)) return false;
+  return getDb().transaction(()=>{
+    const owner=getDb().prepare('SELECT user_id FROM companions WHERE id=?').get(companionId);
+    if(!owner || String(owner.user_id)!==String(userId)
+      || getMemoryRecallBarrier(companionId,userId).revision!==expectedRecallRevision)return false;
+    const row=getRecallableMemories(companionId,userId).find(item=>item.id===memoryId);
+    if(!row || row.content!==expectedContent || !validMemoryVector(result,row.content))return false;
+    const meta={descriptor:result.descriptor,contentHash:result.contentHash};
+    getDb().prepare('UPDATE companion_memories SET embedding=?,embedding_meta=? WHERE id=? AND companion_id=? AND user_id=?')
+      .run(packEmbedding(result.vector),JSON.stringify(meta),memoryId,companionId,userId);
+    return true;
   })();
 }
 
@@ -3826,23 +3848,24 @@ function cosineSimilarity(a, b) {
   return dot / (Math.sqrt(na) * Math.sqrt(nb));
 }
 
-/**
- * 语义召回：当 queryEmbedding 提供时，在 (companion, user) 范围内按余弦相似度排序。
- * importance 加权：score = similarity * 0.7 + (importance / 10) * 0.3
- * pinned=1 的额外 +0.15 分（确保关键记忆优先）
- */
+/** Semantic-only compatibility entry point; untagged arrays fail closed. */
 export function recallMemoriesSemantic(companionId, userId, queryEmbedding, limit = 7) {
-  const rows = getRecallableMemories(companionId, userId).filter(row => row.embedding != null);
-  const qf = new Float32Array(queryEmbedding);
-  return rows.map(row => {
-    const sim = cosineSimilarity(qf, unpackEmbedding(row.embedding));
-    const score = sim * 0.7 + ((row.importance || 5) / 10) * 0.3 + (row.pinned ? 0.15 : 0);
-    return { ...row, similarity: sim, score };
-  }).sort((a,b) => b.score-a.score).slice(0, Math.max(0,limit));
+  if(!validMemoryVector(queryEmbedding))return [];
+  return ordinaryMemoryRows(companionId,userId).flatMap(row=>{
+    const stored=storedMemoryVector(row);
+    if(!stored || !sameEmbeddingSpace(stored.descriptor,queryEmbedding.descriptor))return [];
+    const similarity=memoryCosine(stored.vector,queryEmbedding.vector);
+    return similarity==null?[]:[{...row,similarity,score:similarity}];
+  }).sort((a,b)=>b.score-a.score||b.id-a.id).slice(0,Math.max(0,limit));
+}
+
+function ordinaryMemoryRows(companionId,userId) {
+  const rows=getRecallableMemories(companionId,userId);const ids=new Set(rows.map(row=>row.id));
+  return rows.filter(row=>!row.compacted_into || !ids.has(row.compacted_into));
 }
 
 export function getMemories(companionId, userId, limit = 50) {
-  return getRecallableMemories(companionId,userId).slice(0,Math.max(0,limit));
+  return ordinaryMemoryRows(companionId,userId).slice(0,Math.max(0,limit));
 }
 
 /**
@@ -3856,10 +3879,34 @@ export function getMemories(companionId, userId, limit = 50) {
  *   limit: 单次最多拉多少条，防 LLM context 爆（默认 200）
  * @returns 数组：{ id, memory_type, content, created_at, ... }
  */
-export function listEpisodicMemoriesOlderThan({ companionId, userId, beforeDateIso, limit = 200 }) {
+export function listEpisodicMemoriesOlderThan({ companionId, userId, beforeDateIso, limit = 200, afterId = 0, upperId = Number.MAX_SAFE_INTEGER }) {
   return getRecallableMemories(companionId,userId).filter(row => ['fact','event','emotion'].includes(row.memory_type)
-    && !row.pinned && Date.parse(row.created_at) < Date.parse(beforeDateIso))
-    .sort((a,b) => a.created_at.localeCompare(b.created_at)).slice(0,limit);
+    && !row.pinned && !row.locked && !row.compacted_into && row.id>afterId && row.id<=upperId
+    && Date.parse(/Z$|[+-]\d\d:\d\d$/.test(row.created_at)?row.created_at:row.created_at.replace(' ','T')+'Z') < Date.parse(beforeDateIso))
+    .sort((a,b) => a.id-b.id).slice(0,limit);
+}
+
+/** Summarize without destroying the evidence required by derived memories. */
+export function compactMemories({companionId,userId,sourceIds,content,expectedRecallRevision}) {
+  const ids=memorySourceIds(sourceIds);
+  if(!ids || ids.length<3 || ids.length>200 || !Number.isSafeInteger(expectedRecallRevision))return null;
+  return getDb().transaction(()=>{
+    if(getMemoryRecallBarrier(companionId,userId).revision!==expectedRecallRevision)return null;
+    const rows=getRecallableMemories(companionId,userId);const sources=ids.map(id=>rows.find(row=>row.id===id));
+    if(sources.some(row=>!row || row.locked || row.pinned || !['fact','event','emotion'].includes(row.memory_type)))return null;
+    if(sources.every(row=>row.compacted_into && row.compacted_into===sources[0].compacted_into)){
+      const summary=rows.find(row=>row.id===sources[0].compacted_into);
+      const previous=memorySourceIds(summary?.source_memory_ids);
+      return summary && previous?.length===ids.length && previous.every(id=>ids.includes(id))?summary:null;
+    }
+    if(sources.some(row=>row.compacted_into))return null;
+    const summaryId=saveMemory({companionId,userId,memoryType:'monthly_summary',memoryLayer:'summary',memorySource:'summary',
+      content,importance:10,pinned:false,sourceMemoryIds:ids,expectedRecallRevision});
+    if(!summaryId)return null;
+    const update=getDb().prepare('UPDATE companion_memories SET compacted_into=? WHERE id=? AND companion_id=? AND user_id=?');
+    for(const id of ids)update.run(summaryId,id,companionId,userId);
+    return getDb().prepare('SELECT * FROM companion_memories WHERE id=?').get(summaryId);
+  })();
 }
 
 /**
@@ -3879,15 +3926,23 @@ export function deleteMemoriesByIds(ids) {
 }
 
 export function recallMemories(companionId, userId, currentMessage, limit = 7) {
-  const rows = getRecallableMemories(companionId,userId);
-  const keywords = (currentMessage || '').replace(/[^一-龥a-zA-Z0-9]/g,' ').split(/\s+/)
-    .filter(word => word.length >= 2).slice(0,4).map(word => word.toLowerCase());
-  const pinnedRows = rows.filter(row => row.pinned === 1).slice(0,5);
-  const seen = new Set(pinnedRows.map(row => row.id));
-  const keywordRows = rows.filter(row => keywords.some(word => row.content.toLowerCase().includes(word)))
-    .slice(0,limit).filter(row => !seen.has(row.id));
-  keywordRows.forEach(row => seen.add(row.id));
-  return [...pinnedRows,...keywordRows,...rows.filter(row => !seen.has(row.id))].slice(0,Math.max(0,limit));
+  return recallMemoriesHybrid(companionId,userId,currentMessage,{limit});
+}
+
+export function recallMemoriesHybrid(companionId,userId,message,options={}) {
+  const rows=rankMemoryCandidates(getRecallableMemories(companionId,userId),message,options);
+  if(options.touch===true)touchRecalledMemories(companionId,userId,rows.map(row=>row.id));
+  return rows;
+}
+
+export function touchRecalledMemories(companionId,userId,ids) {
+  if(!Array.isArray(ids))return 0;
+  const eligible=new Set(ordinaryMemoryRows(companionId,userId).map(row=>row.id));
+  return getDb().transaction(()=>{
+    let count=0;
+    for(const id of new Set(ids)){if(!eligible.has(id))continue;touchMemory(id,companionId);count++;}
+    return count;
+  })();
 }
 
 export function deleteMemory(memoryId, companionId) {
@@ -4885,7 +4940,7 @@ export function patchMemory(memoryId, companionId, fields, { expectedRecallRevis
       const prepared = prepareMemoryContent(companionId,next.content ?? previous.content,next.keywords ?? previous.keywords);
       if (!prepared) return null;
       next.content = prepared.content; next.keywords = prepared.keywords;
-      if (next.content !== previous.content) next.embedding = null;
+      if (next.content !== previous.content) { next.embedding = null; next.embedding_meta = null; }
     }
     if ('source_memory_ids' in next) {
       const sources = memorySourceIds(next.source_memory_ids);

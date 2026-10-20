@@ -60,6 +60,15 @@ jobs:
           node scripts/memory_subject_prompt_check.mjs
           node scripts/memory_provenance_audit_check.mjs
 
+      - name: 记忆向量、混合召回与维护回归
+        run: |
+          node scripts/memory_retrieval_check.mjs
+          node scripts/memory_retrieval_review_check.mjs
+          node scripts/memory_indexing_check.mjs
+          node scripts/memory_vector_backfill_check.mjs
+          node --experimental-vm-modules scripts/memory_maintenance_check.mjs
+          node scripts/memory_runtime_check.mjs
+
       - name: Fish Audio 原生 TTS 回归
         run: node scripts/fish_tts_check.mjs
 

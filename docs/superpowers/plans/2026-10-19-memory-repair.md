@@ -45,7 +45,8 @@
 **Files:** `src/db.mjs`、`src/memory.mjs`、`src/plan_tasks.mjs`、新回填脚本、维护测试。
 **Dependencies:** Tasks 1–3；真实回填还需要合法凭据和用户部署授权。
 **Acceptance criteria:** provider/model/dimension 可追溯，异构向量不混算；回填默认 dry-run、显式目标副本、可续跑、不恢复已撤销记录；关键词/无向量记忆不被语义路径遗漏；中文相关性、置顶配额、衰减与 recall touch 生效；压缩 importance 在 1..10 且事务避免源记录丢失；日摘要前的上下文保留足够证据，分页衰减不饥饿。
-- [ ] 合成数据和离线快照副本验证；记录在线验证前提。
+- [x] 合成数据和离线快照副本验证；记录在线验证前提。
+- [x] 用户于 2026-10-20 接受本地修复并授权提交；审阅说明见 `2026-10-20-memory-repair-review-4.md`。
 
 ### Task 5: 未成年人判定中的事实主体
 

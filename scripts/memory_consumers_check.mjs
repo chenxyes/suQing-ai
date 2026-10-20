@@ -77,6 +77,7 @@ async function load(file) {
   await mod.link(async spec => {
     if (spec === './memory_v2.mjs') return load('memory_v2.mjs');
     if (spec === './privacy_filter.mjs') return load('privacy_filter.mjs');
+    if (['./memory_vectors.mjs', './memory_retrieval.mjs', './memory_indexing.mjs'].includes(spec)) return load(spec.slice(2));
     if (spec === './memory_admission.mjs') {
       try { return await load('memory_admission.mjs'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
     }
@@ -84,10 +85,12 @@ async function load(file) {
       .filter(match => match[2] === spec).flatMap(match => match[1].replace(/\/\/[^\n]*/g, '').split(',').map(s => s.trim().split(/\s+as\s+/)[0]).filter(Boolean));
     const values = {};
     for (const key of matches) values[key] = () => { throw new Error(`unexpected boundary ${spec}:${key}`); };
+    if (spec.startsWith('node:')) Object.assign(values, await import(spec));
     if (spec === './db.mjs') Object.assign(values, dbFns);
     if (spec === './memory_admission.mjs') Object.assign(values, { isMemoryRecallable: basic, filterRecallableMemoryRows: rows => rows.filter(basic) });
     if (spec === './ai.mjs') Object.assign(values, {
       embedText: async () => { onEmbed(); return embedResult; },
+      embedTextWithDescriptor: async () => { onEmbed(); return embedResult; },
       generateReply: async (_system, _history, input) => { prompts.push(input); onModel(); return modelResult; },
       extractStructuredInfo: async (_system, input) => { prompts.push(input); onModel(); return modelResult; },
     });

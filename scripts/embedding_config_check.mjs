@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 
 const dir = mkdtempSync(path.join(tmpdir(), 'embedding-config-'));
 process.env.DB_PATH = path.join(dir, 'bot.db');
@@ -29,6 +30,42 @@ function reset() {
   };
 }
 try {
+  await test('descriptor binds full original content and request space without exposing credentials', async () => {
+    reset();
+    assert.equal(typeof embedding.embedTextWithDescriptor, 'function');
+    const text = `  ${'x'.repeat(2100)}  `;
+    const result = await embedding.embedTextWithDescriptor(text);
+    assert.equal(result.contentHash, createHash('sha256').update(text).digest('hex'));
+    assert.deepEqual(result.descriptor, { version: 1, provider: 'openai', model: 'text-embedding-3-small', dimension: 768,
+      endpointId: createHash('sha256').update('https://api.openai.com/v1').digest('hex') });
+    assert.equal(JSON.parse(calls[0].body).input.length, 2000);
+    assert.ok(!JSON.stringify(result).includes('fixture-env-key'));
+    setAppSetting('OPENAI_API_KEY', 'rotated-fixture-key');
+    assert.deepEqual((await embedding.embedTextWithDescriptor(text)).descriptor, result.descriptor,
+      'credential rotation does not change the vector space');
+  });
+  await test('custom request response keeps its original model and endpoint across a settings change', async () => {
+    reset();
+    assert.equal(typeof embedding.embedTextWithDescriptor, 'function');
+    saveCustomProviderConfig('embedding', { base_url: 'https://fixture.invalid/old/', api_key: 'old-fixture-key', model: 'old-model' });
+    let release;
+    globalThis.fetch = async (url, options) => {
+      calls.push({ url, ...options });
+      return await new Promise(resolve => { release = () => resolve(Response.json({ data: [{ embedding: [1, 2, 3] }] })); });
+    };
+    const pending = embedding.embedTextWithDescriptor('canonical claim');
+    assert.equal(calls[0].url, 'https://fixture.invalid/old/embeddings');
+    assert.equal(JSON.parse(calls[0].body).model, 'old-model');
+    saveCustomProviderConfig('embedding', { base_url: 'https://fixture.invalid/new', api_key: 'new-fixture-key', model: 'new-model' });
+    release();
+    const result = await pending;
+    assert.deepEqual(result.vector, [1, 2, 3]);
+    assert.deepEqual(result.descriptor, { version: 1, provider: 'custom', model: 'old-model', dimension: 3,
+      endpointId: createHash('sha256').update('https://fixture.invalid/old').digest('hex') });
+    assert.equal(embedding.getEmbeddingSpaceConfig().model, 'new-model');
+    assert.equal(embedding.getEmbeddingSpaceConfig().dimension, null);
+    assert.equal(getActiveEmbeddingProvider().health.state, 'unverified');
+  });
   await test('invalid native credentials are unconfigured and blocked before any network call', async () => {
     for (const key of ['', 'ab用', 'bad key', 'line\nbreak', ' padded ', 'é-key']) {
       reset();

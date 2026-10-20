@@ -3,6 +3,10 @@ import { test } from 'node:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { hashMemoryContent } from '../src/memory_vectors.mjs';
+
+const descriptor = { version: 1, provider: 'fixture', model: 'fixture', dimension: 2, endpointId: 'a'.repeat(64) };
+const queryVector = { vector: [1, 0], descriptor, contentHash: hashMemoryContent('query') };
 
 const temp = mkdtempSync(path.join(tmpdir(), 'memory-admission-'));
 process.env.DB_PATH = path.join(temp, 'test.db');
@@ -14,7 +18,8 @@ let companionId = 800;
 const userId = 'fixture-owner';
 const row = id => db.prepare('SELECT * FROM companion_memories WHERE id=?').get(id);
 function add(content, extra = {}) {
-  m.saveMemory({ companionId, userId, content, memoryType: 'fact', importance: 6, pinned: false, ...extra });
+  const embeddingMeta = extra.embedding ? { descriptor, contentHash: hashMemoryContent(content) } : null;
+  m.saveMemory({ companionId, userId, content, memoryType: 'fact', importance: 6, pinned: false, embeddingMeta, ...extra });
   return db.prepare('SELECT last_insert_rowid() AS id').get().id;
 }
 try {
@@ -28,7 +33,7 @@ try {
     const forbidden = add('禁止提及的运动偏好', { importance: 10, pinned: true, embedding: [1, 0] });
     db.prepare('UPDATE companion_memories SET do_not_mention=1 WHERE id=?').run(forbidden);
     assert.deepEqual(m.recallMemories(companionId, userId, '运动偏好', 20).map(r => r.id), [visible]);
-    assert.deepEqual(m.recallMemoriesSemantic(companionId, userId, [1, 0], 20).map(r => r.id), [visible]);
+    assert.deepEqual(m.recallMemoriesSemantic(companionId, userId, queryVector, 20).map(r => r.id), [visible]);
     assert.deepEqual(m.getMemories(companionId, userId, 20).map(r => r.id), [visible]);
     assert.equal(m.getMemoriesV2(companionId, { status: null }).total, 5, 'management retains restricted records');
     assert.equal(m.getMemoriesV2(companionId, { status: 'deleted' }).total, 1);
@@ -37,7 +42,7 @@ try {
     companionId++;
     const id = add('需要谨慎处理的情绪', { embedding: [1, 0], memoryLayer: 'emotion' });
     db.prepare('UPDATE companion_memories SET sensitive_flag=1 WHERE id=?').run(id);
-    const [result] = m.recallMemoriesSemantic(companionId, userId, [1, 0]);
+    const [result] = m.recallMemoriesSemantic(companionId, userId, queryVector);
     assert.equal(result.sensitive_flag, 1);
     assert.equal(result.memory_layer, 'emotion');
     assert.equal(result.do_not_mention, 0);

@@ -9,7 +9,9 @@
 import { log } from './logger.mjs';
 import { getRecallableMemories, getMemoryRecallBarrier } from './db.mjs';
 import { isMemoryRecallable } from './memory_admission.mjs';
-import { embedText } from './ai.mjs';
+import { embedTextWithDescriptor } from './ai.mjs';
+import { memoryDecayScore } from './memory_retrieval.mjs';
+import { validMemoryVector, storedMemoryVector, sameEmbeddingSpace, memoryCosine } from './memory_vectors.mjs';
 
 // ─── Allowed enumerations ──────────────────────────────────────────────────────
 
@@ -54,8 +56,6 @@ export { isSensitiveMemoryContent, sanitizeMemoryContent } from './privacy_filte
 
 // ─── Decay score ──────────────────────────────────────────────────────────────
 
-const MS_PER_DAY = 86_400_000;
-
 /**
  * Compute a decay score in [0, 1] for a memory row.
  * locked=1 or pinned=1 → always 1.0
@@ -64,21 +64,7 @@ const MS_PER_DAY = 86_400_000;
  * others → half-life 45 days
  */
 export function computeMemoryDecay(memory, now = new Date()) {
-  if (memory.locked || memory.pinned) return 1.0;
-  if (memory.memory_status && memory.memory_status !== 'active') return 0;
-
-  const createdAt = memory.created_at ? new Date(String(memory.created_at).replace(' ', 'T')) : now;
-  const lastUsed  = memory.last_used_at ? new Date(String(memory.last_used_at).replace(' ', 'T')) : createdAt;
-  const refDate   = lastUsed > createdAt ? lastUsed : createdAt;
-  const ageDays   = Math.max(0, (now - refDate) / MS_PER_DAY);
-
-  const weight = typeof memory.memory_weight === 'number' ? memory.memory_weight : 3;
-  let halfLifeDays;
-  if (weight >= 4)     halfLifeDays = 90;
-  else if (weight <= 1) halfLifeDays = 14;
-  else                  halfLifeDays = 45;
-
-  return Math.exp(-ageDays * Math.LN2 / halfLifeDays);
+  return memoryDecayScore(memory, now);
 }
 
 // ─── Recall ranking ───────────────────────────────────────────────────────────
@@ -169,7 +155,9 @@ export function shouldWriteBackDecay(memory, newDecay) {
  * Processes up to batchSize active, non-locked, non-pinned memories at a time.
  */
 export function applyMemoryDecayBatch(db, options = {}) {
-  const batchSize = options.batchSize ?? 200;
+  const batchSize = Math.min(1000, Math.max(1, Math.trunc(Number(options.batchSize) || 200)));
+  const afterId = options.afterId ?? 0;
+  const upperId = options.upperId ?? Number.MAX_SAFE_INTEGER;
   const now = options.now ?? new Date();
 
   const rows = db.prepare(`
@@ -177,11 +165,14 @@ export function applyMemoryDecayBatch(db, options = {}) {
            last_used_at, created_at, decay_score
     FROM companion_memories
     WHERE memory_status = 'active'
+      AND id > ? AND id <= ?
+      AND COALESCE(do_not_mention, 0) = 0
+      AND COALESCE(recall_blocked, 0) = 0
       AND (locked IS NULL OR locked = 0)
       AND (pinned IS NULL OR pinned = 0)
-    ORDER BY last_used_at ASC
+    ORDER BY id ASC
     LIMIT ?
-  `).all(batchSize);
+  `).all(afterId, upperId, batchSize);
 
   const update = db.prepare(`
     UPDATE companion_memories SET decay_score = ?, updated_at = ? WHERE id = ?
@@ -202,43 +193,17 @@ export function applyMemoryDecayBatch(db, options = {}) {
   try {
     const written = runBatch(rows);
     log('info', `[MemoryDecay] 批次衰减写回 checked=${rows.length} written=${written}`);
-    return { checked: rows.length, written };
+    const nextCursor = rows.at(-1)?.id ?? afterId;
+    return { checked: rows.length, written, nextCursor, done: rows.length < batchSize || nextCursor >= upperId };
   } catch (e) {
     log('error', `[MemoryDecay] 批次写回失败: ${e.message}`);
-    return { checked: 0, written: 0 };
+    throw e;
   }
 }
 
 // ─── Semantic dedup ───────────────────────────────────────────────────────────
 
 const EMBEDDING_SIM_THRESHOLD = Number(process.env.MEMORY_EMBEDDING_SIM_THRESHOLD) || 0.86;
-
-/**
- * Cosine similarity between two float arrays.
- */
-function cosineSim(a, b) {
-  if (!a || !b || a.length !== b.length) return 0;
-  let dot = 0, na = 0, nb = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    na  += a[i] * a[i];
-    nb  += b[i] * b[i];
-  }
-  const denom = Math.sqrt(na) * Math.sqrt(nb);
-  return denom === 0 ? 0 : dot / denom;
-}
-
-function parseEmbeddingBlob(buf) {
-  if (!buf) return null;
-  try {
-    if (Buffer.isBuffer(buf)) {
-      return Array.from(new Float32Array(buf.buffer, buf.byteOffset, buf.length / 4));
-    }
-    if (typeof buf === 'string') return JSON.parse(buf);
-    if (Array.isArray(buf)) return buf;
-  } catch { /* ignore */ }
-  return null;
-}
 
 /**
  * Find an existing memory whose embedding is cosine-similar to the given content.
@@ -255,7 +220,7 @@ export async function findSimilarMemoryByEmbedding(companionId, content, options
 
   let queryEmb = null;
   try {
-    queryEmb = await embedText(content);
+    queryEmb = await embedTextWithDescriptor(content);
   } catch { /* embedding unavailable → use token fallback */ }
   if (getMemoryRecallBarrier(companionId, options.userId).revision !== revision) return null;
 
@@ -267,12 +232,13 @@ export async function findSimilarMemoryByEmbedding(companionId, content, options
 
   if (candidates.length === 0) return null;
 
-  if (queryEmb) {
+  if (validMemoryVector(queryEmb, content)) {
     let bestSim = -1, bestRow = null;
     for (const row of candidates) {
-      const rowEmb = parseEmbeddingBlob(row.embedding);
-      if (!rowEmb) continue;
-      const sim = cosineSim(queryEmb, rowEmb);
+      const rowEmb = storedMemoryVector(row);
+      if (!rowEmb || !sameEmbeddingSpace(queryEmb.descriptor, rowEmb.descriptor)) continue;
+      const sim = memoryCosine(queryEmb.vector, rowEmb.vector);
+      if (sim == null) continue;
       if (sim > bestSim) { bestSim = sim; bestRow = row; }
     }
     if (bestSim >= threshold) return bestRow;

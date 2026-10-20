@@ -4,11 +4,12 @@ import vm from 'node:vm';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { hashMemoryContent } from '../src/memory_vectors.mjs';
 
 const temp = mkdtempSync(path.join(tmpdir(), 'memory-extraction-'));
 process.env.DB_PATH = path.join(temp, 'test.db');
 process.env.LOG_DIR = path.join(temp, 'logs');
-const fixture = { output: {}, calls: [], graph: [], achievements: [], onModel: () => {} };
+const fixture = { output: {}, calls: [], graph: [], achievements: [], onModel: () => {}, embeds: [], onEmbed: () => null };
 // VM modules are available on the CI Node 20 runtime with --experimental-vm-modules.
 // Keep the database and provenance implementation real; replace only external boundaries.
 const m = await import('../src/db.mjs');
@@ -22,6 +23,7 @@ const dependencies = new Map(Object.entries({
       fixture.calls.push({ system, input }); fixture.onModel(); return JSON.stringify(fixture.output);
     },
     async embedText() { throw new Error('No embedding calls are allowed in this fixture'); },
+    async embedTextWithDescriptor(text) { fixture.embeds.push(text); return fixture.onEmbed(text); },
   },
   './event_graph.mjs': { processMemoryForGraph(...args) { fixture.graph.push(args); } },
   './achievements.mjs': { tryAchievement(...args) { fixture.achievements.push(args); } },
@@ -31,7 +33,15 @@ const sourceUrl = new URL('../src/memory.mjs', import.meta.url);
 const memoryModule = new vm.SourceTextModule(readFileSync(sourceUrl, 'utf8'), {
   context, identifier: sourceUrl.href,
 });
-await memoryModule.link(specifier => {
+const link = async specifier => {
+  if (specifier === './memory_indexing.mjs') {
+    if (!modules.has(specifier)) {
+      const mod = new vm.SourceTextModule(readFileSync(new URL('../src/memory_indexing.mjs', import.meta.url), 'utf8'), { context });
+      modules.set(specifier, mod);
+      await mod.link(link);
+    }
+    return modules.get(specifier);
+  }
   if (!dependencies.has(specifier)) throw new Error(`Unexpected extraction dependency: ${specifier}`);
   if (!modules.has(specifier)) {
     const exports = dependencies.get(specifier);
@@ -40,7 +50,8 @@ await memoryModule.link(specifier => {
     }, { context, identifier: specifier }));
   }
   return modules.get(specifier);
-});
+};
+await memoryModule.link(link);
 await memoryModule.evaluate();
 const { extractAndSaveMemories: extract, extractAndUpdateUserProfile: profile } = memoryModule.namespace;
 const db = m.getDb(), uid = 97001;
@@ -50,6 +61,7 @@ function scope() {
   cid++;
   db.prepare('INSERT INTO companions(id,user_id,bot_id) VALUES(?,?,?)').run(cid, uid, `synthetic-extraction-${cid}`);
   fixture.output = {}; fixture.calls = []; fixture.graph = []; fixture.achievements = []; fixture.onModel = () => {};
+  fixture.embeds = []; fixture.onEmbed = () => null;
 }
 const turn = (role, content) => m.saveConversationTurn(cid, role, content);
 const rows = () => db.prepare('SELECT * FROM companion_memories WHERE companion_id=?').all(cid);
@@ -61,6 +73,34 @@ async function run(user, assistant, memories, ids = [user.id, assistant.id]) {
   return extract(cid, uid, user.content, assistant.content, { turnIds: ids });
 }
 try {
+  await test('new facts index canonical text once; duplicate or rejected evidence never calls embeddings', async () => {
+    scope(); const user = turn('user', '我喜欢在周末骑自行车'), assistant = turn('assistant', '我有一个妹妹');
+    fixture.onEmbed = text => ({ vector: [1, 0], contentHash: hashMemoryContent(text),
+      descriptor: { version: 1, provider: 'fixture', model: 'fixture', dimension: 2, endpointId: 'a'.repeat(64) } });
+    assert.equal(await run(user, assistant, [candidate(user), candidate(user), candidate(assistant)]), 1);
+    assert.deepEqual(fixture.embeds, [user.content]);
+    assert.ok(rows()[0].embedding_meta);
+    assert.equal(await run(user, assistant, [candidate(user)]), 0);
+    assert.equal(fixture.embeds.length, 1);
+  });
+  await test('embedding failure preserves admitted fact and successful extraction count', async () => {
+    scope(); const user = turn('user', '我喜欢在周末骑自行车'), assistant = turn('assistant', '好的');
+    fixture.onEmbed = () => { throw new Error('fixture unavailable'); };
+    assert.equal(await run(user, assistant, [candidate(user)]), 1);
+    assert.equal(rows().length, 1); assert.equal(rows()[0].embedding, null);
+  });
+  await test('graph admission completes before asynchronous indexing can invalidate saved text', async () => {
+    scope(); const user = turn('user', '我喜欢在周末骑自行车'), assistant = turn('assistant', '好的');
+    const graphCounts = [];
+    fixture.onEmbed = () => {
+      graphCounts.push(fixture.graph.length);
+      m.patchMemory(rows()[0].id, cid, { content: '我喜欢游泳' });
+      return null;
+    };
+    assert.equal(await run(user, assistant, [candidate(user)]), 1);
+    assert.deepEqual(graphCounts, [1], 'no graph write of stale content after the provider await');
+    assert.equal(fixture.graph.length, 1);
+  });
   await test('assistant statement cannot become user fact; companion ownership remains usable', async () => {
     scope(); const user = turn('user', '你刚才说的是你自己的妹妹吧'); const assistant = turn('assistant', '我有一个妹妹');
     assert.equal(await run(user, assistant, [candidate(assistant)]), 0);

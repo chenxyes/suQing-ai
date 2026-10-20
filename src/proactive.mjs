@@ -3,7 +3,7 @@
  * Copyright (c) 2026 溪语 AI Contributors. MIT License.
  */
 import {
-  getActiveBotAccounts, getRecentHistory, getUserProfileForRecall, recallMemories,
+  getActiveBotAccounts, getRecentHistory, getUserProfileForRecall, recallMemories, touchRecalledMemories,
   getConversationContext, getDueReminders, markRemindersTriggered, ensureRelationshipReminders,
   saveMessage, saveConversationTurn,
   getCompanionById, getBotContextForCompanion, getDb,
@@ -933,6 +933,7 @@ ${recallLoop.expected_followup ? `你心里想：${recallLoop.expected_followup}
   }
 
   const proactiveBinding = getActiveWechatBinding(companion.wechat_user_id, companion.bot_id);
+  touchRecalledMemories(companion.id, companion.user_id, memories.map(row => row.id));
   let reply = await generateReply(systemPrompt, history, userMessage, {
     temperature: companion.temperature,
     max_tokens: Math.min(companion.max_tokens || 300, 300),

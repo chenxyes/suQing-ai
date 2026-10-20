@@ -21,9 +21,9 @@ import path from 'node:path';
 import {
   cleanupPlanMemories, getAllActiveCompanions, getConversationTurnsBetween,
   saveMemory, summaryMemoryExists, getDb, shanghaiDateKey, shanghaiBoundsForDateKey,
-  getRecentSummaries, getRecallableMemories, getMemoryRecallBarrier,
+  getRecentSummaries, getRecallableMemories, getMemoryRecallBarrier, writeMemoryEmbedding,
   saveDailySchedule, getDailySchedule,
-  listEpisodicMemoriesOlderThan, deleteMemoriesByIds,   // v1.9.8 老记忆压缩
+  listEpisodicMemoriesOlderThan, compactMemories,
   cleanupProcessedMessages,                              // Issue #1 去重表清理
   cleanupAiUsageEvents,                                  // P1-7 成本明细清理
   getActiveCurrentWorks,                                 // v1.21.4 PR-W5 日程结构化：消费 works 档案
@@ -42,7 +42,7 @@ import { checkProactiveDeadman } from './proactive_deadman.mjs';
 import { refreshCurrentWorks, buildScheduleWorksHint } from './current_works.mjs';   // v1.21.4 PR-W1 换档 / W5 日程消费档案
 import { refreshLifeState } from './life_state.mjs';   // v1.22 PR-L1 身体状态档案推进/归档
 import { runPlaygroundProbe } from './playground_probe.mjs';   // #310 对外通道每日合成探针
-import { generateReply, extractStructuredInfo, embedText } from './ai.mjs';
+import { generateReply, extractStructuredInfo, embedTextWithDescriptor } from './ai.mjs';
 import { isChatFallback } from './chat_response.mjs';
 import { log } from './logger.mjs';
 import { tryAchievement } from './achievements.mjs';
@@ -206,19 +206,26 @@ async function runArchiveDailySchedule(dateKey) {
     for (const it of important) {
       try {
         const content = `${dateKey} ${it.time} ${it.activity}`.slice(0, 60);
-        const embedding = await embedText(content);
-        saveMemory({
+        const { revision } = getMemoryRecallBarrier(c.id, c.user_id);
+        const memoryId = saveMemory({
           companionId: c.id,
           userId: c.user_id,
           memoryType: 'event',
           content,
           importance: it.importance,
-          embedding,
+          expectedRecallRevision: revision,
           // 不 pin 日程类记忆（仅大事件 importance>=9 才自动 pin via saveMemory 默认逻辑）
         });
+        if (!memoryId) continue;
         total++;
+        const stored = getRecallableMemories(c.id, c.user_id).find(row => row.id === memoryId);
+        if (stored) {
+          const result = await embedTextWithDescriptor(stored.content);
+          if (result) writeMemoryEmbedding(memoryId, c.id, c.user_id, result,
+            { expectedContent: stored.content, expectedRecallRevision: revision });
+        }
       } catch (e) {
-        log('warn', `[ArchiveSchedule] companion=${c.id} item="${it.activity}" fail: ${e.message}`);
+        log('warn', `[ArchiveSchedule] companion=${c.id} save/index failed: ${e.message}`);
       }
     }
   }
@@ -432,8 +439,17 @@ function ageOccupationHint(age, isWeekend, roleTitle) {
 async function runMemoryDecay() {
   try {
     const db = getDb();
-    const result = applyMemoryDecayBatch(db, { batchSize: 200 });
-    log('info', `[PlanTasks] memory-decay checked=${result.checked} written=${result.written}`);
+    const upperId = db.prepare('SELECT COALESCE(MAX(id), 0) AS id FROM companion_memories').get().id;
+    const now = new Date();
+    let afterId = 0, checked = 0, written = 0;
+    while (afterId < upperId) {
+      const result = applyMemoryDecayBatch(db, { batchSize: 200, afterId, upperId, now });
+      checked += result.checked; written += result.written;
+      if (result.done) break;
+      if (result.nextCursor <= afterId) throw new Error('memory decay cursor did not advance');
+      afterId = result.nextCursor;
+    }
+    log('info', `[PlanTasks] memory-decay checked=${checked} written=${written}`);
   } catch (e) {
     log('error', `[PlanTasks] memory-decay 异常: ${e.message}`);
   }
@@ -520,17 +536,23 @@ async function runHourlyCleanup() {
     const r3 = db.prepare(`DELETE FROM email_verification_sends WHERE sent_at_ms < ?`).run(Date.now() - 7 * 86400_000);
     // 消息保留 60 天（开源版统一策略，自托管想加可改这个数）
     const r4 = db.prepare(`DELETE FROM wechat_messages WHERE created_at < datetime('now', '-60 days')`).run();
-    // 每个 companion 只保留最新 100 条对话 turn（buildLongTermDigest 已经把更早的归档到 memories 了）
+    // Keep the full recent week for summaries/reflection, a stable latest-100
+    // fallback, and all grounded evidence. Prompt readers still apply their limits.
     const r5 = db.prepare(`
       DELETE FROM companion_conversation_turns
-      WHERE id IN (
-        SELECT id FROM companion_conversation_turns t1
-        WHERE id NOT IN (
+      WHERE datetime(created_at) < datetime('now', '-8 days')
+        AND id NOT IN (
           SELECT id FROM companion_conversation_turns t2
-          WHERE t2.companion_id = t1.companion_id
-          ORDER BY t2.created_at DESC LIMIT 100
+          WHERE t2.companion_id = companion_conversation_turns.companion_id
+          ORDER BY t2.created_at DESC, t2.id DESC LIMIT 100
         )
-      )
+        AND NOT EXISTS (
+          SELECT 1 FROM companion_memories m,
+            json_each(CASE WHEN json_valid(m.memory_evidence) THEN m.memory_evidence ELSE '[]' END) evidence
+          WHERE m.companion_id = companion_conversation_turns.companion_id
+            AND json_extract(CASE WHEN evidence.type = 'object' THEN evidence.value ELSE '{}' END, '$.turn_id')
+              = companion_conversation_turns.id
+        )
     `).run();
     log('info', `[PlanTasks] cleanup pending=${r1.changes} v_codes=${r2.changes} v_sends=${r3.changes} msgs=${r4.changes} turns=${r5.changes}`);
   } catch (e) {
@@ -681,9 +703,10 @@ async function runMonthly(todayKey) {
       log('error', `[PlanTasks] monthly 失败 companion=${companion.id}: ${err.message}`);
     }
 
-    // v1.9.8: 长期记忆压缩 — 把 90 天前的零碎 fact/event/emotion 合并成
-    // "老记忆压缩"摘要，删除原条目。避免半年/一年后零碎记忆无限膨胀。
-    // 不动 preference（稳定特征）/ pinned（用户钉住）/ summary（已总结）。
+  }
+  // Maintenance is independent of whether this month had weekly inputs or an
+  // existing summary. Preserve source rows for provenance and explicit revocation.
+  for (const companion of companions) {
     try {
       await compactOldEpisodicMemories(companion);
     } catch (err) {
@@ -692,75 +715,76 @@ async function runMonthly(todayKey) {
   }
 }
 
-/**
- * v1.9.8: 单 companion 的老记忆压缩。按"创建月份"分组，每组合并成
- * monthly_summary（prefix 区分于自动月总结），然后删除原条目。
- * 静默失败（不抛），不影响主 runMonthly 流程。
- */
+/** Compact bounded source batches without deleting their evidence. */
 async function compactOldEpisodicMemories(companion) {
   const compactDays = Math.max(30, Number(process.env.MEMORY_COMPACT_DAYS) || 90);
   const before = new Date(Date.now() - compactDays * 86_400_000).toISOString();
-  const rows = listEpisodicMemoriesOlderThan({
-    companionId: companion.id,
-    userId: companion.user_id,
-    beforeDateIso: before,
-    limit: 200,
-  });
-  if (rows.length < 5) return;  // 太少没必要压缩
-
-  // 按 "YYYY-MM" 分组（用 created_at 前 7 位）
-  const groups = new Map();
-  for (const r of rows) {
-    const key = String(r.created_at || '').slice(0, 7); // YYYY-MM
-    if (!/^\d{4}-\d{2}$/.test(key)) continue;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(r);
-  }
-  if (groups.size === 0) return;
-
-  log('info', `[PlanTasks] compact start companion=${companion.id} rows=${rows.length} groups=${groups.size} cutoff=${compactDays}d`);
-
-  let compactedGroups = 0;
-  for (const [groupMonth, groupRows] of groups.entries()) {
-    if (groupRows.length < 3) continue;  // 单月不足 3 条 skip
-    const prefix = `老记忆压缩 ${groupMonth}：`;
-    // 已有同 prefix 的压缩摘要 → 跳过（idempotent 防重复）
-    if (summaryMemoryExists(companion.id, companion.user_id, 'monthly_summary', prefix)) continue;
-
-    try {
-      const { revision } = getMemoryRecallBarrier(companion.id, companion.user_id);
-      const summary = await summarizeMemoryList('老记忆压缩', groupMonth, groupRows);
-      const memoryId = saveMemory({
-        companionId: companion.id,
-        userId: companion.user_id,
-        memoryType: 'monthly_summary',
-        content: `${prefix}${summary}`,
-        expectedRecallRevision: revision,
-        importance: 15,  // 高于普通月总结（这是压缩后的精华，回忆时优先召回）
-      });
-      if (!memoryId) continue;
-      // 摘要落地成功才删原条目（防摘要失败导致数据丢失）
-      const ids = groupRows.map(r => r.id);
-      const deleted = deleteMemoriesByIds(ids);
-      compactedGroups++;
-      log('info', `[PlanTasks] compact group companion=${companion.id} month=${groupMonth} src=${groupRows.length} deleted=${deleted}`);
-    } catch (err) {
-      log('warn', `[PlanTasks] compact group failed companion=${companion.id} month=${groupMonth}: ${err.message}`);
+  const upperId = getDb().prepare('SELECT COALESCE(MAX(id), 0) AS id FROM companion_memories WHERE companion_id=? AND user_id=?')
+    .get(companion.id, companion.user_id).id;
+  let afterId = 0, compactedGroups = 0;
+  while (afterId < upperId) {
+    const { revision } = getMemoryRecallBarrier(companion.id, companion.user_id);
+    const rows = listEpisodicMemoriesOlderThan({ companionId: companion.id, userId: companion.user_id,
+      beforeDateIso: before, limit: 200, afterId, upperId });
+    if (!rows.length) break;
+    const nextCursor = rows.at(-1).id;
+    if (nextCursor <= afterId) throw new Error('memory compaction cursor did not advance');
+    afterId = nextCursor;
+    const groups = new Map();
+    for (const row of rows) {
+      const month = String(row.created_at || '').slice(0, 7);
+      if (!/^\d{4}-\d{2}$/.test(month)) continue;
+      if (!groups.has(month)) groups.set(month, []);
+      groups.get(month).push(row);
     }
+    for (const [month, groupSources] of groups) {
+      for (const sources of completeCompactionBatches(groupSources)) {
+        if (getMemoryRecallBarrier(companion.id, companion.user_id).revision !== revision) return;
+        const sourceIds = sources.map(row => row.id);
+        const prefix = '老记忆压缩 ' + month + ' [' + sourceIds[0] + '-' + sourceIds.at(-1) + ']：';
+        try {
+          const summary = await summarizeMemoryList('老记忆压缩', month, sources);
+          const stored = compactMemories({ companionId: companion.id, userId: companion.user_id,
+            sourceIds, content: prefix + summary, expectedRecallRevision: revision });
+          if (!stored) continue;
+          compactedGroups++;
+          log('info', '[PlanTasks] compact group companion=' + companion.id + ' month=' + month + ' sources=' + sourceIds.length + ' summary=' + stored.id);
+        } catch (err) {
+          log('warn', '[PlanTasks] compact group failed companion=' + companion.id + ' month=' + month + ': ' + err.message);
+        }
+      }
+    }
+    if (rows.length < 200) break;
   }
-  if (compactedGroups > 0) {
-    log('info', `[PlanTasks] compact done companion=${companion.id} groups=${compactedGroups}`);
-  }
+  if (compactedGroups) log('info', '[PlanTasks] compact done companion=' + companion.id + ' groups=' + compactedGroups);
 }
 
-// ─── AI 调用：生成总结 ───────────────────────────────────────────────────────
+function completeCompactionBatches(rows) {
+  const batches = [];
+  let batch = [], length = 0;
+  for (const row of rows) {
+    const lineLength = `- ${row.content}`.length;
+    if (lineLength > 12000) continue; // Never hide a partially presented source.
+    if (length + (batch.length ? 1 : 0) + lineLength > 12000) {
+      if (batch.length >= 3) batches.push(batch);
+      batch = []; length = 0;
+    }
+    length += (batch.length ? 1 : 0) + lineLength;
+    batch.push(row);
+  }
+  if (batch.length >= 3) batches.push(batch);
+  return batches;
+}
+
 async function summarizeDaily(dateKey, turns) {
   const text = turns.map(t => `${t.role === 'user' ? '他' : '她'}：${String(t.content).slice(0, 300)}`).join('\n').slice(0, 12000);
   return summarize('日记忆', `请总结 ${dateKey} 这一天的对话，提炼他（对方）的重要事实、偏好、情绪变化、关系进展和需要下次自然接上的话题（指代对方一律用'他'）。控制在 120 字内，只输出总结正文，不要客套。`, text);
 }
 
 async function summarizeMemoryList(kind, label, rows) {
-  const text = rows.map(r => `- ${r.content}`).join('\n').slice(0, 12000);
+  const fullText = rows.map(r => `- ${r.content}`).join('\n');
+  if (kind === '老记忆压缩' && fullText.length > 12000) throw new Error('compaction input exceeds full-source budget');
+  const text = fullText.slice(0, 12000);
   const sourceKind = kind === '周记忆' ? '日记忆' : '周记忆';
   return summarize(kind, `请把这些${sourceKind}汇总成${label}的${kind}。突出稳定偏好、重要事件、情绪趋势和关系进展。控制在 160 字内，只输出总结正文，不要客套。`, text);
 }

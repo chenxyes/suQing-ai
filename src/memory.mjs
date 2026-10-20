@@ -9,6 +9,7 @@
  */
 
 import { log } from './logger.mjs';
+import { indexMemory } from './memory_indexing.mjs';
 import {
   saveGroundedMemory, getMemoryEvidenceTurns, getRecallableMemories,
   patchCompanion, upsertUserProfile,
@@ -407,6 +408,8 @@ export async function extractAndSaveMemories(companionId, userId, _userMsg, _bot
       if (memory.memory_subject !== 'user') continue;
       try { processMemoryForGraph(companionId, memory.content, memory.id, memory); } catch { /* 非阻塞 */ }
     }
+    // Finish synchronous fact consumers before provider awaits can edit/revoke their inputs.
+    for (const memory of saved) await indexMemory(memory.id, companionId, userId);
     return saved.length;
   } catch (error) {
     log('warn', `[Memory] 记忆提取失败: ${error.message}`);
