@@ -2,6 +2,7 @@
  * 
  * Copyright (c) 2026 溪语 AI Contributors. MIT License.
  */
+import { reviewPressureTail } from './pressure_tail.mjs';
 import {
   getActiveBotAccounts, getRecentHistory, getUserProfileForRecall, recallMemories, touchRecalledMemories,
   getConversationContext, getDueReminders, markRemindersTriggered, ensureRelationshipReminders,
@@ -972,6 +973,10 @@ ${recallLoop.expected_followup ? `你心里想：${recallLoop.expected_followup}
   reply = scrubFabricatedIllness(reply, companion.id, { activeLifeStates: _activeLifeStates });
   // v1.22 PR-L2 经期披露门控：朋友/暧昧期（affection < 阈值）显式月经表述出站剥（只表现不点明）。
   reply = scrubPeriodDisclosure(reply, { affectionLevel: companion.affection_level });
+
+  if (effectiveKind !== 'reminder') {
+    reply = await reviewPressureTail(reply, { enabled: companion.no_pressure, userText: history.findLast(m => m.direction === 'in')?.content });
+  }
 
   // PR-1（2026-06-14）intent 级复读止血：bot 主动重复的同 intent(+topic)在冷却窗内**直接不发**。
   // 比 3-gram 撞车检测多拦"语义同·文本不同"的复读(remind/ask_plan/miss_you 反复)。reminder 豁免；

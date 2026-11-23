@@ -9,6 +9,7 @@
  * Copyright (c) 2026 溪语 AI Contributors. MIT License.
  */
 
+import { reviewPressureTail } from './pressure_tail.mjs';
 import { parseMessage, sendTextMessage, sendTyping, sendMessageItem, rememberContextToken, peekSendQuota } from './ilink.mjs';
 import { stripCurrentTurnFromHistory, isProtocolDuplicate } from './inbound_dedup.mjs';   // v1.21.4 #279
 import { generateReply, recognizeImage, embedTextWithDescriptor } from './ai.mjs';
@@ -992,6 +993,8 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
       await sendTextMessage(ctx, msg.fromUser, reply, msg.contextToken);
       return;
     }
+
+    reply = await reviewPressureTail(reply, { enabled: companion.no_pressure && _crisisLevel !== 'high', userText, safetyLevel: userMsgSafetyLevel });
 
     // ── Record user replied (proactive engine) ────────────────────────────────
     try { recordUserReplied(companion.id); } catch {}

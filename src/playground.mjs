@@ -13,6 +13,7 @@
  * Copyright (c) 2026 溪语 AI Contributors. MIT License.
  */
 
+import { reviewPressureTail } from './pressure_tail.mjs';
 import { log } from './logger.mjs';
 import { generateReply, embedTextWithDescriptor } from './ai.mjs';
 import { isChatFallback } from './chat_response.mjs';
@@ -214,6 +215,8 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
   }
   reply = safeOutboundReply(reply);
   reply = scrubPhotoImpersonation(reply, companion.id);   // #281：playground 无照片链路，同罩
+
+  reply = await reviewPressureTail(reply, { enabled: companion.no_pressure, userText: text, safetyLevel: userMsgSafetyLevel });
 
   // v1.5.2 PR E: assistant reply 后也走情绪更新（mood drift / energy 恢复等），跟 bot.mjs 对齐
   try {
