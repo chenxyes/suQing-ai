@@ -782,6 +782,9 @@ function migrateOpenLoops() {
   addColIfMissing('companion_open_loops', 'loop_kind', "TEXT DEFAULT 'user_said'");
   // promise_payload: her_promise 专用——记承诺的内容与生图参数（JSON），到点补发用
   addColIfMissing('companion_open_loops', 'promise_payload', 'TEXT');
+  addColIfMissing('companion_open_loops', 'resolved_turn_id', 'INTEGER');
+  addColIfMissing('companion_open_loops', 'embedding', 'BLOB');
+  addColIfMissing('companion_open_loops', 'embedding_meta', 'TEXT');
 }
 
 // ─── v1.8.0 #3: companion_preferences 结构化偏好账本 ───────────────────────
@@ -3511,10 +3514,10 @@ export function saveOpenLoop({ companionId, title, dueAt = null, emotionalWeight
   // 防重复：同 companion 最近 7 天内的相同 title 视为重复（轻量去重）
   const existing = db.prepare(`
     SELECT id FROM companion_open_loops
-    WHERE companion_id = ? AND title = ? AND status = 'open'
+    WHERE companion_id = ? AND title = ? AND status = 'open' AND due_at IS ? AND loop_kind = ?
       AND datetime(created_at) > datetime('now', '-7 days')
     LIMIT 1
-  `).get(companionId, title);
+  `).get(companionId, title, dueAt, loopKind);
   if (existing) return existing.id;
   const info = db.prepare(`
     INSERT INTO companion_open_loops (companion_id, title, due_at, emotional_weight, expected_followup, source_message_id, loop_kind, promise_payload)
