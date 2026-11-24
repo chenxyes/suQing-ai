@@ -154,9 +154,11 @@ try {
       && /goodnight_sent_for_date === shanghaiDateKey\(\)/.test(proSrc) && /return 'dup'/.test(proSrc),
     '若失败：深夜重启丢内存排程重算 → 刚说过晚安又来一条');
   // 2) guarded 返回投递状态，tick 据此 defer 而非消耗配额
-  check('proactive.mjs guarded 返回投递状态（throttled/inflight/safety/sent）',
+  check('proactive.mjs guarded 按实际投递返回状态（含 partial）',
     /return 'throttled'/.test(proSrc) && /return 'inflight'/.test(proSrc)
-      && /return 'safety'/.test(proSrc) && /return 'sent'/.test(proSrc),
+      && /reason: 'safety'/.test(proSrc)
+      && proSrc.includes("!['sent', 'partial'].includes(result.status)")
+      && proSrc.includes('return opts.behaviorTask ? result : result.status'),
     '若失败：节流类 silent return 仍消耗 item → 实发条数 < target');
   // 3) 跨午夜晚安：用 bedMin < wakeMin 判定，不是死代码 bedMin >= 24*60
   check('proactive.mjs 跨午夜晚安用 bedMin < wakeMin（非死代码 >=24*60）',

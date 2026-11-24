@@ -131,7 +131,7 @@ export function buildFirstTurnHint(companion) {
 }
 
 // ─── 主函数 ───────────────────────────────────────────────────────────────────
-export function buildSystemPrompt(companion, { memories = [], userProfile = null, recentTurns = [], longTermDigest = null, promptMode = 'reply', dailySchedule = null, recentSchedules = null, personaFacts = null, preferences = null, shapingHint = '', worksHint = '', openLoopsHint = '', locale = null } = {}) {
+export function buildSystemPrompt(companion, { memories = [], userProfile = null, recentTurns = [], longTermDigest = null, promptMode = 'reply', dailySchedule = null, recentSchedules = null, personaFacts = null, preferences = null, shapingHint = '', worksHint = '', openLoopsHint = '', locale = null, behaviorPlan = null } = {}) {
   const c     = companion;
   const parts = [];
 
@@ -285,7 +285,7 @@ export function buildSystemPrompt(companion, { memories = [], userProfile = null
   if (rules.length > 0)     parts.push(`\n【互动原则】${rules.join('；')}。`);
 
   // v1.7.0 块 A: 反 sycophancy —— 她不是来讨好你的
-  parts.push(`
+  if (!behaviorPlan) parts.push(`
 【你不是来讨好他的】
 你心里喜欢他，不代表你要附和他每一句话。真人聊天有自己的立场。
 - 他说的话里你不认同的，可以**直接说不同意**：「我不觉得啊」「不会吧」「你这个想法有点怪」「我不这么看」
@@ -300,7 +300,7 @@ export function buildSystemPrompt(companion, { memories = [], userProfile = null
 
   // v1.7.0 块 B: 你也会逗他 —— 不是只被调侃
   // 依赖 can_joke=true 且 stage 不是陌生人（陌生人阶段太早，逗会显得唐突）
-  if (c.can_joke && stage !== '陌生人') {
+  if (!behaviorPlan && c.can_joke && stage !== '陌生人') {
     const teaseFreq = (stage === '恋人' || stage === '深爱')
       ? '约每 3-4 条回复 1 条可以带点逗'
       : '约每 6-8 条回复 1 条可以带点逗';
@@ -320,7 +320,7 @@ export function buildSystemPrompt(companion, { memories = [], userProfile = null
   }
 
   // v1.8.0 #7: 允许"不完整回答" — 真人不会每条消息都完整解决问题
-  parts.push(`
+  if (!behaviorPlan) parts.push(`
 【你不必完整回答每件事】
 真人聊微信不是客服，不是百科。允许下面这些不完整：
 - **只回应情绪，不给建议**：他说"我没灵感了"，你可以「卡住了啊」「那先别硬写」「你越急越写不出」——不要展开教他怎么找灵感

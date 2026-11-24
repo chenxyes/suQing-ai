@@ -37,6 +37,12 @@ import {
   updateEmotionFromAssistantReply, buildEmotionPromptHint, getMissingLevel,
 } from './emotion_state.mjs';
 import { generateInnerMonologue, buildInnerOsHint } from './inner_os.mjs';
+import { randomUUID } from 'node:crypto';
+import { isBehaviorEnabled, prepareBehaviorContext, buildBehaviorPlanningHint, resolveBehaviorPlan, buildBehaviorReplyHint } from './behavior_runtime.mjs';
+import { readBehaviorState, observeBehaviorInput, recordBehaviorDelivery } from './behavior_tasks.mjs';
+import { getArcExpressionContext, runArcSignalTick } from './relationship_arc_runtime.mjs';
+import { applyCrisisOverride } from './relationship_arc.mjs';
+import { detectCrisisLevel, buildCrisisReply, scrubConflictRedline } from './moderation.mjs';
 import { extractOpenLoops, detectAndResolveOpenLoops } from './open_loops.mjs';
 
 /**
@@ -48,10 +54,17 @@ import { extractOpenLoops, detectAndResolveOpenLoops } from './open_loops.mjs';
 // 不写 conversation turns / memory / emotion / profile / safety / open loops / postProcess。
 // 供 scripts/playground_probe.mjs 每日合成探针用（对外通道心跳），配合合成 companion id<0 双保险。
 export async function playgroundChat(companion, userText, { probe = false } = {}) {
+  const inputStartedAt = Date.now();
   if (!companion) throw new Error('companion 不存在');
   const text = String(userText || '').trim();
   if (!text) throw new Error('userText 不能为空');
   if (text.length > 2000) throw new Error('userText 过长（>2000）');
+
+  // Cancellation must take effect even when sleep blocks a reply.
+  if (isBehaviorEnabled()) {
+    try { observeBehaviorInput(companion.id, text, { probe, safetyLevel: detectSafetyRisk(text).level }); }
+    catch (e) { log('warn', '[Behavior] early input observation failed: ' + e.message); }
+  }
 
   // v1.10.6: 睡眠拦截（与微信端 bot.mjs 一致）。睡着了网页也不回复，前端显示"睡眠中"。
   // maybeSleepBlock 内含挽留延后逻辑：用户说"再陪陪我/别睡"等会延后入睡继续聊。
@@ -102,6 +115,11 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
     log('warn', `[Safety] detect failed companion=${companion.id}: ${e.message}`);
   }
 
+  if (isBehaviorEnabled()) {
+    try { observeBehaviorInput(companion.id, text, { probe, safetyLevel: userMsgSafetyLevel }); }
+    catch (e) { log('warn', '[Behavior] input observation failed: ' + e.message); }
+  }
+
   // ── 召回长期记忆 ───────────────────────────────────────────────────────────
   let memories = [];
   if (companion.memory_enabled) {
@@ -141,14 +159,45 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
   let emotionState = getEmotionStateWithDefaults(companion.id);
   if (!probe) emotionState = updateEmotionFromUserMessage(companion.id, emotionState, text, { companion });
   const missingLevel = getMissingLevel(emotionState, companion.last_user_reply_at);
-  const emotionHint = buildEmotionPromptHint(emotionState, { missingLevel });
+  // history：playground 没有 wechat 历史，用 recent conversation turns 拼一份
+  const history = recentTurns.slice(-10).map(t => ({
+    role: t.role === 'assistant' ? 'assistant' : 'user',
+    content: String(t.content || ''),
+  }));
+
+  const behaviorOn = isBehaviorEnabled();
+  let arcCtx = behaviorOn ? getArcExpressionContext(companion) : { arcState: 'normal', active: false, directive: '' };
+  const crisisLevel = detectCrisisLevel(text, recentTurns.filter(t => t.role === 'user').slice(-3).map(t => t.content || ''));
+  const behaviorSafety = crisisLevel !== 'none' ? crisisLevel : userMsgSafetyLevel;
+  let behaviorContext = null;
+  if (behaviorOn) {
+    try {
+      observeBehaviorInput(companion.id, text, { probe, safetyLevel: behaviorSafety });
+      behaviorContext = prepareBehaviorContext({ companion, userText: text, history,
+        previous: readBehaviorState(companion.id), arcState: arcCtx.arcState,
+        safetyLevel: behaviorSafety, channel: 'web' });
+    } catch (e) { log('warn', '[Behavior] preparation failed: ' + e.message); }
+  }
+  // v1.8.0 #6: Inner OS 双重思考 —— 生成内心独白后注入 system prompt
+  // 失败/跳过都不阻塞主流程
+  const innerRes = await generateInnerMonologue({
+    companion,
+    userText: text,
+    history,
+    context: { accountId: null, probe, behaviorPlanningHint: buildBehaviorPlanningHint(behaviorContext) },  // playground 走 web 通道，没有 wechat account
+  }).catch(() => null);
+  if (behaviorOn && !probe) arcCtx = runArcSignalTick(companion, { userText: text, inner: innerRes?.struct || null });
+  arcCtx = applyCrisisOverride(arcCtx, crisisLevel);
+  const behaviorPlan = resolveBehaviorPlan(behaviorContext, innerRes?.behavior, { arcState: arcCtx.arcState, safetyLevel: behaviorSafety });
+
+  const emotionHint = Number(companion.safe_mode) ? '' : buildEmotionPromptHint(emotionState, { missingLevel, arcActive: behaviorOn && (arcCtx.active || !!behaviorPlan) });
 
   // v1.8.0 #3: preferences 结构化偏好账本
   const preferences = getCompanionPreferencesForPrompt(companion.id);
 
   let systemPrompt = buildSystemPrompt(companion, {
     memories, userProfile, recentTurns, longTermDigest,
-    promptMode: 'reply', dailySchedule, recentSchedules, personaFacts, preferences,
+    promptMode: 'reply', dailySchedule, recentSchedules, personaFacts, preferences, behaviorPlan,
   }) + stickerHint + emotionHint;
 
   // 关系刚升级
@@ -166,7 +215,7 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
 
   // 用户表白
   const userConfessed = detectUserConfession(text);
-  if (userConfessed && !companion.user_confessed_at && !probe) {
+  if (userConfessed && !companion.user_confessed_at && !probe && !Number(companion.safe_mode) && behaviorSafety === 'none' && !behaviorPlan && !arcCtx.active) {
     systemPrompt += `\n\n【★★ 他向你告白】必须接住。不能拒绝，不能转移话题。多条 || 分段。`;
     try {
       const newAff = Math.max(companion.affection_level || 0, 55);
@@ -181,35 +230,18 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
     }
   }
 
-  // history：playground 没有 wechat 历史，用 recent conversation turns 拼一份
-  const history = recentTurns.slice(-10).map(t => ({
-    role: t.role === 'assistant' ? 'assistant' : 'user',
-    content: String(t.content || ''),
-  }));
-
-  // v1.8.0 #6: Inner OS 双重思考 —— 生成内心独白后注入 system prompt
-  // 失败/跳过都不阻塞主流程
-  const innerRes = await generateInnerMonologue({
-    companion,
-    userText: text,
-    history,
-    context: { accountId: null },  // playground 走 web 通道，没有 wechat account
-  }).catch(() => null);
-  // generateInnerMonologue 返回 { thought, struct } 对象——必须取 .thought（字符串），
-  // 与 bot.mjs 一致。v1.21.0 改返回结构时此处漏改，曾把整个对象传 buildInnerOsHint
-  // 致 .trim() 裸 500（网页通道断约 2 天）。
-  if (innerRes?.thought) {
-    systemPrompt += buildInnerOsHint(innerRes.thought);
-  }
+  if (innerRes?.thought) systemPrompt += buildInnerOsHint(innerRes.thought, { behaviorPlan });
+  if (behaviorOn && !behaviorPlan) systemPrompt += arcCtx.directive || '';
+  systemPrompt += buildBehaviorReplyHint(behaviorPlan);
 
   let reply;
   try {
-    reply = await generateReply(systemPrompt, history, text, {
+    reply = behaviorOn && crisisLevel === 'high' ? buildCrisisReply() : await generateReply(systemPrompt, history, text, {
       temperature: companion.temperature,
       max_tokens: companion.max_tokens,
       top_p: companion.top_p,
       safetyLevel: userMsgSafetyLevel,  // v1.9.1: high/medium 时收紧温度
-    });
+    }, { probe });
   } catch (err) {
     log('error', `[Playground] generateReply 失败 companion=${companion.id}: ${err.message}`);
     throw err;
@@ -222,6 +254,7 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
     };
   }
   reply = safeOutboundReply(reply);
+  if (behaviorOn) reply = scrubConflictRedline(reply, arcCtx.arcState, probe ? null : companion.id);
   reply = scrubPhotoImpersonation(reply, companion.id);   // #281：playground 无照片链路，同罩
 
   // v1.5.2 PR E: assistant reply 后也走情绪更新（mood drift / energy 恢复等），跟 bot.mjs 对齐
@@ -248,6 +281,8 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
     try {
       saveConversationTurn(companion.id, 'user', text, companion.chat_mode_active);
       saveConversationTurn(companion.id, 'assistant', reply, companion.chat_mode_active);
+      if (behaviorPlan) recordBehaviorDelivery({ companionId: companion.id, turnKey: randomUUID(), inputStartedAt, plan: behaviorPlan,
+        userText: text, deliveredText: reply, channel: 'web' });
     } catch (e) {
       log('warn', `[Playground] saveConversationTurn 失败: ${e.message}`);
     }

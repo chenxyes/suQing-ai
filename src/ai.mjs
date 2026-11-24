@@ -298,7 +298,7 @@ export async function generateReply(personaPrompt, history, userMessage, params 
   if (safetyLevel && temperature !== rawTemp) {
     log('info', `[ai] safety-aware temp: ${rawTemp} → ${temperature} (risk=${safetyLevel})`);
   }
-  const { accountId = null, companionId = null } = ctx;
+  const { accountId = null, companionId = null, purpose = 'reply', probe = false } = ctx;
   const _t0 = Date.now();
 
   const messages = [];
@@ -320,7 +320,7 @@ export async function generateReply(personaPrompt, history, userMessage, params 
   // 搜失败 / 未配置 search provider 时静默继续，不影响主对话。
   let effectiveSystem = personaPrompt;
   try {
-    const judge = shouldSearch(userMessage);
+    const judge = purpose === 'internal' ? { search: false } : shouldSearch(userMessage);
     if (judge.search) {
       const sr = await webSearch(userMessage, { maxResults: 5, timeoutMs: 6000 });
       if (sr.ok && sr.results.length > 0) {
@@ -347,9 +347,9 @@ export async function generateReply(personaPrompt, history, userMessage, params 
     });
     let reply = text;
     // v1.13.x 真人感#1：非角色扮演模式，删掉动作神态旁白（确定性兜底，prompt 之外再保一道）
-    if (!/进入角色扮演模式/.test(personaPrompt)) reply = stripActionNarration(reply);
+    if (purpose !== 'internal' && !/进入角色扮演模式/.test(personaPrompt)) reply = stripActionNarration(reply);
     log('info', `[ai] reply_length=${reply.length}`);
-    if (accountId && usage) {
+    if (!probe && accountId && usage) {
       try {
         recordAiUsage({
           accountId,
@@ -362,7 +362,7 @@ export async function generateReply(personaPrompt, history, userMessage, params 
       }
     }
     // P1-7 成本明细：chat 调用一律记一条（accountId 可空），含 token/延迟/状态/估算成本
-    recordAiUsageEvent({
+    if (!probe) recordAiUsageEvent({
       accountId, companionId, provider, model,
       capability: 'chat', promptTokens: usage?.prompt_tokens || 0, completionTokens: usage?.completion_tokens || 0,
       latencyMs: Date.now() - _t0, status: reply === FALLBACK ? 'fallback' : 'ok',
@@ -370,7 +370,7 @@ export async function generateReply(personaPrompt, history, userMessage, params 
     return reply;
   } catch (err) {
     log('error', `[ai] chat 错误: ${JSON.stringify(chatFailureMetadata(err))}`);
-    recordAiUsageEvent({
+    if (!probe) recordAiUsageEvent({
       accountId, companionId, provider: err.provider, model: err.model,
       capability: 'chat', latencyMs: Date.now() - _t0, status: 'error',
     });
