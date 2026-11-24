@@ -56,7 +56,7 @@ export function computeMessageStats(accountId) {
       MIN(created_at) AS first_at,
       MAX(created_at) AS last_at
     FROM companion_conversation_turns
-    WHERE companion_id IN ${inClause(ids)}
+    WHERE COALESCE(synthetic,0)=0 AND COALESCE(import_unverified,0)=0 AND companion_id IN ${inClause(ids)}
   `).get(...ids);
   const spanDays = row?.first_at && row?.last_at
     ? Math.max(1, Math.round((new Date(row.last_at) - new Date(row.first_at)) / 86_400_000))
@@ -88,7 +88,7 @@ export function computeActivityHeatmap(accountId) {
       CAST(strftime('%H', datetime(created_at, '+8 hours')) AS INT) AS hour,
       COUNT(*) AS n
     FROM companion_conversation_turns
-    WHERE role = 'user' AND companion_id IN ${inClause(ids)}
+    WHERE role = 'user' AND COALESCE(synthetic,0)=0 AND COALESCE(import_unverified,0)=0 AND companion_id IN ${inClause(ids)}
     GROUP BY dow, hour
   `).all(...ids);
   // 输出 grid[dow][hour] = n
@@ -116,7 +116,7 @@ export function computeInitiationRatio(accountId) {
       SELECT created_at, role,
         LAG(created_at) OVER (ORDER BY id) AS prev_at
       FROM companion_conversation_turns
-      WHERE companion_id IN ${inClause(ids)}
+      WHERE COALESCE(synthetic,0)=0 AND COALESCE(import_unverified,0)=0 AND companion_id IN ${inClause(ids)}
       ORDER BY id
     )
     SELECT
@@ -142,7 +142,7 @@ export function computeUsagePattern(accountId) {
   const days = db.prepare(`
     SELECT DISTINCT date(datetime(created_at, '+8 hours')) AS day
     FROM companion_conversation_turns
-    WHERE companion_id IN ${inClause(ids)}
+    WHERE COALESCE(synthetic,0)=0 AND COALESCE(import_unverified,0)=0 AND companion_id IN ${inClause(ids)}
     ORDER BY day
   `).all(...ids).map(r => r.day);
 
@@ -193,7 +193,7 @@ export function computeReplyLength(accountId) {
       AVG(CASE WHEN role='user' THEN length(content) END) AS user_avg,
       AVG(CASE WHEN role='assistant' THEN length(content) END) AS ai_avg
     FROM companion_conversation_turns
-    WHERE companion_id IN ${inClause(ids)}
+    WHERE COALESCE(synthetic,0)=0 AND COALESCE(import_unverified,0)=0 AND companion_id IN ${inClause(ids)}
   `).get(...ids);
   return {
     user_avg: Math.round(row?.user_avg || 0),
@@ -302,7 +302,7 @@ export function computeTopicTendency(accountId) {
   const db = getDb();
   const turns = db.prepare(`
     SELECT content FROM companion_conversation_turns
-    WHERE role = 'user' AND companion_id IN ${inClause(ids)}
+    WHERE role = 'user' AND COALESCE(synthetic,0)=0 AND COALESCE(import_unverified,0)=0 AND companion_id IN ${inClause(ids)}
     LIMIT 2000
   `).all(...ids);
   const counts = {};
@@ -354,7 +354,7 @@ function getRecentUserText(accountId, limit = 50) {
   const db = getDb();
   return db.prepare(`
     SELECT content FROM companion_conversation_turns
-    WHERE role = 'user' AND companion_id IN ${inClause(ids)}
+    WHERE role = 'user' AND COALESCE(synthetic,0)=0 AND COALESCE(import_unverified,0)=0 AND companion_id IN ${inClause(ids)}
     ORDER BY id DESC LIMIT ?
   `).all(...ids, limit).map(r => String(r.content || '').slice(0, 200)).reverse();
 }

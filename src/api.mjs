@@ -85,7 +85,7 @@ import { getActiveChatProvider, REGISTRY as CHAT_REGISTRY } from './providers/ch
 import { getActiveImageProvider } from './providers/image.mjs';
 import { getActiveVisionProvider, REGISTRY as VISION_REGISTRY } from './providers/vision.mjs';
 import { getActiveAsrProvider, REGISTRY as ASR_REGISTRY } from './providers/asr.mjs';
-import { getActiveEmbeddingProvider } from './providers/embedding.mjs';
+import { getActiveEmbeddingProvider, testEmbeddingProvider } from './providers/embedding.mjs';
 import { downloadImageWithGuards } from './security/netguard.mjs';
 import { synthesizeMp3Only } from './voice_pipeline.mjs';
 import { recognizeVoice } from './ai.mjs';
@@ -145,7 +145,7 @@ import {
   getConversationContext, clearConversationContext,
   GIFT_CATALOG, getGiftById, saveCompanionGift, getCompanionGifts,
   getReminders, createReminder, updateReminder, deleteReminder, getDueReminders,
-  getUserProfile, upsertUserProfile,
+  getUserProfile, getUserProfileForRecall, upsertUserProfile, softClearMemories,
   getDb, // BILLING_DISABLED: 保留 db helper 以便 18 岁后恢复
   getLastVerificationSend, countVerificationSendsSince, saveVerificationCode,
   getVerificationCode, deleteVerificationCode, bumpVerificationAttempt,
@@ -1622,14 +1622,6 @@ router.post('/auth/wechat-bind', requireAuth, (req, res) => {
       });
       if (sessionId) wechatLoginSessions.delete(sessionId);
       log('info', `[API] 微信重新绑定成功 account=${accountId} companion=${result.companionId ?? 'none'}`);
-      // v1.21.3 PR-D: 重绑同样算"绑定微信"触发
-      if (result.companionId) {
-        import('./backfill_history.mjs').then(async m => {
-          const { getCompanionById } = await import('./db.mjs');
-          const rc = getCompanionById(result.companionId);
-          if (rc) m.maybeAutoBackfill(rc, { justBound: true, reason: 'rebind' });
-        }).catch(() => {});
-      }
       return res.json({
         ok: true,
         success: true,
@@ -1663,8 +1655,6 @@ router.post('/auth/wechat-bind', requireAuth, (req, res) => {
     const existing = getWechatAccountByAccountId(accountId);
     if (sessionId) wechatLoginSessions.delete(sessionId);
     log('info', `[API] 微信绑定成功 account=${accountId}`);
-    // v1.21.3 PR-D: 绑定微信 = 全量回填先到者之一
-    import('./backfill_history.mjs').then(m => m.maybeAutoBackfill(companion, { justBound: true, reason: 'bind' })).catch(() => {});
     return res.json({
       success: true,
       message: '微信绑定成功',
@@ -2178,6 +2168,7 @@ router.get('/setup/provider-status', softAuth, (req, res) => {
   }
   const visionActive = getActiveVisionProvider();
   const asrActive    = getActiveAsrProvider();
+  const embeddingActive = getActiveEmbeddingProvider();
   const ttsActive    = getTtsStatus();   // { active, configured, voice_id, ... }
   // 联网搜索 search section（独立结构：无 model 概念，custom provider 是 searxng 用 base URL）
   const searchActive = getActiveSearchProvider();
@@ -2206,8 +2197,10 @@ router.get('/setup/provider-status', softAuth, (req, res) => {
     image: { active: getActiveImageProvider().id, active_model: getActiveImageProvider().model,
       active_configured: getActiveImageProvider().configured,
       providers: { custom: customProviderStatus('image', isAuthed) } },
-    embedding: { active: getActiveEmbeddingProvider().id, active_model: getActiveEmbeddingProvider().model,
-      active_configured: getActiveEmbeddingProvider().configured,
+    embedding: { active: embeddingActive.id, active_model: embeddingActive.model,
+      active_configured: embeddingActive.configured, dim: embeddingActive.dim,
+      config_error: embeddingActive.config_error,
+      ...(isAuthed ? { health: embeddingActive.health } : {}),
       providers: { custom: customProviderStatus('embedding', isAuthed) } },
     tts:    {
       active: ttsActive.active || null,
@@ -2460,6 +2453,10 @@ router.post('/setup/test-provider',
     const name = provider.toLowerCase().trim();
     const cap  = String(capability).toLowerCase();
 
+    if (cap === 'embedding') {
+      try { return ok(res, await testEmbeddingProvider(name)); }
+      catch (error) { return res.status(200).json({ ok: false, error: error.message }); }
+    }
     if (name === 'custom' && CUSTOM_CAPABILITIES.includes(cap)) {
       try { return ok(res, await testCustomProvider(cap)); }
       catch (error) { return res.status(200).json({ ok: false, error: error.message }); }
@@ -2685,7 +2682,7 @@ router.get('/companions/:id/timeline', requireAuth, (req, res) => {
 router.get('/companions/:id/prompt', requireAuth, (req, res) => {
   const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
   const c  = requireOwnedCompanion(req, res, id); if (!c) return;
-  const userProfile = getUserProfile(c.user_id, id);
+  const userProfile = getUserProfileForRecall(c.user_id, id);
   const memories    = recallMemories(id, c.user_id, '', 10);
   const recentTurns = getConversationContext(id, 10);
   const prompt = buildSystemPrompt(c, { memories, userProfile, recentTurns });
@@ -2809,8 +2806,6 @@ router.post('/companions', requireAuth, (req, res) => {
     log('info', `[API] 创建 companion id=${c.id} user=${wechat_user_id}`);
     // 异步生成"元认知 / 人生背景"——不阻塞返回
     asyncGeneratePersonaFacts(c);
-    // v1.21.3 PR-D: 创建即生成 7 天薄版历史（异步秒级，失败由消息水位自动重试）
-    import('./backfill_history.mjs').then(m => m.maybeAutoBackfill(c, { reason: 'create' })).catch(() => {});
     return ok(res, c, 201);
   } catch (e) {
     if (e.code === 'EXISTS') return err(res, e.message, 409, { existing_id: e.id });
@@ -3389,11 +3384,11 @@ router.post('/companions/:id/memories', requireAuth, (req, res) => {
   const types  = ['fact','preference','event','emotion','image','daily_summary','weekly_summary','monthly_summary'];
   const legacyType = types.includes(memory_type) ? memory_type : 'fact';
   const source = MEMORY_SOURCES.includes(memory_source) ? memory_source : 'user';
-  saveMemory({ companionId: id, userId: c.user_id, memoryType: legacyType, content, importance });
-  // Apply v3 fields via patch on the last inserted row
+  const memoryId = saveMemory({ companionId: id, userId: c.user_id, memoryType: legacyType, content, importance,
+    memoryLayer: layer, memoryWeight: weight, memorySource: source });
+  if (!memoryId) return err(res, '记忆未保存：内容为空或包含不可存储的敏感信息');
   const db = getDb();
-  const row = db.prepare('SELECT id FROM companion_memories WHERE companion_id = ? ORDER BY id DESC LIMIT 1').get(id);
-  if (row) patchMemory(row.id, id, { memory_layer: layer, memory_weight: weight, memory_source: source, memory_status: 'active' });
+  const row = db.prepare('SELECT * FROM companion_memories WHERE id=? AND companion_id=?').get(memoryId, id);
   log('info', `[API] 手动添加记忆 companion=${id} layer=${layer}`);
   // 首次记忆保存成就（静默）
   tryAchievement(id, 'first_memory_saved');
@@ -3401,9 +3396,9 @@ router.post('/companions/:id/memories', requireAuth, (req, res) => {
   // 传入 memory_layer meta 作为快速短路；memoryId 存在时 processMemoryForGraph
   // 还会再做一次 DB 查询校验 sensitive_flag / do_not_mention
   try {
-    processMemoryForGraph(id, content, row?.id ?? null, { memory_layer: layer });
+    if (row.memory_subject === 'user') processMemoryForGraph(id, row.content, row.id, { memory_layer: layer });
   } catch { /* 非阻塞 */ }
-  return ok(res, { companion_id: id, memory_layer: layer, content, memory_weight: weight }, 201);
+  return ok(res, { companion_id: id, memory_id: row.id, memory_layer: layer, content: row.content, memory_weight: weight }, 201);
 });
 
 // PUT /api/companions/:id/memories/:memoryId — 编辑内容 / 属性
@@ -3422,9 +3417,10 @@ router.put('/companions/:id/memories/:memoryId', requireAuth, (req, res) => {
     }
   }
   if (Object.keys(fields).length === 0) return err(res, '无可更新字段');
-  patchMemory(mid, id, fields);
+  const updated = patchMemory(mid, id, fields);
+  if (!updated) return err(res, '记忆未更新：记录不存在、内容为空或包含不可存储的敏感信息');
   log('info', `[API] 更新记忆 companion=${id} mid=${mid}`);
-  return ok(res, { updated: true, memory_id: mid, fields });
+  return ok(res, { updated: true, memory_id: mid, fields: Object.fromEntries(Object.keys(fields).map(key => [key, updated[key]])) });
 });
 
 // DELETE /api/companions/:id/memories/:memoryId — 软删除
@@ -3441,10 +3437,7 @@ router.delete('/companions/:id/memories/:memoryId', requireAuth, (req, res) => {
 router.delete('/companions/:id/memories', requireAuth, (req, res) => {
   const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
   const c  = requireOwnedCompanion(req, res, id); if (!c) return;
-  const db = getDb();
-  const changes = db.prepare(
-    "UPDATE companion_memories SET memory_status='deleted', updated_at=datetime('now') WHERE companion_id = ? AND COALESCE(memory_status,'active') != 'deleted'"
-  ).run(id).changes;
+  const changes = softClearMemories(id, c.user_id);
   log('info', `[API] 软清空记忆 companion=${id} changes=${changes}`);
   return ok(res, { companion_id: id, cleared: true, changes });
 });
@@ -3524,7 +3517,7 @@ router.put('/companions/:id/user-profile', requireAuth, (req, res) => {
   const c    = requireOwnedCompanion(req, res, id); if (!c) return;
   const data = req.body || {};
   if (Object.keys(data).length === 0) return err(res, '请求体为空');
-  const profile = upsertUserProfile(c.user_id, id, data);
+  const profile = upsertUserProfile(c.user_id, id, data, { manual: true });
   log('info', `[API] 更新用户画像 companion=${id}`);
   return ok(res, profile);
 });
@@ -3678,7 +3671,7 @@ router.get('/companions/:id/prompt-debug', requireAuth, (req, res) => {
   // 普通用户只能查看自己的 companion prompt（已由 requireOwnedCompanion 保证）
   try {
     const memories      = recallMemories(id, c.user_id, '', 10);
-    const userProfile   = getUserProfile(c.user_id, id);
+    const userProfile   = getUserProfileForRecall(c.user_id, id);
     const recentTurns   = getConversationContext(id, 6);
     const personaFacts  = getPersonaFacts(id);
     const dateKey       = shanghaiDateKey();
@@ -3794,9 +3787,10 @@ router.post('/companions/import', requireAuth, async (req, res) => {
     const importMemories = req.query.include_memories === '1';
     const result = await importCompanionForUser(userId, accountId, botId, body, { importMemories });
     log('info', `[API] 导入角色 account=${accountId} new_companion=${result.companionId}`);
-    return ok(res, { companion_id: result.companionId });
+    return ok(res, { companion_id: result.companionId, quarantined_memories: result.quarantinedMemories ?? 0 });
   } catch (e) {
     log('error', `[API] import 失败 account=${accountId}: ${e.message}`);
+    if (e.status === 400) return err(res, `导入格式无效: ${e.message}`, 400);
     return err(res, '导入失败', 500);
   }
 });
@@ -3847,14 +3841,15 @@ router.get('/companions/:id/backfill-status', requireAuth, async (req, res) => {
 });
 
 // POST /api/companions/:id/backfill-history
-// body: { days_back?: number, event_count?: number, force?: boolean, tier?: 'thin'|'full' }
-// v1.21.3 PR-D: admin-only——用户侧按钮已撤（创建薄版+水位全量自动化），admin 保留手动重生成
+// Explicit fictional setting generation; never triggered by creation, binding or chat.
+// body: { confirm_synthetic: true, days_back?, event_count?, force?, tier? }
 router.post('/companions/:id/backfill-history',
   rateLimit({ scope: 'backfill-history', maxPerWindow: 10, windowMs: 24 * 60 * 60 * 1000, message: '每日最多生成 10 次' }),
   requireAdmin,
   async (req, res) => {
     const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
     const c  = getCompanionById(id); if (!c) return err(res, 'companion 不存在', 404);
+    if (req.body?.confirm_synthetic !== true) return err(res, '需要明确确认生成虚构共同经历；这些内容不会作为真实记忆使用', 400);
     const daysBack   = Number(req.body?.days_back) || 90;
     const eventCount = Number(req.body?.event_count) || 35;
     const force      = !!req.body?.force;
@@ -3862,13 +3857,14 @@ router.post('/companions/:id/backfill-history',
     try {
       const { backfillTimelineForCompanion } = await import('./backfill_history.mjs');
       const r = await backfillTimelineForCompanion(c, {
-        daysBack, eventCount, force, tier,
+        daysBack, eventCount, force, tier, confirmSynthetic: true,
         accountId: null,
       });
       if (r.error) return err(res, r.error, 500);
       if (r.skipped === 'already-backfilled' && !force) {
-        return err(res, '已经生成过历史时间线了，加 force=true 可覆盖重生', 409);
+        return err(res, '已经生成过虚构设定；明确确认后加 force=true 可追加，已有记录会保留', 409);
       }
+      if (r.skipped) return err(res, '生成期间归属或记忆状态已变化，或已完成同类生成；本次没有写入', 409);
       return ok(res, r);
     } catch (e) {
       log('error', `[API] backfill-history failed companion=${id}: ${e.message}`);
@@ -4390,6 +4386,9 @@ export function startApiServer() {
     app.set('trust proxy', process.env.TRUST_PROXY === 'true' ? 'loopback' : process.env.TRUST_PROXY);
   }
 
+  // Full memory migrations may exceed the ordinary chat/config body size.
+  // Authenticate before allocating the larger import body; the default stays bounded.
+  app.post('/api/companions/import', requireAuth, express.json({ limit: MAX_IMPORT_BYTES }));
   app.use(express.json({ limit: '2mb' }));
   app.use(express.urlencoded({ extended: false, limit: '2mb' }));   // 支付宝异步通知用 form 编码
   app.use((req, _res, next) => { log('debug', `[API] ${req.method} ${req.path}`); next(); });

@@ -1,3 +1,4 @@
+import { reviewPressureTail } from '../src/pressure_tail.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
@@ -16,6 +17,7 @@ for (const scenario of ['missing_binding', 'expired_context', 'first_failed', 'p
   const inFlight = new Set();
   const recentText = '刚看完一本很有意思的书';
   const context = {
+    reviewPressureTail, touchRecalledMemories() {},
     console, Date, Math, Set, process, setTimeout: (fn) => { fn(); },
     isBehaviorTaskCurrent: () => scenario !== 'cancelled' && !(scenario === 'late_cancel' && calls.generated),
     getSleepRow: () => ({ is_sleeping: scenario === 'sleeping' }),
@@ -28,7 +30,7 @@ for (const scenario of ['missing_binding', 'expired_context', 'first_failed', 'p
     getArcProactivePolicy: () => ({ arcState: 'normal' }),
     getProactiveLastSent: () => ({ lastAt: 0 }),
     recallContextToken: () => scenario === 'expired_context' ? null : 'fixture-token',
-    getUserProfile: () => ({}), getDueReminders: () => [], formatDateKey: () => '2026-09-18',
+    getUserProfileForRecall: () => ({}), getDueReminders: () => [], formatDateKey: () => '2026-09-18',
     buildTimeContext: () => ({ searchText: '', specialText: '' }),
     getConversationContext: () => collisionRetry ? [{ role: 'assistant', content: recentText }] : [],
     getRecentlyUsedMaterialIds: () => new Set(), materialDedupDays: () => 1,

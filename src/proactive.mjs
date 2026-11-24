@@ -2,8 +2,9 @@
  * 
  * Copyright (c) 2026 溪语 AI Contributors. MIT License.
  */
+import { reviewPressureTail } from './pressure_tail.mjs';
 import {
-  getActiveBotAccounts, getRecentHistory, getUserProfile, recallMemories,
+  getActiveBotAccounts, getRecentHistory, getUserProfileForRecall, recallMemories, touchRecalledMemories,
   getConversationContext, getDueReminders, markRemindersTriggered, ensureRelationshipReminders,
   saveMessage, saveConversationTurn,
   getCompanionById, getBotContextForCompanion, getDb,
@@ -25,7 +26,7 @@ import {
 import { claimDueBehaviorTask, isBehaviorTaskCurrent, finishBehaviorTask } from './behavior_tasks.mjs';
 import { buildBehaviorReplyHint } from './behavior_runtime.mjs';
 import { getActivePeriodContext, isPeriodHeavyWindow, isPmsActive } from './life_state.mjs';   // v1.22 PR-L3 经期情绪路由
-import { buildWorksPromptHint, worksSceneSeed, pickProactiveWork, workMaterialId, worksConfig } from './current_works.mjs';  // v1.21.4 PR-W2 表达层
+import { buildWorksPromptHint, buildProactiveWorkHint, isWorkPhotoEligible, worksSceneSeed, pickProactiveWork, workMaterialId, worksConfig } from './current_works.mjs';  // v1.21.4 PR-W2 表达层
 import { pickProactiveCategory, cappedCategoryIds } from './photo_categories.mjs';  // v1.21.6 PR-A 照片品类加权采样（默认关）
 import { selectThoughtMaterial, thoughtSceneSeed } from './photo_thought.mjs';      // v1.21.6 PR-B 想到你素材选择
 import { filterForStorage } from './privacy_filter.mjs';                            // v1.21.6 PR-B 隐私命中判定
@@ -717,7 +718,7 @@ async function sendProactiveMessage(companion, kind, account, opts = {}) {
     });
   }
 
-  const userProfile = getUserProfile(companion.user_id, companion.id);
+  const userProfile = getUserProfileForRecall(companion.user_id, companion.id);
   const timeContext = buildTimeContext(userProfile, getDueReminders(companion.id, formatDateKey()));
   const recentTurns = getConversationContext(companion.id, 10);
   // v1.21.3 素材冷却：N 天内主动消息引用过的记忆不再进候选（看不到就说不出）。
@@ -954,10 +955,7 @@ ${recallLoop.expected_followup ? `你心里想：${recallLoop.expected_followup}
       });
       if (pick) {
         chosenWorkMatId = workMaterialId(pick.id);
-        const _label = pick.verify_status === 'generic'
-          ? `你最近在看的那本${String(pick.title || '书').replace(/[《》]/g, '')}`
-          : `你最近在看的《${String(pick.title || '').replace(/[《》]/g, '')}》`;
-        systemPrompt += `\n\n【★ 可选话题 · 手头的事】这次**可以**很自然地聊一句${_label}（随口说说进度/感想，像"刚看完一章"），也可以不聊、说你更想说的。别像念书评、别硬贴、一句带过就好。`;
+        systemPrompt += buildProactiveWorkHint(pick);
       }
     } catch (e) {
       log('warn', `[CurrentWorks] proactive 话题供给失败（不影响发送）companion=${companion.id}: ${e.message}`);
@@ -965,6 +963,7 @@ ${recallLoop.expected_followup ? `你心里想：${recallLoop.expected_followup}
   }
 
   const proactiveBinding = getActiveWechatBinding(companion.wechat_user_id, companion.bot_id);
+  touchRecalledMemories(companion.id, companion.user_id, memories.map(row => row.id));
   let reply = await generateReply(systemPrompt, history, userMessage, {
     temperature: companion.temperature,
     max_tokens: Math.min(companion.max_tokens || 300, 300),
@@ -1008,6 +1007,10 @@ ${recallLoop.expected_followup ? `你心里想：${recallLoop.expected_followup}
   reply = scrubFabricatedIllness(reply, companion.id, { activeLifeStates: _activeLifeStates });
   // v1.22 PR-L2 经期披露门控：朋友/暧昧期（affection < 阈值）显式月经表述出站剥（只表现不点明）。
   reply = scrubPeriodDisclosure(reply, { affectionLevel: companion.affection_level });
+
+  if (effectiveKind !== 'reminder') {
+    reply = await reviewPressureTail(reply, { enabled: companion.no_pressure, userText: history.findLast(m => m.direction === 'in')?.content });
+  }
 
   // PR-1（2026-06-14）intent 级复读止血：bot 主动重复的同 intent(+topic)在冷却窗内**直接不发**。
   // 比 3-gram 撞车检测多拦"语义同·文本不同"的复读(remind/ask_plan/miss_you 反复)。reminder 豁免；
@@ -1301,7 +1304,7 @@ async function sendScenePhoto(companion, ctx) {
       const pick = selectThoughtMaterial({
         likes: listPreferences(companion.id, { type: 'like' }),
         lexicon: listShaping(companion.id, { kind: 'lexicon' }),
-        memories: getMemories(companion.id, companion.wechat_user_id, 20).filter(m => (m.importance ?? 0) >= 7),
+        memories: getMemories(companion.id, companion.user_id, 20).filter(m => (m.importance ?? 0) >= 7),
         tabooTerms: [
           ...listPreferences(companion.id, { type: 'taboo' }).map(p => p.target),
           ...listShaping(companion.id, { kind: 'taboo' }).map(s => s.content),
@@ -1334,7 +1337,7 @@ async function sendScenePhoto(companion, ctx) {
       const pick = pickProactiveWork(works, {
         usedIds: getRecentlyUsedMaterialIds(companion.id, { days: Math.max(0, _wcfg.mentionCooldownH / 24) }),
         weeklyCount: (matId) => countRecentMaterialUse(companion.id, matId, { days: 7 }),
-        eligible: (w) => w.verify_status === 'verified' || String(w.kind || '').toLowerCase() === 'craft',
+        eligible: isWorkPhotoEligible,
         cfg: _wcfg,
       });
       if (pick) {

@@ -1,3 +1,4 @@
+import { reviewPressureTail } from '../src/pressure_tail.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
@@ -20,13 +21,14 @@ for (const test of ['sent', 'failed', 'partial', 'throw', 'fallback', 'discard',
   const pendingBursts = new Map();
   let generation = 0;
   const context = {
+    reviewPressureTail, touchRecalledMemories() {},
     ...behavior, buildInnerOsHint, randomUUID, process, Date, Math, Set, Map, clearTimeout,
     inflightUsers: new Set(), inflightPhoto: new Set(), pendingBursts,
     log: (level, text) => { if (level === 'error') seen.errors.push(text); },
     clearProactiveUnanswered() {}, observeBehaviorInput() {}, readBehaviorState: () => null,
     detectPhotoIntentSmart: async () => ({ type: 'none' }), getRecentHistory: () => [],
     detectMinorSmart: async () => ({ level: 'none' }), detectSafetyRisk: () => ({ level: 'none' }),
-    getUserProfile: () => ({}), getConversationContext: () => [], buildLongTermDigest: async () => '',
+    getUserProfileForRecall: () => ({}), getConversationContext: () => [], buildLongTermDigest: async () => '',
     shanghaiDateKey: () => '2026-11-17', getDailySchedule: () => null, getRecentSchedules: () => [], getPersonaFacts: () => null,
     getEmotionStateWithDefaults: () => ({}), escalationLevel: () => ({ level: 0 }),
     updateEmotionFromUserMessage: () => ({}), stripCurrentTurnFromHistory: h => h,
@@ -62,7 +64,7 @@ for (const test of ['sent', 'failed', 'partial', 'throw', 'fallback', 'discard',
       if (test === 'throw' && seen.sends.length === 2) throw new Error('fixture send failure');
       return test !== 'failed' && !(test === 'partial' && seen.sends.length === 2);
     },
-    saveMessage() {}, saveConversationTurn: (id, role, text) => seen.turns.push({ role, text }),
+    saveMessage() {}, saveConversationTurn: (id, role, text) => { seen.turns.push({ role, text }); return { id: seen.turns.length, content: text, role }; },
     recordBehaviorDelivery: event => seen.plans.push(event), detectPhotoPromise: () => ({ promised: false }),
     postProcess: async (c, text, reply) => seen.post.push(reply),
   };

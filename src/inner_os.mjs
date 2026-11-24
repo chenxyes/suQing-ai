@@ -75,9 +75,18 @@ export function shouldRunInnerOs(userText, opts = {}) {
 /**
  * 给"内心 OS"生成 system prompt：让模型用第一人称写她此刻的真实内心反应
  */
-function buildInnerSystemPrompt(companion) {
+function buildInnerSystemPrompt(companion, { structuredOnly = false } = {}) {
   const name = companion?.name || '她';
   const stage = companion?.relationship_stage || '暧昧';
+  if (structuredOnly) {
+    return `你现在帮助 ${name} 判断当前对话，关系阶段为【${stage}】。现在不是写回复。
+只根据提供的真实对话输出一个 JSON 对象，不写内心独白、解释或补充故事：
+{"intent":"对方本轮意图(8字内)","user_tone":"warm|neutral|harsh|pressure","perceived_hurt":0,"is_apology":false,"apology_target":"","reply_energy":"low|mid|high"}
+perceived_hurt 为本轮明确冒犯你的程度 0-3；普通表达委屈、纠正你的话或要求按自己的时间安排，不等于攻击你，不据此反过来责怪对方。
+is_apology 只在对方向你道歉时为 true；apology_target 只取明确说出的事，没有就留空。
+不要猜测对方过去的经历、付出、失约或心理动机。信息不足保持中性。
+如后文提供相处行为候选，在同一个 JSON 中加入 behavior 字段；其他字段保持上述格式。`;
+  }
   return `你现在扮演 ${name}，处在【${stage}】阶段。
 
 你刚收到对方一条消息。**现在不是写回复**，是先想一下你的**真实内心反应**。
@@ -171,7 +180,8 @@ export function buildInnerOsHint(innerThought, { behaviorPlan = null } = {}) {
     );
   }
   if (behaviorPlan) {
-    return `\n【此刻的感受】\n${innerThought.trim()}\n这些感受保留为性格与语气背景，不直接复述。具体怎么回应按本轮相处行动执行；有边界不等于冷落，也不因为关心就假装立刻消气。`;
+    // Free-form inner narration is not evidence for a grounded action.
+    return '';
   }
   return `
 
@@ -205,14 +215,15 @@ export async function generateInnerMonologue({
   if (!context?.behaviorPlanningHint && !shouldRunInnerOs(userText, { hasOpenArcEvent: !!context?.hasOpenArcEvent })) return null;
 
   try {
-    const sys = buildInnerSystemPrompt(companion) + (context?.behaviorPlanningHint || '');
+    const structuredOnly = !!(context?.behaviorEnabled || context?.behaviorPlanningHint);
+    const sys = buildInnerSystemPrompt(companion, { structuredOnly }) + (context?.behaviorPlanningHint || '');
     // 只取最近 4 轮 history 让 inner 更聚焦当下
     const recent = (history || []).slice(-4);
     const inner = await generateReply(
       sys,
       recent,
       userText,
-      { temperature: 0.85, max_tokens: context?.behaviorPlanningHint ? Math.max(MAX_INNER_TOKENS, 480) : MAX_INNER_TOKENS, top_p: 0.9 },
+      { temperature: structuredOnly ? 0.2 : 0.85, max_tokens: context?.behaviorPlanningHint ? Math.max(MAX_INNER_TOKENS, 480) : MAX_INNER_TOKENS, top_p: 0.9 },
       { accountId: context?.accountId || null, purpose: 'internal', probe: !!context?.probe },
     );
     if (!inner || isChatFallback(inner)) return null;
@@ -220,7 +231,7 @@ export async function generateInnerMonologue({
     const result = parseInnerResponse(inner);
     if (result.thought.length < 4 && !result.struct && !result.behavior) return null;
     log('debug', `[InnerOS] companion=${companion?.id} tone=${result.struct?.user_tone || '-'} behavior=${!!result.behavior}`);
-    return { ...result, thought: result.thought.length >= 4 ? result.thought : '' };
+    return { ...result, thought: !structuredOnly && result.thought.length >= 4 ? result.thought : '' };
   } catch (e) {
     log('warn', `[InnerOS] 生成失败 companion=${companion?.id}: ${e.message}`);
     return null;

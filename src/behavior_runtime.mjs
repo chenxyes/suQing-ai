@@ -95,7 +95,7 @@ export function buildBehaviorPlanningHint(context) {
   const actions = context.scenario === 'pause' ? ['pause'] : BEHAVIOR_ACTIONS[context.scenario];
   if (!actions) return '';
   const cards = context.candidates.map(card => `${card.title}\n${card.when.join('；')}\n${Object.entries(card.actions).map(([key, value]) => `${key}: ${value}`).join('\n')}\n避免：${card.avoid.join('；')}`).join('\n');
-  return `\n【本轮相处行为候选】\n执行者是你，不是教对方怎么对待另一个人。保留内心感受，但把感受和行动选择分开。\n${cards}\n本轮 scenario 只能是 ${context.scenario}，action 只能从 ${actions.join(' / ')} 中选择；默认 ${context.defaultAction}。\n在结构化 JSON 中增加 behavior 字段：{"scenario":"${context.scenario}","action":"${context.defaultAction}"}。没有依据不要增加动作，不生成工具、定时器或任意新字段。原有冲突信号仍如实填写。`;
+  return `\n【本轮相处行为候选】\n执行者是你，不是教对方怎么对待另一个人。判断只依据当前对话，不补写内心故事。\n${cards}\n本轮 scenario 只能是 ${context.scenario}，action 只能从 ${actions.join(' / ')} 中选择；默认 ${context.defaultAction}。\n在结构化 JSON 中增加 behavior 字段：{"scenario":"${context.scenario}","action":"${context.defaultAction}"}。没有依据不要增加动作，不生成工具、定时器或任意新字段。原有冲突信号仍如实填写。`;
 }
 
 /** Treat model output as a proposal; hard boundaries and timing remain code-owned. */
@@ -115,14 +115,16 @@ export function resolveBehaviorPlan(context, rawBehavior, { arcState = context?.
 }
 
 export function buildBehaviorReplyHint(plan) {
-  if (!isBehaviorEnabled() || !plan) return '';
+  if (!isBehaviorEnabled()) return '';
+  const grounding = '\n【本轮表达边界】只依据对方明确说过或确认过的事；你的提问、猜测和玩笑不是事实。简短确认可以结束，不催补充、不追问未答的问题。性格、撒娇和玩笑不能覆盖对方的边界。未求建议且没有实际安全风险时，不追加吃饭、睡觉、出行等生活叮嘱。只输出聊天话语，不写动作旁白。';
+  if (!plan) return grounding + '没有已安排的后台联系，不承诺稍后主动找对方；保留对方给出的时间范围。';
   if (plan.scenario === 'pause' && plan.action === 'pause' && plan.sourceId === PAUSE_SOURCE && plan.sourceRevision === PAUSE_REVISION) {
-    return '\n【本轮相处行动：尊重暂停】\n对方明确要求停止或换话题。简短接住这个边界，停止追问和分析旧事，不安排后续追问。可以自然转向对方新提的话题；不把暂停当成不爱你，不要求解释，也不要念出内部行动名称。';
+    return grounding + '\n【本轮相处行动：尊重暂停】\n对方明确要求停止或换话题。简短接住这个边界，停止追问和分析旧事，不安排后续追问。可以自然转向对方新提的话题；不把暂停当成不爱你，不要求解释，也不要念出内部行动名称。';
   }
   const card = loadBehaviorLibrary().find(c => c.id === plan.sourceId && c.scenario === plan.scenario && c.source.revision === plan.sourceRevision);
   if (!card || !BEHAVIOR_ACTIONS[plan.scenario]?.includes(plan.action)) return '';
   const state = arc(plan.arcState);
   const stateHint = state === 'normal' ? '保留你的性格和自然的聊天节奏。'
     : `关系状态仍是 ${state}，没有因此升级或恢复。你可以保留不舒服和边界，同时执行下面的倾听或沟通动作；不要同时套用“只能嗯哦”的固定冷淡模板，也不要突然撒娇、宣布原谅。`;
-  return `\n【本轮相处行动】\n你亲自采用下面的方法与对方相处，不向对方讲解方法、不教对方怎样回复别人。${stateHint}\n${card.actions[plan.action]}\n避免：${card.avoid.join('；')}。\n资料只是方法，例子不是你们发生过的事；不虚构经历，不凭空认错，不替对方宣布情绪好转。只生成你会说的话，不输出方案名、字段、来源或内部规划。\n${plan.followup ? '对方请求了稍后联系；后续投递由程序安排，当前不宣称已经设置提醒、不保证准确送达时间。' : '本轮没有已确认的后台联系安排，不承诺稍后或明天主动发消息。'}\n对方停止或转题就结束这段行动，不为了完成流程强行追问。`;
+  return grounding + `\n【本轮相处行动】\n你亲自采用下面的方法与对方相处，不向对方讲解方法、不教对方怎样回复别人。${stateHint}\n${card.actions[plan.action]}\n避免：${card.avoid.join('；')}。\n资料只是方法，例子不是你们发生过的事；不虚构经历，不凭空认错，不替对方宣布情绪好转。只生成你会说的话，不输出方案名、字段、来源或内部规划。\n${plan.followup ? '对方请求了稍后联系；后续投递由程序安排，当前不宣称已经设置提醒、不保证准确送达时间。' : '本轮没有已确认的后台联系安排，不承诺稍后或明天主动发消息。'}\n对方停止或转题就结束这段行动，不为了完成流程强行追问。`;
 }

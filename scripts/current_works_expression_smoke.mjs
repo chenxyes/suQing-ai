@@ -9,13 +9,13 @@
  *        绝不在 `+ arcCtx.directive` 之后再拼（头插/尾插都会让 cold 让位）
  *   · 冷却放行双向：48h 冷却内 pickProactiveWork 不选它（她不主动提）；
  *     但 buildWorksPromptHint 永远把它列上（他问起永放行——对话召回不挂冷却）
- *   · 存量虚构退场：注入段含"以前提过但不在上面 → 看完了，别展开别否认"断言
+ *   · 档案外作品：不编造已完成状态，不续编旧作品剧情
  *   · generic 不指名（模糊但不虚构）；craft 自由文本
  */
 import { readFileSync } from 'node:fs';
 import {
   buildWorksPromptHint, worksSceneSeed, pickProactiveWork, workMaterialId,
-  buildWorkArchiveMemory, worksConfig,
+  buildWorkArchiveMemory, worksConfig, isWorkPhotoEligible,
 } from '../src/current_works.mjs';
 import { buildSystemPrompt } from '../src/companion.mjs';
 
@@ -34,10 +34,10 @@ const genericBook = { id: 13, kind: 'book', title: '推理小说', creator: null
   ok(h.includes('给外婆织围巾'), 'craft 自由文本入注入');
   ok(h.includes('永远正常接') || h.includes('正常接'), '约束①他问起永放行（对话召回）在场');
   ok(h.includes('别每条'), '约束②她别每条自荐（克制）在场');
-  ok(h.includes('这就是你现在手头在看') || h.includes('现在手头在看/在做的全部'),
-     '档案权威性断言在场（压过近 16 轮上下文——沙箱实测旧虚构名还在上下文里时必须靠这条）');
-  ok(h.includes('早看完') && h.includes('绝不接着说') && (h.includes('别否认') || h.includes('没提过')),
-     '约束③存量退场：旧作品名→看完了/绝不接着说进度剧情/不否认（红验④的注入侧断言）');
+  ok(h.includes('当前档案中记录的活动') && !h.includes('在看/在做的全部'),
+     '当前档案描述已知活动，不把缺席解释为过往活动不存在');
+  ok(h.includes('状态未确认') && h.includes('不续编剧情') && h.includes('不否认确实说过'),
+     '约束③旧名状态未确认，不续编剧情、不抹掉真实对话');
   ok(buildWorksPromptHint([]) === '' && buildWorksPromptHint(null) === '', '无 works → 空注入');
 }
 
@@ -90,7 +90,7 @@ const genericBook = { id: 13, kind: 'book', title: '推理小说', creator: null
   const capped = pickProactiveWork(works, { usedIds: new Set(), weeklyCount: () => cfg.weeklyMentionCap, cfg });
   ok(capped === null, `周上限 ≥${cfg.weeklyMentionCap} → 不选（与 48h 冷却互为双闸）`);
   // eligible：照片侧只拍 verified/craft，generic 排除
-  const photoEligible = (w) => w.verify_status === 'verified' || String(w.kind).toLowerCase() === 'craft';
+  const photoEligible = isWorkPhotoEligible;
   ok(pickProactiveWork([genericBook], { eligible: photoEligible, cfg }) === null, '照片侧：generic（无实物名）不拍');
   ok(pickProactiveWork([verifiedBook], { eligible: photoEligible, cfg, rng: () => 0 })?.id === 11, '照片侧：verified 真书可拍');
 }

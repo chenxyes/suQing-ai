@@ -1102,6 +1102,15 @@ async function refreshOptional() {
         document.getElementById(`s2-${cap}-provider`).value = section?.active === 'custom' ? 'custom' : '';
         document.getElementById(`s2-${cap}-model`).value = custom?.model || '';
         document.getElementById(`s2-${cap}-state`).textContent = `当前：${section?.active || '未启用'}${section?.active_configured ? ' · 已配置' : ''}`;
+        if (cap === 'embedding') {
+          S.embeddingProvider = section?.active || '';
+          const state = section?.health?.state;
+          const detail = section?.config_error?.message || (state === 'error'
+            ? section?.health?.last_error?.message || '最近请求失败'
+            : state === 'ok' ? '本进程最近请求成功' : '配置格式通过，尚未验证连接');
+          document.getElementById('s2-embedding-state').textContent =
+            `当前：${section?.active || '未启用'} · ${section?.active_model || '默认模型'} · ${detail}`;
+        }
       }
     }
     const s = d.data?.search;
@@ -1282,7 +1291,8 @@ function updateCustomFields(cap) {
   document.getElementById(`s2-${cap}-base-row`).classList.toggle('hidden', document.getElementById(`s2-${cap}-provider`).value !== 'custom');
 }
 async function testOptional(cap) {
-  const provider = document.getElementById(`s2-${cap}-provider`).value;
+  const provider = document.getElementById(`s2-${cap}-provider`).value
+    || (cap === 'embedding' ? S.embeddingProvider : '');
   const msgId = `s2-${cap}-msg`;
   if (!provider) { setMsg(msgId, '请先选择并保存 Provider', 'err'); return; }
   const button = document.getElementById(`s2-${cap}-test`);
@@ -1293,6 +1303,7 @@ async function testOptional(cap) {
     const result = await response.json();
     const success = result.ok && result.data?.ok;
     setMsg(msgId, success ? `✅ 连接成功 · ${result.data.latency_ms || 0} ms` : `❌ ${result.error || result.message || '连接失败'}`, success ? 'ok' : 'err');
+    if (cap === 'embedding') await refreshOptional();
   } catch { setMsg(msgId, '连接测试失败，请检查网络后重试', 'err'); }
   finally { button.disabled = false; }
 }

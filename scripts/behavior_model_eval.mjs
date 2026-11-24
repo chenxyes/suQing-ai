@@ -49,7 +49,7 @@ Object.assign(process.env, {
   INNER_OS_ENABLED: 'true', INNER_OS_MODE: 'always', SEARCH_PROVIDER: '',
 });
 delete process.env.BEHAVIOR_LIBRARY_DIR;
-const report = { createdAt: new Date().toISOString(), fixture: 'synthetic-adult-web', scenarios: [], findings: [] };
+const report = { createdAt: new Date().toISOString(), fixture: 'synthetic-adult-web', usageScope: 'ai_usage_events only; excludes existing direct provider calls such as pressure-tail review; latency includes the full request', scenarios: [], findings: [] };
 let db;
 try {
   const database = await import('../src/db.mjs');
@@ -97,7 +97,7 @@ try {
         const started = performance.now();
         const response = await playgroundChat(database.getCompanionById(id), user);
         await new Promise(resolve => setImmediate(resolve));
-        const usage = db.prepare(`SELECT count(*) calls,COALESCE(sum(prompt_tokens),0) inputTokens,
+        const usage = db.prepare(`SELECT count(*) loggedCalls,COALESCE(sum(prompt_tokens),0) inputTokens,
           COALESCE(sum(completion_tokens),0) outputTokens FROM ai_usage_events WHERE id>?`).get(usageBefore);
         const delivery = db.prepare('SELECT plan_json FROM behavior_deliveries WHERE companion_id=? AND id>? ORDER BY id DESC LIMIT 1').get(id, deliveryBefore);
         const plan = delivery ? JSON.parse(delivery.plan_json) : null;
@@ -123,7 +123,7 @@ try {
     const turns = report.scenarios.filter(s => s.mode === mode).flatMap(s => s.turns);
     const durations = turns.map(t => t.durationMs).sort((a, b) => a - b);
     const sum = key => turns.reduce((total, turn) => total + turn[key], 0);
-    return [mode, { turns: turns.length, calls: sum('calls'), inputTokens: sum('inputTokens'), outputTokens: sum('outputTokens'),
+    return [mode, { turns: turns.length, loggedCalls: sum('loggedCalls'), inputTokens: sum('inputTokens'), outputTokens: sum('outputTokens'),
       meanLatencyMs: Math.round(sum('durationMs') / turns.length), p95LatencyMs: durations[Math.ceil(durations.length * .95) - 1] }];
   }));
   console.log(JSON.stringify({ provider: report.provider, summary: report.summary, findings: report.findings }));

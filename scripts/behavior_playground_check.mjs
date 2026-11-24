@@ -19,6 +19,7 @@ Object.assign(process.env, environment);
 delete process.env.BEHAVIOR_LIBRARY_DIR;
 let requests = [], failFinal = false;
 let candidate = { scenario: 'support', action: 'validate' };
+const inventedThought = '之前你路考挂过，让我有点担心。';
 const finalText = '我听见了，你可以慢慢说。';
 const isInner = request => request.messages.some(message => message.role === 'system' && message.content.includes('现在不是写回复'));
 const server = http.createServer(async (request, response) => {
@@ -32,7 +33,7 @@ const server = http.createServer(async (request, response) => {
     response.end(JSON.stringify({ error: { message: 'fixture unavailable' } }));
     return;
   }
-  const content = inner ? '我想听清楚她现在的感受。\n' + JSON.stringify({
+  const content = inner ? inventedThought + '\n' + JSON.stringify({
     user_tone: 'neutral', perceived_hurt: 0, is_apology: false,
     reply_energy: 'mid', behavior: candidate,
   }) : finalText;
@@ -76,6 +77,7 @@ try {
   assertTwoPasses();
   assert.ok(hasHint(requests[0], '本轮相处行为候选'));
   assert.ok(hasHint(requests[1], '本轮相处行动'));
+  assert.ok(!hasHint(requests[1], inventedThought), 'unverified inner narrative must not become reply evidence');
   assert.deepEqual([last().scenario, last().action], ['support', 'validate']);
   assert.ok(!hasHint(requests[1], '每 5-8 条回复里'), 'support must not compete with compulsory criticism');
   assert.ok(!hasHint(requests[1], '【你也会逗他】'), 'support does not request teasing at the same time');
@@ -85,6 +87,7 @@ try {
   assertTwoPasses();
   assert.deepEqual([last().scenario, last().action], ['support', 'listen']);
   await call('今晚我想吃一碗面条');
+  assert.ok(!hasHint(requests.at(-1), inventedThought), 'ordinary turns also discard unverified inner narrative when V1 is enabled');
   const afterNewTopic = count('behavior_deliveries');
   await call('嗯');
   assert.equal(count('behavior_deliveries'), afterNewTopic, 'ack after an ordinary new topic cannot resurrect support');
@@ -158,6 +161,7 @@ try {
   const beforeResets = count('behavior_state_resets');
   await call('今天工作搞砸了，我特别委屈');
   assertTwoPasses();
+  assert.ok(hasHint(requests.at(-1), inventedThought), 'feature-off retains the legacy inner thought contract');
   await call('别再问这件事了');
   assert.equal(count('behavior_deliveries'), beforeOff);
   assert.equal(count('behavior_state_resets'), beforeResets);

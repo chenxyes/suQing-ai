@@ -23,6 +23,7 @@ import { imageGenerate } from './providers/image.mjs';
 import { visionRecognize } from './providers/vision.mjs';
 import { asrRecognize } from './providers/asr.mjs';
 import { embedText as _embedText } from './providers/embedding.mjs';
+export { embedTextWithDescriptor } from './providers/embedding.mjs';
 import { shouldSearch, webSearch, formatSearchContext } from './web_search.mjs';
 
 // ─── v1.9.0 #2: Provider retry wrapper（单 provider 内退避，不做跨 provider fallback） ──

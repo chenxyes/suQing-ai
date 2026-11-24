@@ -9,9 +9,10 @@
  * Copyright (c) 2026 溪语 AI Contributors. MIT License.
  */
 
+import { reviewPressureTail } from './pressure_tail.mjs';
 import { parseMessage, sendTextMessage, sendTyping, sendMessageItem, rememberContextToken, peekSendQuota } from './ilink.mjs';
 import { stripCurrentTurnFromHistory, isProtocolDuplicate } from './inbound_dedup.mjs';   // v1.21.4 #279
-import { generateReply, recognizeImage, embedText } from './ai.mjs';
+import { generateReply, recognizeImage, embedTextWithDescriptor } from './ai.mjs';
 import { isChatFallback } from './chat_response.mjs';
 import { downloadInboundVoiceToMp3 } from './voice_inbound.mjs';
 import { analyzeVoiceWithQwen } from './voice_emotion.mjs';
@@ -21,7 +22,7 @@ import {
   isIntentCooled, isAck, buildIntentDedupHint, pickMicroAck,
 } from './intent_dedup.mjs';
 import {
-  saveMessage, getRecentHistory, findRecentInboundCandidate, getUserProfile, recallMemories, recallMemoriesSemantic,
+  saveMessage, getRecentHistory, findRecentInboundCandidate, getUserProfileForRecall, recallMemoriesHybrid, touchRecalledMemories,
   getConversationContext, saveConversationTurn,
   getActiveWechatBinding, getCompanionById, consumePendingBindSessionForWechat,
   isAccountBanned, getDailySchedule, shanghaiDateKey, getRecentSchedules, getPersonaFacts,
@@ -303,9 +304,8 @@ function computeReplyDelay(text) {
   return Math.max(REPLY_DELAY_MIN_MS, Math.min(REPLY_DELAY_MAX_MS, base + jitter));
 }
 
-// 把 AI 回复按 || 拆成多条短消息 + 强制后处理（去 kaomoji、长段拆分）
+// 保留模型给出的段落/显式分段，最多四条消息；超额内容合并而不截断。
 const MAX_SEGMENTS = 4;
-const MAX_SEG_LEN = 25;  // 单段强制上限（超过会再拆）
 
 // kaomoji 标识符（含这些字符的括号内容必删）
 const KAOMOJI_INNER_CHARS = /[ω♥♡♬♪σ＞＜ヽノ٩ʕɞ´`¸∇∀＾·•・˘ﾟ]/;
@@ -337,74 +337,20 @@ function postProcessReply(reply) {
   text = text.replace(/[?？]{2,}/g, '？');
   text = text.replace(/[…\.]{4,}/g, '…');
   text = text.replace(/～+/g, '～').replace(/~+/g, '~');  // 波浪线归一
-  // 注意：换行先保留 — v1.10.13 用它做最高优先级分段
+  // 保留换行，由发送分段处理；不按正文长度或句末标点自动拆分。
   text = text.replace(/[ \t]+/g, ' ').replace(/^[ \t]+|[ \t]+$/gm, '').trim();
-
-  // v1.10.13: 优先用 AI 输出的换行作为段落分隔（最自然、最少破坏语义）。
-  // 之前 postProcessReply 完全不看 \n —— AI 用换行分了完美 3 段，被整串塞进
-  // splitReplySegments 二次处理 → 没 || 也没句末标点 → 落到按 25 字硬切 →
-  // 把「怎么一点都不|听话」这种短语腰斩成两段。
-  if (/\n/.test(text) && !/\|\|/.test(text)) {
-    const lines = text.split(/\n+/).map(s => s.trim()).filter(Boolean);
-    if (lines.length >= 2 && lines.length <= MAX_SEGMENTS && lines.every(l => l.length <= 60)) {
-      return lines.join('||');
-    }
-  }
-
-  // 没有 || 但 > 20 字 → 按句尾自动拆
-  if (!/\|\|/.test(text) && text.length > 20) {
-    const parts = text.split(/(?<=[。！？!?])/).map(s => s.trim()).filter(Boolean);
-    if (parts.length > 1) {
-      text = parts.slice(0, MAX_SEGMENTS).join('||');
-    }
-  }
   return text;
 }
 
 function splitReplySegments(reply) {
   if (!reply || typeof reply !== 'string') return [reply || ''];
-  // 先后处理（去 kaomoji + 长段自动拆）
+  // 保留既有 kaomoji、标点和空白清理。
   const processed = postProcessReply(reply);
-  // 支持半角 ||、全角 ｜｜
-  let raw = processed.split(/\s*(?:\|\||｜｜)\s*/g).map(s => s.trim()).filter(Boolean);
+  // 支持半角 ||、全角 ｜｜及段落换行，不在句子或 URL 中间新增边界。
+  const raw = processed.split(/\s*(?:\|\||｜｜|\r?\n+)\s*/g).map(s => s.trim()).filter(Boolean);
   if (raw.length === 0) return [processed.trim()];
-
-  // 二次强制：每段超过 MAX_SEG_LEN 字 → 按内部句末标点再拆
-  // v1.10.13: 取消按 `，`/`,` 拆 —— 中文逗号是子句分隔，按它切会腰斩主谓宾
-  // （比如「她说，他来了」会被切成「她说，」「他来了」）。
-  const expanded = [];
-  for (const seg of raw) {
-    if (seg.length <= MAX_SEG_LEN) { expanded.push(seg); continue; }
-    const subs = seg.split(/(?<=[。！？!?])/).map(s => s.trim()).filter(Boolean);
-    if (subs.length > 1) {
-      // 累计拼回去，每个 sub 不超过 MAX
-      let cur = '';
-      for (const s of subs) {
-        if ((cur + s).length > MAX_SEG_LEN && cur) {
-          expanded.push(cur);
-          cur = s;
-        } else {
-          cur += s;
-        }
-      }
-      if (cur) expanded.push(cur);
-    } else {
-      // v1.10.13: 没分隔符的长段，宁愿整段发也不腰斩 —— 用户看一条长消息
-      // 比看「怎么一点都不」「听话」这种诡异腰斩好得多。
-      expanded.push(seg);
-    }
-  }
-  raw = expanded;
-
-  // v1.10.13: 兜底合并 — 末段 < 3 字时合并到上一段，避免「听话」式 hard-slice 残尾。
-  // 阈值刻意保守，让 AI 主动用 || 分的「好的」「明白了」这种短确认段能保留。
-  while (raw.length >= 2 && raw[raw.length - 1].length < 3) {
-    const tail = raw.pop();
-    raw[raw.length - 1] = `${raw[raw.length - 1]}${tail}`;
-  }
-
   if (raw.length > MAX_SEGMENTS) {
-    return [...raw.slice(0, MAX_SEGMENTS - 1), raw.slice(MAX_SEGMENTS - 1).join('')];
+    return [...raw.slice(0, MAX_SEGMENTS - 1), raw.slice(MAX_SEGMENTS - 1).join('\n')];
   }
   return raw;
 }
@@ -681,10 +627,6 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
   inflightUsers.add(fromUser);  // 回复期间占用，防同一用户并发回复（调用前已查 has）
   // v1.16.x: 用户开口了 → 清零"未回连发"计数，主动消息刹车解除
   try { clearProactiveUnanswered(companion.id); } catch {}
-  // v1.21.3 PR-D: 回填水位检查（无历史→补薄版；薄版+真实消息≥10→升全量）。
-  // 做成"每条消息时检查"而非一次性事件：存量老 companion（按钮时代没点过、
-  // 触发事件已成过去时的）下一条消息自然补上。fire-and-forget 零阻塞。
-  import('./backfill_history.mjs').then(m => m.maybeAutoBackfill(companion, { reason: 'watermark' })).catch(() => {});
   try {
     // v1.10.38: regex fast path + LLM 兜底。regex 命中 strong → 直接 strong；
     // 不命中 → LLM 二分类（轻量短 token）兜底，终结 regex 漏识别循环。
@@ -778,25 +720,16 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
       log('warn', `[Safety] detect failed companion=${companion.id}: ${e.message}`);
     }
 
-    // ── 召回长期记忆：优先语义检索，失败兜底关键词 ─────────────────────────
+    // ── 召回长期记忆：语义与关键词共同排序 ─────────────────────────
     let memories = [];
     if (companion.memory_enabled) {
-      try {
-        const qEmb = await embedText(userText);
-        if (qEmb) {
-          memories = recallMemoriesSemantic(companion.id, companion.user_id, qEmb, 7);
-          if (memories.length === 0) {
-            memories = recallMemories(companion.id, companion.user_id, userText, 7);
-          }
-        } else {
-          memories = recallMemories(companion.id, companion.user_id, userText, 7);
-        }
-      } catch (e) {
-        log('warn', `[Bot] semantic recall 失败, 退回关键词: ${e.message}`);
-        memories = recallMemories(companion.id, companion.user_id, userText, 7);
-      }
+      let queryEmbedding = null;
+      try { queryEmbedding = await embedTextWithDescriptor(userText); }
+      catch (e) { log('warn', '[Memory] query embedding unavailable'); }
+      memories = recallMemoriesHybrid(companion.id, companion.user_id, userText, { queryEmbedding, limit: 7 });
     }
-    const userProfile = getUserProfile(companion.user_id, companion.id);
+
+    const userProfile = getUserProfileForRecall(companion.user_id, companion.id);
     // v1.2.10: 10 → 16 轮，对话连续感明显更好；companion.mjs 系统提示里的
     // slice 已同步上调到 -16，多取的 6 轮全部进 prompt。
     const recentTurns = getConversationContext(companion.id, 16);
@@ -853,7 +786,7 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
       companion,
       userText,
       history,
-      context: { accountId: binding.account_id || null, hasOpenArcEvent: !!getOpenRelationshipEvent(companion.id), behaviorPlanningHint: buildBehaviorPlanningHint(behaviorContext) },
+      context: { accountId: binding.account_id || null, hasOpenArcEvent: !!getOpenRelationshipEvent(companion.id), behaviorEnabled: isBehaviorEnabled(), behaviorPlanningHint: buildBehaviorPlanningHint(behaviorContext) },
     }).catch(() => null);
     // v1.22 PR-L3：本轮 period 上下文一次查询（批注③），同喂 arc tick + emotion hint（缓存复用）。
     let periodCtx = null;
@@ -1021,6 +954,7 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
     let reply;
     // ★ 危机干预：检测到自伤/自杀(结合最近多轮上下文) → 退出角色、直接给求助资源，覆盖 LLM，绝不继续演
     // （v1.21: _crisisLevel 的检测已前置到 arc tick 之前——危机下 arc 冷淡表达被挂起）
+    if (_crisisLevel !== 'high') touchRecalledMemories(companion.id, companion.user_id, memories.map(row => row.id));
     const genReplyOnce = () => _crisisLevel === 'high'
       ? buildCrisisReply()
       : generateReply(
@@ -1086,6 +1020,8 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
       await sendTextMessage(ctx, msg.fromUser, reply, msg.contextToken);
       return;
     }
+
+    reply = await reviewPressureTail(reply, { enabled: companion.no_pressure && _crisisLevel !== 'high', userText, safetyLevel: userMsgSafetyLevel });
 
     // ── Record user replied (proactive engine) ────────────────────────────────
     try { recordUserReplied(companion.id); } catch {}
@@ -1173,12 +1109,12 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
       }
     }
 
-    saveConversationTurn(companion.id, 'user', userText, companion.chat_mode_active);
+    const memoryUserTurn = saveConversationTurn(companion.id, 'user', userText, companion.chat_mode_active);
     // Only delivered text may become memory or an executed behavior. A failed
     // later segment must not discard evidence of the earlier delivered segment.
     reply = deliveredSegments.join(' || ');
     if (!reply) return;
-    saveConversationTurn(companion.id, 'assistant', reply, companion.chat_mode_active);
+    const memoryAssistantTurn = saveConversationTurn(companion.id, 'assistant', reply, companion.chat_mode_active);
     if (behaviorPlan) {
       try { recordBehaviorDelivery({ companionId: companion.id, turnKey: randomUUID(), inputStartedAt, plan: behaviorPlan,
         userText, deliveredText: reply, channel: 'wechat' }); }
@@ -1209,7 +1145,7 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
     }
 
     // ── 异步后处理（不阻塞主流程）───────────────────────────────────────────
-    postProcess(companion, userText, reply).catch(err =>
+    postProcess(companion, userText, reply, { turnIds: [memoryUserTurn?.id,memoryAssistantTurn?.id].filter(Boolean) }).catch(err =>
       log('error', `[Bot] postProcess 异常: ${err.message}`)
     );
 
@@ -1245,14 +1181,6 @@ async function handleBindCodeMessage(ctx, msg, botId) {
     const text = '绑定成功！现在开始和你的AI女友聊天吧～';
     await sendAndRecord(ctx, msg.fromUser, text, msg.contextToken);
     log('info', `[Bot] bind success user_id=${result.binding.account_id} companion_id=${result.companionId ?? 'null'} old_binding_inactivated=${result.wasRebind ? 1 : 0}`);
-    // v1.21.3 PR-D: 绑定微信 = 全量回填先到者之一（fire-and-forget）
-    if (result.companionId) {
-      import('./backfill_history.mjs').then(async m => {
-        const { getCompanionById } = await import('./db.mjs');
-        const rc = getCompanionById(result.companionId);
-        if (rc) m.maybeAutoBackfill(rc, { justBound: true, reason: 'wx-bind' });
-      }).catch(() => {});
-    }
     return true;
   } catch (e) {
     const text = e.code === 'WECHAT_BOUND'
@@ -1278,14 +1206,6 @@ async function handlePendingBindSessionMessage(ctx, msg, botId) {
     const text = '绑定成功！现在开始和你的AI女友聊天吧～';
     await sendAndRecord(ctx, msg.fromUser, text, msg.contextToken);
     log('info', `[Bot] pending bind success user_id=${result.binding.account_id} companion_id=${result.companionId ?? 'null'} old_binding_inactivated=${result.wasRebind ? 1 : 0}`);
-    // v1.21.3 PR-D: 绑定微信 = 全量回填先到者之一（与上面 bind 同语义）
-    if (result.companionId) {
-      import('./backfill_history.mjs').then(async m => {
-        const { getCompanionById } = await import('./db.mjs');
-        const rc = getCompanionById(result.companionId);
-        if (rc) m.maybeAutoBackfill(rc, { justBound: true, reason: 'wx-pending-bind' });
-      }).catch(() => {});
-    }
     return true;
   } catch (e) {
     const text = e.code === 'WECHAT_BOUND'
@@ -1344,9 +1264,9 @@ async function sendStickerAndRecord(ctx, toUser, picked, contextToken) {
  * 回复发送后异步执行：
  * 1. 同步更新好感度 + 心情（规则，极快）
  * 2. 异步记忆提取（调用 AI）
- * 3. 异步用户画像更新（调用 AI）
+ * 3. 从已验证用户记忆更新画像备注
  */
-async function postProcess(companion, userMsg, botReply) {
+async function postProcess(companion, userMsg, botReply, memoryOptions = {}) {
   // v1.10.32: 检测 AI 是否在日常对话里"突然表白" — proactive confession kind 之外的
   // 自然路径。命中即 markCompanionConfessed，让后续 syncUpdateCompanionState 的
   // hasConfession gate（v1.10.24）能放行升"恋人"。
@@ -1380,8 +1300,8 @@ async function postProcess(companion, userMsg, botReply) {
 
   // 异步：记忆提取
   if (companion.memory_enabled) {
-    await extractAndSaveMemories(companion.id, companion.user_id, userMsg, botReply);
-    await extractAndUpdateUserProfile(companion.id, companion.user_id, userMsg);
+    await extractAndSaveMemories(companion.id, companion.user_id, userMsg, botReply, memoryOptions);
+    await extractAndUpdateUserProfile(companion.id, companion.user_id, userMsg, memoryOptions);
   }
 
   // v1.8.0 #4: open loops — 抽取"未完成的事" + auto-resolve
