@@ -347,7 +347,7 @@ const MEMORY_SYSTEM_PROMPT = `你是记忆候选提取助手。输入是已落�
 引述、转述、假设、问题和简短附和不是个人事实证明；没有完整明确证据就不生成候选。证据 quote 必须逐字引用原消息中的完整、自足陈述，不能从假设或引号内摘半句来断言为真。
 只返回 JSON：
 {
-  "current_scene": "仅本轮明确的当前场景/地点变化；过去事件不算，没有就空字符串",
+  "current_scene": "仅本轮明确的角色自己的当前地点。对方的地点、过去场景和未来计划不填。没有就空字符串",
   "memories": [{
     "subject": "user|companion|shared",
     "memory_type": "fact|preference|event|emotion",
@@ -381,7 +381,7 @@ export async function extractAndSaveMemories(companionId, userId, _userMsg, _bot
     if (getMemoryRecallBarrier(companionId, userId).revision !== expectedRecallRevision) return 0;
     const obj = safeParseObject(raw);
     // Scene is a separate mutable state. Preserve its existing update/empty/failure behavior.
-    applySceneUpdate(companionId, obj.current_scene);
+    applySceneUpdate(companionId, obj.current_scene, { observedAt: turns.at(-1).created_at });
     const candidates = Array.isArray(obj.memories) ? obj.memories : [];
     const inputs = [];
     for (const candidate of candidates) {
@@ -415,7 +415,7 @@ export async function extractAndSaveMemories(companionId, userId, _userMsg, _bot
     return saved.length;
   } catch (error) {
     log('warn', `[Memory] 记忆提取失败: ${error.message}`);
-    applySceneUpdate(companionId, null, { extractionFailed: true });
+    applySceneUpdate(companionId, null, { extractionFailed: true, observedAt: turns.at(-1).created_at });
     return 0;
   }
 }
@@ -424,9 +424,9 @@ export async function extractAndSaveMemories(companionId, userId, _userMsg, _bot
  * 更新 companion.current_scene —— #324 失忆修。
  *
  * current_scene 是「**可变当前态**」（patch、覆盖），与 episodic 记忆的"过去事件"措辞严格区分：
- * episodic 记"他提议去图书馆"(发生过的事)，current_scene 记"图书馆"(此刻在哪)。它被 §6 无条件
- * 注入 prompt（companion.mjs「你现在在：X」），所以必须**跨轮持久**——一旦设定就留住到下次场景
- * 切换，否则密聊下真场景滑出 16 行窗口后又回到注入"在家"的老 bug。
+ * episodic 记"他提议去图书馆"(发生过的事)，current_scene 记"图书馆"(此刻在哪)。它为回复
+ * 提供最近场景，记录需要跨轮保留到下次场景
+ * 切换。回复只采用同日、同一时段且晚于最近一项日程开始的场景记录。
  *
  * 语义（拍板）：
  *   · 本轮抽到明确场景        → patch 覆盖（场景切换/确认）
@@ -435,17 +435,14 @@ export async function extractAndSaveMemories(companionId, userId, _userMsg, _bot
  *                                 旧值比空值危险；宁可退回§6"随意聊"也不留可能过期的旧场景）
  *   · 跨日陈旧 → 由 plan_tasks 次日 00:30 TTL 批清场（不在此处）
  */
-export function applySceneUpdate(companionId, scene, { extractionFailed = false } = {}) {
+export function applySceneUpdate(companionId, scene, { extractionFailed = false, observedAt = new Date().toISOString() } = {}) {
   try {
-    if (extractionFailed) {
-      patchCompanion(companionId, { current_scene: '日常' });
-      return;
-    }
-    const s = String(scene ?? '').trim().slice(0, 30);
-    // 本轮无明确场景信号 → 保留现值（场景跨轮持久）。注意"在家"是真实场景(到家了)不跳过；
-    // 仅空串/占位词不更新。prompt 已约束"只在明确场景时才填"，防止把"图书馆"误覆盖成默认。
-    if (!s || s === '无' || s === '日常') return;
-    patchCompanion(companionId, { current_scene: s });
+    const value = extractionFailed ? '日常' : String(scene ?? '').trim().slice(0, 30);
+    if (!value || value === '无' || (!extractionFailed && value === '日常')) return;
+    // A delayed extraction can only describe the turn it read.
+    getDb().prepare(`UPDATE companions SET current_scene=?, scene_recorded_at=?, updated_at=CURRENT_TIMESTAMP
+      WHERE id=? AND (scene_recorded_at IS NULL OR julianday(scene_recorded_at) <= julianday(?))`)
+      .run(value, observedAt, companionId, observedAt);
   } catch (e) {
     log('debug', `[Scene] current_scene 更新跳过 companion=${companionId}: ${e.message}`);
   }

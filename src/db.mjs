@@ -1477,6 +1477,7 @@ function migrateCompanions() {
     ['affection_level',       'INTEGER DEFAULT 0'],
     ['relationship_stage',    "TEXT DEFAULT '陌生人'"],
     ['current_scene',         "TEXT DEFAULT '在家'"],
+    ['scene_recorded_at',     'DATETIME'],
     ['scene_history',         "TEXT DEFAULT '[]'"],
     ['backstory',             'TEXT'],
     ['family_background',     'TEXT'],
@@ -1975,6 +1976,10 @@ function buildUpsertFields(data) {
     if (JSON_ARRAY_FIELDS.has(k)) values.push(toJson(v));
     else if (BOOL_FIELDS.has(k))  values.push(v ? 1 : 0);
     else                           values.push(v ?? null);
+  }
+  if (cols.includes('current_scene')) {
+    cols.push('scene_recorded_at');
+    values.push(new Date().toISOString());
   }
   return { cols, placeholders: cols.map(() => '?'), values };
 }
@@ -3392,7 +3397,10 @@ export function updateCompanion(id, data) {
   const db = getDb();
   const existing = getCompanionById(id);
   if (!existing) { const err = new Error('companion 不存在'); err.code = 'NOT_FOUND'; throw err; }
-  const fields = buildUpsertFields(data);
+  // Saving an unchanged profile must not renew an old scene.
+  const changed = { ...data };
+  if (changed.current_scene === existing.current_scene) delete changed.current_scene;
+  const fields = buildUpsertFields(changed);
   if (fields.cols.length === 0) return existing;
   const sets = fields.cols.map(c => `${c} = ?`).join(', ');
   db.prepare(`UPDATE companions SET ${sets}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
@@ -3414,6 +3422,9 @@ export function updateCompanion(id, data) {
 /** 直接更新 companion 的特定字段（供内部使用，跳过字段白名单但强校验列名） */
 export function patchCompanion(id, fields) {
   const db = getDb();
+  if (fields && Object.hasOwn(fields, 'current_scene') && !Object.hasOwn(fields, 'scene_recorded_at')) {
+    fields = { ...fields, scene_recorded_at: new Date().toISOString() };
+  }
   const keys = Object.keys(fields || {});
   // v1.11.0 安全(M2)：列名必须是合法 SQL 标识符，杜绝列名注入。现有调用方都是
   // 硬编码 key；此校验是防御未来有人误把 req.body 直接传进来。fail-closed。
@@ -3797,7 +3808,7 @@ export function getMemoryEvidenceTurns(companionId, userId, turnIds) {
   if (!owner || String(owner.user_id) !== String(userId)) return [];
   const ids = [...new Set(turnIds)];
   const cutoff = getMemoryRecallBarrier(companionId,userId).turn_id_cutoff;
-  const turns = db.prepare(`SELECT id,companion_id,role,content,synthetic FROM companion_conversation_turns
+  const turns = db.prepare(`SELECT id,companion_id,role,content,synthetic,created_at FROM companion_conversation_turns
     WHERE companion_id=? AND COALESCE(synthetic,0)=0 AND COALESCE(import_unverified,0)=0 AND id>? AND id IN (${ids.map(()=>'?').join(',')})
     ORDER BY id`).all(companionId,cutoff,...ids);
   return turns.length === ids.length ? turns : [];

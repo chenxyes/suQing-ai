@@ -1,3 +1,4 @@
+import { shanghaiMessageTime } from './activity_time.mjs';
 /**
  * AI 集成模块（业务层）
  *
@@ -323,7 +324,8 @@ export async function generateReply(personaPrompt, history, userMessage, params 
       ? (h.direction === 'in' ? 'user' : 'assistant')
       : (h.role === 'user' ? 'user' : 'assistant');
     if (role === 'assistant' && isChatFallback(h.content)) continue;
-    messages.push({ role, content: h.content });
+    const at = shanghaiMessageTime(h.created_at);
+    messages.push({ role, content: at ? `[北京时间 ${at}] ${h.content}` : h.content });
   }
   messages.push({ role: 'user', content: userMessage });
 

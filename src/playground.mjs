@@ -202,7 +202,7 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
     const emotionHint = Number(companion.safe_mode) ? '' : buildEmotionPromptHint(emotionState, { missingLevel, arcActive: behaviorOn && (arcCtx.active || !!behaviorPlan) });
     let systemPrompt = buildSystemPrompt(companion, {
       memories, userProfile, recentTurns, longTermDigest,
-      promptMode: 'reply', dailySchedule, recentSchedules, personaFacts, preferences, behaviorPlan,
+      promptMode: 'reply', userText: text, dailySchedule, recentSchedules, personaFacts, preferences, behaviorPlan,
     }) + stickerHint + emotionHint;
     if (availability) systemPrompt += '\n他给了大致有空的时段，接话时保留这个范围，等他确认具体时间。';
 
