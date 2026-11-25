@@ -7,7 +7,7 @@ import {
   getActiveBotAccounts, getRecentHistory, getUserProfileForRecall, recallMemories, touchRecalledMemories,
   getConversationContext, getDueReminders, markRemindersTriggered, ensureRelationshipReminders,
   saveMessage, saveConversationTurn,
-  getCompanionById, getBotContextForCompanion, getDb,
+  getCompanionById, getBotContextForCompanion, getDb, getUnconsumedMissed,
   getActiveWechatBinding, getDailySchedule, shanghaiDateKey, getRecentSchedules, getPersonaFacts,
   markCompanionConfessed, patchCompanion,
   recordProactiveSentTimestamp, getProactiveLastSent, markWindowLastCallSent, bumpProactiveUnanswered,
@@ -316,6 +316,25 @@ export function shouldDemoteMorning({ goodmorningSentForDate, todayKey, lastUser
     }
   }
   return { demote: alreadySent || talkedThisMorning, alreadySent, talkedThisMorning };
+}
+
+const morningReceivedTime = new Intl.DateTimeFormat('sv-SE', {
+  timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+});
+
+export function buildMorningMissedHint(missed = []) {
+  const previews = [];
+  for (const row of missed) {
+    if (!Number.isSafeInteger(row.received_at) || row.received_at <= 0) continue;
+    const received = new Date(row.received_at);
+    if (!Number.isFinite(received.getTime())) continue;
+    const content = String(row.content || '').trim().slice(0, 30);
+    previews.push(`${morningReceivedTime.format(received)} | ${JSON.stringify(content || '[无文字内容]')}`);
+    if (previews.length === 5) break;
+  }
+  if (!previews.length) return '\n直接问早，省去任何关于他发过消息或你漏回消息的说法。';
+  return `\n【待回复消息 · 北京时间】\n${previews.join('\n')}\n选一条直接接他的话。时间只用来理解先后，省去报时和解释为什么现在才回。`;
 }
 
 async function sendProactiveMessageGuarded(companion, kind, account, opts = {}) {
@@ -799,21 +818,14 @@ async function sendProactiveMessage(companion, kind, account, opts = {}) {
   }
 
   const reminderTitles = (opts.reminders || []).map(r => r.title).filter(Boolean).join('、');
-  // v1.10.0: morning kind 拼上昨晚 missed 摘要（不消费，由 wrapper 在发完后 drain）
+  // v1.10.0: morning kind 拼上实际待回复消息（不消费，由 wrapper 在发完后 drain）
   let missedHint = '';
   if (effectiveKind === 'morning') {
     try {
-      // peek 不 consume —— 用 getUnconsumedMissed 内部 import 避免循环依赖
-      const { getUnconsumedMissed } = await import('./db.mjs');
       const missed = getUnconsumedMissed(companion.id, 20) || [];
-      if (missed.length > 0) {
-        const preview = missed
-          .slice(0, 5)
-          .map(m => String(m.content || '').slice(0, 30))
-          .join('』『');
-        missedHint = `\n【昨晚他在你睡着后发了 ${missed.length} 条消息】内容片段：『${preview}』。\n你刚醒来看到，要自然地：1) 表达"刚醒"的迷糊；2) 不要装作没看到；3) 不要逐条回复，用一句"看到你昨晚发了好多 / 我刚看到 / 我睡着了对不起"概括；4) 然后选一条你最想回应的话题轻轻接一下。`;
-      }
+      missedHint = buildMorningMissedHint(missed);
     } catch (e) {
+      missedHint = buildMorningMissedHint();
       log('warn', `[Proactive] morning missed peek failed: ${e.message}`);
     }
   }

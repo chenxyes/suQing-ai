@@ -5,7 +5,7 @@
  * 07:46 部署重启丢内存排程 → 重算把 morning 又排上 → 09:32 又发"早…刚醒"。
  * 验 shouldDemoteMorning 的两道判定：已发过早安 / 今早已互动。
  */
-import { shouldDemoteMorning, goodnightBelongDateKey } from '../src/proactive.mjs';
+import { shouldDemoteMorning, goodnightBelongDateKey, buildMorningMissedHint } from '../src/proactive.mjs';
 import { shanghaiDateKey } from '../src/db.mjs';
 
 let pass = 0, fail = 0;
@@ -78,6 +78,18 @@ r = shouldDemoteMorning({ goodmorningSentForDate: null, todayKey: today, lastUse
 ok(!r.demote, '脏时间串 → 不误降级');
 r = shouldDemoteMorning({});
 ok(!r.demote, '空参数 → 不误降级');
+
+// 北京时间 07:58 的入站，在服务器 UTC 日期上仍是前一天。
+const early = { received_at: Date.parse('2026-11-22T23:58:37Z'), content: '先出门了' };
+const late = { received_at: Date.parse('2026-11-22T15:40:00Z'), content: '到家了' };
+const morning = buildMorningMissedHint([early]);
+ok(morning.includes('2026-11-23 07:58') && morning.includes(early.content), '给模型真实的本地收信时间和内容');
+ok(!/昨晚|对不起|道歉/.test(morning), '早晨收到的消息不要求夜间漏读话术');
+const mixed = buildMorningMissedHint([late, early]);
+ok(mixed.includes('2026-11-22 23:40') && mixed.includes('2026-11-23 07:58'), '跨夜多条消息各用自己的时间');
+const empty = buildMorningMissedHint([]);
+ok(empty.includes('直接问早') && !empty.includes('先出门了'), '空队列只问早');
+ok(buildMorningMissedHint([{ received_at: null, content: '旧记录' }]) === empty, '缺少收信时间不构造未读事实');
 
 console.log(`morning_dedup_smoke: 通过 ${pass} 失败 ${fail}`);
 process.exit(fail ? 1 : 0);
