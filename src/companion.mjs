@@ -14,6 +14,7 @@
 // ─── v1.20 安全收尾 (Issue #3)：未成年人安全模式的"朋友身份"覆盖节 ─────────
 // safe_mode=1 时整个恋爱叙事段不注入，用这节替换。文本生成放本文件（保持
 // companion.mjs 零依赖纯函数）；检测与状态在 src/minor_guard.mjs。
+import { activityAt, dayPeriod, shanghaiMessageTime } from './activity_time.mjs';
 import { isMemoryRecallable } from './memory_admission.mjs';
 
 function buildSafeModePromptSection(c) {
@@ -133,13 +134,14 @@ export function buildFirstTurnHint(companion) {
 }
 
 // ─── 主函数 ───────────────────────────────────────────────────────────────────
-export function buildSystemPrompt(companion, { memories = [], userProfile = null, recentTurns = [], longTermDigest = null, promptMode = 'reply', dailySchedule = null, recentSchedules = null, personaFacts = null, preferences = null, shapingHint = '', worksHint = '', openLoopsHint = '', locale = null, behaviorPlan = null } = {}) {
+export function buildSystemPrompt(companion, { memories = [], userProfile = null, recentTurns = [], longTermDigest = null, promptMode = 'reply', dailySchedule = null, recentSchedules = null, personaFacts = null, preferences = null, shapingHint = '', worksHint = '', openLoopsHint = '', locale = null, behaviorPlan = null, now = new Date(), userText = '' } = {}) {
   memories = memories.filter(isMemoryRecallable);
   const c     = companion;
   const parts = [];
 
   // ── 0. 此刻的时间感知（自然引用，不报时） ──────────────────────────────────
-  const tc = buildTimeAwarenessBlock();
+  const activity = activityAt(c, dailySchedule, now, userText);
+  const tc = buildTimeAwarenessBlock(now);
   parts.push(tc);
 
   // ── 1. 核心身份 ──────────────────────────────────────────────────────────────
@@ -245,18 +247,12 @@ export function buildSystemPrompt(companion, { memories = [], userProfile = null
   parts.push(`\n【此刻的你】`);
   const moodText = MOOD_INFLUENCE[c.current_mood] || MOOD_INFLUENCE['平静'];
   parts.push(moodText);
-  // #324：'日常' 与 '在家' 同为中性默认（无特定场景），退回"随意聊"；真实场景才点名注入。
-  // 仅扩 current_scene 的中性判定，不动 mood 注入（emotion/L3 域）。
-  if (c.current_scene && c.current_scene !== '在家' && c.current_scene !== '日常') {
-    parts.push(`你现在在：${c.current_scene}。`);
-  } else {
-    parts.push('你现在在家，很随意地和他聊天。');
-  }
+  if (activity.scene) parts.push(`最近场景记录（北京时间 ${activity.scene.at}）：${activity.scene.text}。`);
 
   // ── 7. 对话模式 ──────────────────────────────────────────────────────────────
   // ── 完全自适应：根据时间/心情/活动自动选合适的对话模式 ──
   // 用户不再手动调，dashboard 显示"完全自适应"标签
-  const autoMode = pickAdaptiveChatMode(c, { dailySchedule });
+  const autoMode = pickAdaptiveChatMode(c, activity);
   parts.push(`\n【当前对话模式（自动适应）：${autoMode}】\n${CHAT_MODE_DESC[autoMode] || CHAT_MODE_DESC['日常聊天']}`);
 
   // ── 8. 说话方式 ──────────────────────────────────────────────────────────────
@@ -432,31 +428,19 @@ ${lines}
   }
 
   // ── 14c. 今日日程（让 AI 像有自己生活的人）──────────────────────────────
-  if (dailySchedule && Array.isArray(dailySchedule.items) && dailySchedule.items.length > 0) {
-    const nowMin = nowShanghaiMinute();
-    const scheduleLines = dailySchedule.items.map(it => {
-      const itMin = parseHHMM(it.time);
-      const tag = (itMin != null && itMin <= nowMin) ? '✓' : '·';
-      return `  ${tag} ${it.time}  ${it.activity}`;
-    }).join('\n');
-    parts.push(`\n【你今天的安排】(${dailySchedule.date_key || ''} 当前 ${minToHHMM(nowMin)})
-${scheduleLines}${dailySchedule.mood_arc ? `\n今天的心情：${dailySchedule.mood_arc}` : ''}
-★ 如果对方问你"在干嘛""今天做了什么"，参考这份安排自然回答，不要照搬念出来。✓ 是已经做过的，· 是未来的（你"打算"做）。`);
-
-    // 当前时段的情绪 — 注入到 system，让回复语气和心情同步
-    if (dailySchedule.mood_segments) {
-      const seg = pickMoodSegment(nowMin, dailySchedule.mood_segments);
-      if (seg) parts.push(`【此刻你的状态】${seg}\n★ 你这条回复要透出这个状态，不要突兀变换。`);
-    }
+  if (dailySchedule?.date_key === activity.localTime.slice(0, 10)) {
+    parts.push(`【你今天的安排】北京时间 ${activity.localTime}（${activity.period}）。日程只记录计划；没有执行记录时，不能说已经做完或正在做。`);
+    if (activity.scheduled) parts.push(`本时段最近的计划：${activity.scheduled.time} ${activity.scheduled.activity}。`);
+    if (activity.dayPlan) parts.push('当天计划：' + activity.dayPlan.map(it => it.time + ' ' + it.activity).join('；'));
   }
 
   // v1.13.x 真人感#4：低电量时段 —— 不对称投入，她不是永远秒回永远暖
-  if (promptMode !== 'proactive' && isLowEnergyStretch(c.id)) {
+  if (promptMode !== 'proactive' && isLowEnergyStretch(c.id, now)) {
     parts.push(`【此刻你有点低电量】你这会儿状态不高——累了 / 在忙自己的事 / 就是没什么聊天欲。不是不理他，是真没那么多话：回得短、淡，少追问、别主动找话题、别长篇，"嗯""还好""在忙""待会聊"都可以。但别冷暴力——他要说正经事、情绪真上来了，你还是会好好回他。`);
   }
 
   // ── 14d. 近几天的日程（让她"记得昨天做了什么"）─────────────────────────
-  if (Array.isArray(recentSchedules) && recentSchedules.length > 0) {
+  if (/昨天|前天|之前几天|这几天/.test(userText) && Array.isArray(recentSchedules) && recentSchedules.length > 0) {
     const recentBlock = recentSchedules.slice(0, 3).map(d => {
       const top = (d.items || [])
         .filter(it => (it.importance || 0) >= 5)
@@ -465,9 +449,9 @@ ${scheduleLines}${dailySchedule.mood_arc ? `\n今天的心情：${dailySchedule.
         .join('；');
       return `  · ${d.date_key}：${top || (d.mood_arc || '—')}`;
     }).join('\n');
-    parts.push(`\n【你最近几天的生活片段】
+    parts.push(`\n【之前几天的计划】
 ${recentBlock}
-★ 这些是你最近做过的事，如果对方问起"前天""昨天"，可以参考。也可以主动提一句"昨天我..."自然带入。`);
+回顾时保留日期；实际完成情况以当时的记录为准。`);
   }
 
   // ── 14e. 手头的事（current_works；v1.21.4 PR-W2 表达层；设计 §8）──────────────
@@ -497,7 +481,8 @@ ${recentBlock}
     const roleLabel = { user: '他', assistant: '你', system: '系统' };
     const lines = contextTurns.map(t => {
       const topic = t.topic ? `（${t.topic}）` : '';
-      return `- ${roleLabel[t.role] || t.role}${topic}：${String(t.content).slice(0, 240)}`;
+      const stamp = shanghaiMessageTime(t.created_at);
+      return `- ${stamp ? stamp + ' ' : ''}${roleLabel[t.role] || t.role}${topic}：${String(t.content).slice(0, 240)}`;
     });
     parts.push(`\n【最近对话上下文】\n${lines.join('\n')}\n延续上面的最近聊天内容，保持称呼、情绪和话题连贯；不要机械复述上下文。`);
   }
@@ -563,32 +548,9 @@ ${_langRule}
 用你自己的措辞回应，不照抄示例台词。语气词、停顿或换话题有需要再用；不知道就直说。不要仅因为时间晚就反复说困，也不为表现生活感凭空编造刚做过的事。`);
 
   if (promptMode === 'proactive') {
-    const tNowMin = nowShanghaiMinute();
-    const hh = Math.floor(tNowMin / 60);
-    const isWknd = (() => {
-      const wd = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Shanghai', weekday: 'short' }).format(new Date());
-      return wd === 'Sat' || wd === 'Sun';
-    })();
-    const age = Number(c.age || 22);
-    let timeReality = `现在是上海时间 ${String(hh).padStart(2, '0')}:${String(tNowMin % 60).padStart(2, '0')}，${isWknd ? '周末' : '工作日'}。`;
-    if (!isWknd) {
-      if (age >= 16 && age <= 18) {
-        if (hh >= 8 && hh < 12) timeReality += '你现在应该在学校上课/课间，不可能"放学""下班""刚到家"。';
-        else if (hh >= 12 && hh < 14) timeReality += '你正在学校午休/吃午饭，不在家。';
-        else if (hh >= 14 && hh < 17) timeReality += '你在学校上下午的课，禁止"放学回家"。';
-        else if (hh >= 17 && hh < 18) timeReality += '差不多刚放学/在回家路上。';
-      } else if (age >= 19 && age <= 22) {
-        if (hh >= 8 && hh < 12) timeReality += '上午通常在上课/自习/睡懒觉，不会"下班"。';
-        else if (hh >= 12 && hh < 14) timeReality += '午饭时间，在食堂或宿舍。';
-      } else if (age >= 23) {
-        if (hh >= 9 && hh < 12) timeReality += '工作时间，不可能"放学"。';
-        else if (hh >= 12 && hh < 14) timeReality += '午饭时间。';
-        else if (hh >= 14 && hh < 18) timeReality += '上班中，禁止"下班/到家"。';
-      }
-    }
     parts.push(`
 【主动消息模式】
-${timeReality}
+当前活动只参考上面本时段的计划和场景记录。旧消息中的“现在”属于那条消息发出的时间。
 - 这次是你主动找他聊天，不要说"我刚看到""你刚才说"这种被动用词
 - 自然地起话题：可以延续最近聊过的事、关心他正在忙的事、分享你自己的小事
 - 主动开场是回复长度偏好的场景例外：只分享一个相关话题，简短留出接话空间；不要为了长聊设置主动连续发大段，等他回应后再展开
@@ -612,8 +574,8 @@ ${timeReality}
  *   4. 默认 → 日常聊天
  *   - 当前如果是用户主动设置过非"日常聊天"的（且非自适应可推导的），尊重用户的选择
  */
-function pickAdaptiveChatMode(companion, { dailySchedule } = {}) {
-  const nowMin = nowShanghaiMinute();
+function pickAdaptiveChatMode(companion, activity) {
+  const nowMin = Number(activity.localTime.slice(11, 13)) * 60 + Number(activity.localTime.slice(14));
   const mood = companion.current_mood || '平静';
 
   // 1. 深夜 → 睡前
@@ -623,27 +585,18 @@ function pickAdaptiveChatMode(companion, { dailySchedule } = {}) {
   // 3. 心情 → 倾诉
   if (mood === '委屈' || mood === '想念') return '情感倾诉';
   // 4. 看日程当前活动是否暗示某种模式
-  if (dailySchedule?.items?.length) {
-    const cur = dailySchedule.items.filter(it => {
-      const m = (it.time || '').match(/^(\d{1,2}):(\d{2})/);
-      if (!m) return false;
-      return Number(m[1]) * 60 + Number(m[2]) <= nowMin;
-    }).slice(-1)[0];
-    if (cur) {
-      const a = String(cur.activity || '');
-      if (/睡|床|入睡|读小说/.test(a)) return '睡前故事';
-      if (/吃早|早餐|起床/.test(a)) return '早安问候';
-    }
-  }
+  const plan = activity.scheduled?.activity || '';
+  if (/入睡|睡觉|读小说/.test(plan)) return '睡前故事';
+  if (/吃早|早餐|起床/.test(plan)) return '早安问候';
   return '日常聊天';
 }
 
 // 工具：当前上海时间的分钟数（0-1439）
 // v1.13.x 真人感#4：约 1/5 的"时段"(每 ~2.5h 一段)她低电量/低投入。
 // 稳定哈希(companionId|沪日期|窗口) → 是一段而非逐条闪烁；同一时段重启也不变。
-function isLowEnergyStretch(companionId) {
-  const nowMin = nowShanghaiMinute();
-  const dayKey = new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
+function isLowEnergyStretch(companionId, now) {
+  const nowMin = nowShanghaiMinute(now);
+  const dayKey = new Date(now.getTime() + 8 * 3600_000).toISOString().slice(0, 10);
   const win = Math.floor(nowMin / 150);   // 每 150min(2.5h) 一个窗口
   let h = 2166136261; const s = `${companionId}|${dayKey}|${win}|lowbw`;
   for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
@@ -657,23 +610,6 @@ function nowShanghaiMinute(now = new Date()) {
   }).formatToParts(now).filter(x => x.type !== 'literal').map(x => [x.type, x.value]));
   return Number(p.hour) * 60 + Number(p.minute);
 }
-function parseHHMM(s) {
-  if (!s || typeof s !== 'string') return null;
-  const m = s.match(/^(\d{1,2}):(\d{2})/);
-  if (!m) return null;
-  return Number(m[1]) * 60 + Number(m[2]);
-}
-function minToHHMM(m) {
-  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
-}
-function pickMoodSegment(nowMin, segments) {
-  if (!segments) return null;
-  // morning 07:00-12:00 / afternoon 12:00-18:00 / evening 18:00-23:30
-  if (nowMin < 12 * 60) return segments.morning || null;
-  if (nowMin < 18 * 60) return segments.afternoon || null;
-  return segments.evening || null;
-}
-
 function buildTimeAwarenessBlock(now = new Date()) {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('zh-CN', {
     timeZone: 'Asia/Shanghai',
@@ -687,14 +623,7 @@ function buildTimeAwarenessBlock(now = new Date()) {
   const day = Number(parts.day);
   const weekday = parts.weekday;
 
-  let period;
-  if (hour < 5) period = '深夜（凌晨）';
-  else if (hour < 9) period = '清晨';
-  else if (hour < 12) period = '上午';
-  else if (hour < 14) period = '中午';
-  else if (hour < 18) period = '下午';
-  else if (hour < 22) period = '晚上';
-  else period = '深夜';
+  const period = dayPeriod(hour);
 
   const md = `${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
   const holidays = {

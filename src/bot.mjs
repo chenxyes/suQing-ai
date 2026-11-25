@@ -853,7 +853,7 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
       // v1.21: arc 激活时 escalation 指令让位（L2+ 已作为 pressure_spam 喂进状态机，
       // arc directive 自带冷语气，双指令会打架）；arc 主导语气追加在最后（最高优先）。
       // worksHint 走 buildSystemPrompt 参数注入（生活背景带，§8 排序），结构上永在 arc 指令之前。
-      let systemPrompt = buildSystemPrompt(companion, { memories, userProfile, recentTurns, longTermDigest, promptMode: 'reply', dailySchedule, recentSchedules, personaFacts, preferences, shapingHint, worksHint, openLoopsHint, behaviorPlan }) + stickerHint + emotionHint + reunionHint + shapingConfirmHint + ((arcCtx.active || behaviorPlan) ? '' : escalationDirective(esc.level)) + (behaviorPlan ? '' : (arcCtx.directive || ''));
+      let systemPrompt = buildSystemPrompt(companion, { memories, userProfile, recentTurns, longTermDigest, promptMode: 'reply', userText, dailySchedule, recentSchedules, personaFacts, preferences, shapingHint, worksHint, openLoopsHint, behaviorPlan }) + stickerHint + emotionHint + reunionHint + shapingConfirmHint + ((arcCtx.active || behaviorPlan) ? '' : escalationDirective(esc.level)) + (behaviorPlan ? '' : (arcCtx.directive || ''));
       // PR-1 复读止血（reply 侧·prompt 级·intent 而非纯字符串）：把她最近几小时主动说过的 intent/topic
       // 喂回去，叫她在用户简短回应时别原样复读（反复叮嘱/想你/追问）。确定性兜底在下方 ack 闸。
       systemPrompt += buildIntentDedupHint(recentIntentEvents(recentTurns, Date.now()));

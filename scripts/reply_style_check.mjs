@@ -64,7 +64,7 @@ await test('time and mood retain length preference while proactive brevity is ex
       assert.match(text, settings[2].sentences);
       noHardCaps(text);
       if (mode === 'reply') assert.doesNotMatch(text, /不超过\s*2-3\s*句|两三句说完就停/);
-      assert.ok(text.includes('你今天的安排'));
+      assert.equal(text.includes('你今天的安排'), iso !== '2026-10-20T16:00:00Z', 'previous Shanghai day expires at midnight');
       if (mode === 'proactive') {
         const active = text.slice(text.indexOf('【主动消息模式】'));
         assert.ok(active.includes('主动'));

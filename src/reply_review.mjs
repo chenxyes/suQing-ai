@@ -1,4 +1,5 @@
 /** One evidence-aware output review. Never schedules, changes relationship state, or sends. */
+import { inActivityWindow, shanghaiMessageTime } from './activity_time.mjs';
 import { chatComplete } from './providers/chat.mjs';
 import { recordAiUsage, recordAiUsageEvent } from './db.mjs';
 import { CHAT_FALLBACK, isChatFallback, boundedNumber } from './chat_response.mjs';
@@ -15,7 +16,7 @@ const RUBRIC = `你是聊天输出审查器，只检查草稿，不扮演聊天�
 证据规则：
 - current 和 history 保留了实际说话人。助手说过、问过、猜过的内容不能证明对方的经历。对方只说“味道不错”不能确认“买的还是自己煮的”；短确认也不能擅自选择此前多个选项中的一个。
 - facts 按主体理解；对方当前明确纠正优先。没有证据的过去经历、次数、心理动机不要当事实。不凭空说“你之前”“又”“只会”。unknown 不是可引用的事实。
-- persona 是人物自身背景，不是对方的经历。日程是计划，不能只因列在日程中就声称已经完成。events 保留状态；完成、取消、过期或不确定的事不能当成当前未履约事件。
+- persona 是人物自身背景，不是对方的经历。以 state.activity 的北京时间和本时段计划为准。历史消息的时间指当时；其他时段的安排不能说成此刻正在做。允许明确回顾早些时候的事或讨论未来。若唯一依据是计划，回答只能说原本打算做什么。“正在做”“刚做完”“做完后在别处休息”均需额外证据；检查角色回答里的每个动作与地点，缺少依据就删改。问过去的安排时保留计划语气。events 保留状态；完成、取消、过期或不确定的事不能当成当前未履约事件。
 - context.task.kind=followup 且 status=claimed 表示程序正在执行已获授权的跟进，current.text 为空表示此刻没有新来信；可以围绕授权话题轻轻询问现状，不把旧心情当成此刻事实，也不额外承诺下一次联系。
 行动与表达：
 - 先回应对方本轮真正说的内容。需要必要事实才能回答时可以澄清一点；对方已经明确求建议时，不再问“要不要听我的建议”，给一个可执行的小建议或澄清必要事实。
@@ -65,7 +66,17 @@ function parsedReview(response, draft, current) {
 function enforceTurnScope(outcome, context, plan) {
   if (!outcome || plan || context.task) return outcome;
   const current = context.current.text.trim();
+  const activity = context.state?.activity;
   let reply;
+  if (activity && !activity.scene && /^(?:还没到|到了没|到了吗)(?:啊|呀|呢|嘛)?[？?。！!～~]*$/u.test(current)
+      && !context.history.some(turn => !turn.at || inActivityWindow(shanghaiMessageTime(turn.at), activity))) {
+    reply = '你是说到哪儿？';
+  } else if (activity && !activity.scene && /^(?:你(?:现在|这会儿?|此刻)?(?:正在|在)?|(?:现在|这会儿?|此刻)?(?:正在|在))(?:干嘛|干吗|做什么|做啥|忙什么|忙啥)(?:呢|呀|啊)?[？?。！!～~]*$/u.test(current)) {
+    // With only a plan, the clock does not establish progress, completion, or a location.
+    const item = activity.scheduled;
+    reply = item ? '我今天 ' + item.time + ' 的安排是' + item.activity.replace(/[。！？!?]+$/u, '') + '。' : '在跟你聊天呀。';
+  }
+  if (reply) return outcome.reply === reply ? outcome : { reply, status: 'revised', reasons: [...new Set([...outcome.reasons, 'unsupported_fact'])] };
   const previousTopic = context.history.findLast(t => t.role === 'user' && !ack(t.text));
   if (ack(current) && isBehaviorStopRequested(previousTopic?.text) && !ack(outcome.reply)) {
     reply = '好。';
