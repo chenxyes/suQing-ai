@@ -16,6 +16,7 @@ try {
   db.prepare("INSERT INTO users(id,wechat_user_id) VALUES(1,'fixture')").run();
   db.prepare("INSERT INTO companions(id,user_id,bot_id,proactive_enabled,proactive_time_window,memory_enabled) VALUES(1,1,'fixture-bot',1,'00:00-24:00',0)").run();
   db.prepare("INSERT INTO wechat_accounts(wechat_user_id,bot_id,bot_token,is_active,companion_id) VALUES('fixture','fixture-bot','test',1,1)").run();
+  const { generateGroundedReply: realGroundedReply, usesGroundedReplies } = await import('../src/reply_pipeline.mjs');
   const { rememberContextToken } = await import('../src/ilink.mjs');
   rememberContextToken('fixture-bot', 'fixture', 'test');
   const runtime = await import('../src/behavior_runtime.mjs');
@@ -34,7 +35,8 @@ try {
     generateReply: async (system, _history, prompt) => {
       generated++;
       assert.ok(system.includes('本轮相处行动'));
-      assert.ok(prompt.includes('明确请求的后续关心'));
+      assert.ok(prompt.includes('已授权的跟进任务'));
+      assert.ok(system.includes(userText), 'the original requested topic is provided as task data');
       if (scenario === 'cancel') tasks.observeBehaviorInput(1, '不要再问我了');
       return scenario === 'failed' ? '刚才的委屈还想跟我聊聊吗？' : scenario === 'cancel' ? '我回来了，愿意的话就慢慢讲。' : '现在想说说刚才的事吗？我在听。';
     },
@@ -46,8 +48,14 @@ try {
     },
     sendMessageItem: async () => { throw new Error('followup must not send stickers'); },
   };
+  globalThis.__behaviorSchedulerIO.usesGroundedReplies = usesGroundedReplies;
+  globalThis.__behaviorSchedulerIO.generateGroundedReply = opts => realGroundedReply({ ...opts, events: [] }, {
+    generate: globalThis.__behaviorSchedulerIO.generateReply,
+    review: async ({ draft }) => ({ reply: draft, status: 'kept', reasons: [] }),
+  });
   const url = new URL('../src/proactive.mjs', import.meta.url);
   let source = readFileSync(url, 'utf8');
+  source = source.replace("import { usesGroundedReplies, generateGroundedReply } from './reply_pipeline.mjs';", 'const { usesGroundedReplies, generateGroundedReply } = globalThis.__behaviorSchedulerIO;');
   source = source.replace("import { generateReply } from './ai.mjs';", 'const { generateReply } = globalThis.__behaviorSchedulerIO;');
   source = source.replace('import { sendTextMessage, sendMessageItem, recallContextToken, peekSendQuota }', 'const { sendTextMessage, sendMessageItem } = globalThis.__behaviorSchedulerIO;\nimport { recallContextToken, peekSendQuota }');
   source = source.replace(/from (['"])(\.\/[^'"]+)\1/g, (_all, _quote, relative) => `from ${JSON.stringify(new URL(relative, url).href)}`);

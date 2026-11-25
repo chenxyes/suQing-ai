@@ -33,7 +33,7 @@ console.log('behavior inner protocol: nested signals, strict boolean, truncation
 const { readFileSync } = await import('node:fs');
 const { default: vm } = await import('node:vm');
 const aiSource = readFileSync(new URL('../src/ai.mjs', import.meta.url), 'utf8');
-const functions = aiSource.slice(aiSource.indexOf('function stripActionNarration('), aiSource.indexOf('export async function extractStructuredInfo(')).replace('export async function', 'async function');
+const functions = aiSource.slice(aiSource.indexOf('function stripActionNarration('), aiSource.indexOf('export async function extractStructuredInfo(')).replaceAll('export async function', 'async function');
 let searched = 0, usage = 0;
 const wireOutput = '（想先听听）\n{"user_tone":"neutral","behavior":{"scenario":"support","action":"listen"}}';
 const generate = vm.runInNewContext(`${functions}\ngenerateReply`, {

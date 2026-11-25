@@ -86,10 +86,13 @@ export function buildShapingConfirmHint(taught = []) {
 }
 
 /** 注入人设：把"他教过你的"作为高优先级规则带进每次回复。shapingList = listShaping(companionId)。 */
-export function buildShapingPromptHint(shapingList = []) {
+export function buildShapingPromptHint(shapingList = [], { expressionOnly = false } = {}) {
   if (!Array.isArray(shapingList) || !shapingList.length) return '';
   const byKind = {};
-  for (const s of shapingList) (byKind[s.kind] ||= []).push(s.content);
+  for (const s of shapingList) {
+    if (expressionOnly && !['nickname', 'style', 'taboo', 'lexicon'].includes(s.kind)) continue;
+    (byKind[s.kind] ||= []).push(s.content);
+  }
   const parts = [];
   if (byKind.nickname?.length) parts.push(`- 称呼他：「${byKind.nickname[0]}」（他亲自定的，别用别的）`);
   if (byKind.style?.length)    parts.push(`- 说话风格：${byKind.style.join('；')}`);

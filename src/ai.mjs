@@ -291,6 +291,17 @@ function stripActionNarration(text) {
   return unwrapped.length ? unwrapped : text;
 }
 
+export async function resolveReplySearchContext(userMessage) {
+  try {
+    if (!shouldSearch(userMessage).search) return '';
+    const result = await webSearch(userMessage, { maxResults: 5, timeoutMs: 6000 });
+    if (result.ok && result.results.length) return formatSearchContext(userMessage, result.results) || '';
+  } catch (error) {
+    log('warn', `[ai] web_search 调用异常: ${error.message}`);
+  }
+  return '';
+}
+
 export async function generateReply(personaPrompt, history, userMessage, params = {}, ctx = {}) {
   // v1.2.10: 兜底默认与 companions 表 DEFAULT 对齐 (0.8 / 3000 / 0.95)，
   // 让回复更有创意、空间更宽、用词更自然。caller 显式传值会优先。
@@ -319,22 +330,8 @@ export async function generateReply(personaPrompt, history, userMessage, params 
   // ─── 可选：联网搜索（对用户透明） ───────────────────────────────────────
   // 仅当用户消息看起来是「时效相关 + 询问语气」时才搜，否则零开销跳过。
   // 搜失败 / 未配置 search provider 时静默继续，不影响主对话。
-  let effectiveSystem = personaPrompt;
-  try {
-    const judge = purpose === 'internal' ? { search: false } : shouldSearch(userMessage);
-    if (judge.search) {
-      const sr = await webSearch(userMessage, { maxResults: 5, timeoutMs: 6000 });
-      if (sr.ok && sr.results.length > 0) {
-        const ctxBlock = formatSearchContext(userMessage, sr.results);
-        if (ctxBlock) {
-          effectiveSystem = `${personaPrompt}\n\n${ctxBlock}`;
-          log('debug', `[ai] web_search injected hits=${sr.results.length} provider=${sr.provider}`);
-        }
-      }
-    }
-  } catch (e) {
-    log('warn', `[ai] web_search 调用异常: ${e.message}`);
-  }
+  const search = purpose === 'internal' ? '' : ctx.searchContext ?? await resolveReplySearchContext(userMessage);
+  const effectiveSystem = search ? `${personaPrompt}\n\n${search}` : personaPrompt;
 
   log('debug', `[ai] chat messages=${messages.length} temp=${temperature}`);
   const FALLBACK = CHAT_FALLBACK;
@@ -364,7 +361,7 @@ export async function generateReply(personaPrompt, history, userMessage, params 
     }
     // P1-7 成本明细：chat 调用一律记一条（accountId 可空），含 token/延迟/状态/估算成本
     if (!probe) recordAiUsageEvent({
-      accountId, companionId, provider, model,
+      accountId, companionId, provider, model, purpose,
       capability: 'chat', promptTokens: usage?.prompt_tokens || 0, completionTokens: usage?.completion_tokens || 0,
       latencyMs: Date.now() - _t0, status: reply === FALLBACK ? 'fallback' : 'ok',
     });
@@ -372,7 +369,7 @@ export async function generateReply(personaPrompt, history, userMessage, params 
   } catch (err) {
     log('error', `[ai] chat 错误: ${JSON.stringify(chatFailureMetadata(err))}`);
     if (!probe) recordAiUsageEvent({
-      accountId, companionId, provider: err.provider, model: err.model,
+      accountId, companionId, provider: err.provider, model: err.model, purpose,
       capability: 'chat', latencyMs: Date.now() - _t0, status: 'error',
     });
     return FALLBACK;

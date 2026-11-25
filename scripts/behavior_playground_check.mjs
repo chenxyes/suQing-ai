@@ -18,6 +18,7 @@ const saved = Object.fromEntries([...Object.keys(environment), 'OPENAI_COMPATIBL
 Object.assign(process.env, environment);
 delete process.env.BEHAVIOR_LIBRARY_DIR;
 let requests = [], failFinal = false;
+let reviewResponse = { decision: 'keep', reasons: [] };
 let candidate = { scenario: 'support', action: 'validate' };
 const inventedThought = '之前你路考挂过，让我有点担心。';
 const finalText = '我听见了，你可以慢慢说。';
@@ -28,12 +29,13 @@ const server = http.createServer(async (request, response) => {
   const payload = JSON.parse(body);
   requests.push(payload);
   const inner = isInner(payload);
+  const reviewing = payload.messages.some(message => message.role === 'system' && message.content.includes('revise') && message.content.includes('decision'));
   if (!inner && failFinal) {
     response.writeHead(401, { 'content-type': 'application/json' });
     response.end(JSON.stringify({ error: { message: 'fixture unavailable' } }));
     return;
   }
-  const content = inner ? inventedThought + '\n' + JSON.stringify({
+  const content = reviewing ? JSON.stringify(reviewResponse) : inner ? inventedThought + '\n' + JSON.stringify({
     user_tone: 'neutral', perceived_hurt: 0, is_apology: false,
     reply_energy: 'mid', behavior: candidate,
   }) : finalText;
@@ -66,17 +68,20 @@ try {
     await new Promise(resolve => setImmediate(resolve));
     return result;
   };
-  const assertTwoPasses = () => {
-    assert.equal(requests.length, 2, 'inner and final share two calls; no third strategy request');
+  const assertPipelineCalls = () => {
+    assert.equal(requests.length, process.env.BEHAVIOR_ENABLED === 'true' && !failFinal ? 3 : 2, 'V1 plans, generates, then reviews a substantive reply; failed drafts/off skip review');
     assert.equal(isInner(requests[0]), true);
     assert.equal(isInner(requests[1]), false);
   };
 
   const supported = await call('今天工作搞砸了，我特别委屈');
   assert.equal(supported.reply, finalText);
-  assertTwoPasses();
+  assertPipelineCalls();
   assert.ok(hasHint(requests[0], '本轮相处行为候选'));
   assert.ok(hasHint(requests[1], '本轮相处行动'));
+  assert.ok(requests[1].messages[0].content.length < 6000, 'V1 must not stack the old long persona template');
+  assert.ok(!hasHint(requests[1], '内心和嘴上'));
+  assert.equal(db.prepare("SELECT count(*) n FROM ai_usage_events WHERE purpose='review'").get().n, 1, 'the output review has a separately visible usage purpose');
   assert.ok(!hasHint(requests[1], inventedThought), 'unverified inner narrative must not become reply evidence');
   assert.deepEqual([last().scenario, last().action], ['support', 'validate']);
   assert.ok(!hasHint(requests[1], '每 5-8 条回复里'), 'support must not compete with compulsory criticism');
@@ -84,7 +89,7 @@ try {
   assert.equal(db.prepare('SELECT delivered_text FROM behavior_deliveries ORDER BY id DESC LIMIT 1').get().delivered_text, supported.reply);
 
   await call('嗯');
-  assertTwoPasses();
+  assertPipelineCalls();
   assert.deepEqual([last().scenario, last().action], ['support', 'listen']);
   await call('今晚我想吃一碗面条');
   assert.ok(!hasHint(requests.at(-1), inventedThought), 'ordinary turns also discard unverified inner narrative when V1 is enabled');
@@ -93,7 +98,7 @@ try {
   assert.equal(count('behavior_deliveries'), afterNewTopic, 'ack after an ordinary new topic cannot resurrect support');
   await call('今天工作搞砸了，我特别委屈');
   await call('别再问这件事了');
-  assertTwoPasses();
+  assertPipelineCalls();
   assert.equal(readBehaviorState(1).scenario, 'pause', 'stop tombstone takes precedence over delivered support');
   assert.ok(db.prepare('SELECT reset_at FROM behavior_state_resets WHERE companion_id=1').get());
   const afterStop = count('behavior_deliveries');
@@ -105,24 +110,40 @@ try {
 
   candidate = { scenario: 'celebrate', action: 'celebrate' };
   await call('我终于拿到驾照啦，真是好消息');
-  assertTwoPasses();
+  assertPipelineCalls();
   assert.equal(last().scenario, 'celebrate');
   candidate = { scenario: 'repair', action: 'repair' };
   await call('你刚才那句话让我很不舒服');
-  assertTwoPasses();
+  assertPipelineCalls();
   assert.deepEqual([last().scenario, last().action], ['repair', 'repair']);
 
   candidate = { scenario: 'support', action: 'validate', followup: { delayMinutes: 10 } };
   await call('我很委屈，10分钟后再找我聊聊');
-  assertTwoPasses();
+  assertPipelineCalls();
   assert.equal(last().followup, null, 'web cannot schedule even when user explicitly asks');
   assert.equal(count('behavior_followup_tasks'), 0);
 
+  const revised = '这件事让你受委屈了。';
+  reviewResponse = { decision: 'revise', reply: revised, reasons: ['style'] };
+  const revisedResult = await call('今天工作搞砸了，我特别委屈');
+  assert.equal(revisedResult.reply, revised);
+  assert.equal(revisedResult.segments.map(s => s.text).join(''), revised);
+  const lastAssistant = () => db.prepare("SELECT content FROM companion_conversation_turns WHERE role='assistant' ORDER BY id DESC LIMIT 1").get().content;
+  assert.equal(lastAssistant(), revised);
+  assert.equal(db.prepare('SELECT delivered_text FROM behavior_deliveries ORDER BY id DESC LIMIT 1').get().delivered_text, revised);
   const beforeFailure = count('behavior_deliveries');
   const beforeAssistant = db.prepare("SELECT count(*) n FROM companion_conversation_turns WHERE role='assistant'").get().n;
+  reviewResponse = { decision: 'missing' };
+  assert.equal((await call('我很委屈，10分钟后再找我聊聊')).reply, CHAT_FALLBACK);
+  assertPipelineCalls();
+  assert.equal(lastAssistant(), revised, 'unchecked draft cannot become future history');
+  assert.equal(count('behavior_deliveries'), beforeFailure);
+  assert.equal(count('behavior_followup_tasks'), 0);
+  assert.equal(db.prepare("SELECT status FROM ai_usage_events WHERE purpose='review' ORDER BY id DESC LIMIT 1").get().status, 'fallback');
+  reviewResponse = { decision: 'keep', reasons: [] };
   failFinal = true;
   assert.equal((await call('今天工作搞砸了，我还是很委屈')).reply, CHAT_FALLBACK);
-  assertTwoPasses();
+  assertPipelineCalls();
   failFinal = false;
   assert.equal(count('behavior_deliveries'), beforeFailure, 'failed final generation cannot record a delivery');
   assert.equal(db.prepare("SELECT count(*) n FROM companion_conversation_turns WHERE role='assistant'").get().n, beforeAssistant);
@@ -144,7 +165,7 @@ try {
     const rows = snapshot();
     await call(text, { probe: true }, 3);
     if (text === '今天工作搞砸了，我特别委屈') {
-      assertTwoPasses();
+      assertPipelineCalls();
       assert.ok(hasHint(requests[0], '本轮相处行为候选'));
       assert.ok(hasHint(requests[1], '本轮相处行动'));
     }
@@ -160,13 +181,13 @@ try {
   const beforeOff = count('behavior_deliveries');
   const beforeResets = count('behavior_state_resets');
   await call('今天工作搞砸了，我特别委屈');
-  assertTwoPasses();
+  assertPipelineCalls();
   assert.ok(hasHint(requests.at(-1), inventedThought), 'feature-off retains the legacy inner thought contract');
   await call('别再问这件事了');
   assert.equal(count('behavior_deliveries'), beforeOff);
   assert.equal(count('behavior_state_resets'), beforeResets);
   assert.ok(!requests.some(request => hasHint(request, '本轮相处行为候选') || hasHint(request, '本轮相处行动')));
-  console.log('behavior playground: actual two-pass HTTP/SQLite pipeline, multi-turn scenes, stop, failures, safe mode, safety, web gates, probe zero-write and feature-off passed');
+  console.log('behavior playground: HTTP/SQLite generation, review, revision and persistence, multi-turn scenes, stop, failures, safe mode, safety, web gates, probe zero-write and feature-off passed');
 } finally {
   server.closeAllConnections();
   await new Promise(resolve => server.close(resolve));

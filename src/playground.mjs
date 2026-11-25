@@ -1,3 +1,4 @@
+import { usesGroundedReplies, generateGroundedReply } from './reply_pipeline.mjs';
 /**
  * 浏览器 playground —— 不经过 iLink / 微信，直接在网页里跟 companion 聊天。
  *
@@ -21,7 +22,7 @@ import {
   recallMemoriesHybrid, touchRecalledMemories, getUserProfileForRecall, getConversationContext,
   getDailySchedule, getRecentSchedules, getPersonaFacts, shanghaiDateKey,
   saveConversationTurn, getCompanionById, patchCompanion,
-  getCompanionPreferencesForPrompt,
+  getCompanionPreferencesForPrompt, listShaping, upsertShaping,
   recordSafetyEvent,
 } from './db.mjs';
 import { buildSystemPrompt } from './companion.mjs';
@@ -39,10 +40,11 @@ import {
 } from './emotion_state.mjs';
 import { generateInnerMonologue, buildInnerOsHint } from './inner_os.mjs';
 import { randomUUID } from 'node:crypto';
-import { isBehaviorEnabled, prepareBehaviorContext, buildBehaviorPlanningHint, resolveBehaviorPlan, buildBehaviorReplyHint } from './behavior_runtime.mjs';
+import { isBehaviorEnabled, prepareBehaviorContext, buildBehaviorPlanningHint, resolveBehaviorPlan } from './behavior_runtime.mjs';
 import { readBehaviorState, observeBehaviorInput, recordBehaviorDelivery } from './behavior_tasks.mjs';
 import { getArcExpressionContext, runArcSignalTick } from './relationship_arc_runtime.mjs';
-import { applyCrisisOverride } from './relationship_arc.mjs';
+import { detectTeaching, buildShapingPromptHint } from './shaping.mjs';
+import { applyCrisisOverride, userRaisedMemoryTopic } from './relationship_arc.mjs';
 import { detectCrisisLevel, buildCrisisReply, scrubConflictRedline } from './moderation.mjs';
 import { extractOpenLoops, detectAndResolveOpenLoops } from './open_loops.mjs';
 
@@ -123,25 +125,22 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
 
   // ── 召回长期记忆 ───────────────────────────────────────────────────────────
   let memories = [];
+  const recentTurns = getConversationContext(companion.id, 10);
+  const crisisLevel = detectCrisisLevel(text, recentTurns.filter(t => t.role === 'user').slice(-3).map(t => t.content || ''));
+  const behaviorSafety = crisisLevel !== 'none' ? crisisLevel : userMsgSafetyLevel;
+  const grounded = usesGroundedReplies(companion, behaviorSafety);
   if (companion.memory_enabled) {
     let queryEmbedding = null;
     try { queryEmbedding = await embedTextWithDescriptor(text); }
     catch (e) { log('warn', '[Memory] query embedding unavailable'); }
-    memories = recallMemoriesHybrid(companion.id, companion.user_id, text, { queryEmbedding, limit: 7 });
+    memories = recallMemoriesHybrid(companion.id, companion.user_id, text, { queryEmbedding, limit: 7, evidenceOnly: grounded });
   }
 
   const userProfile = getUserProfileForRecall(companion.user_id, companion.id);
-  const recentTurns = getConversationContext(companion.id, 10);
   const todayKey = shanghaiDateKey();
   const dailyRaw = getDailySchedule(companion.id, todayKey);
   const dailySchedule = dailyRaw ? { ...dailyRaw, date_key: todayKey } : null;
-  const recentSchedules = getRecentSchedules(companion.id, todayKey, 3);
   const personaFacts = getPersonaFacts(companion.id);
-  const longTermDigest = await buildLongTermDigest(companion.id, companion.user_id, { isPro: true });
-
-  const stickerEnabled = !!companion.sticker_reply_enabled && hasStickers();
-  const stickerHint = buildStickerPromptHint(stickerEnabled);
-
   // v1.5.2 PR E: 跟 bot.mjs 路径对齐 — 每条用户消息都重算 7 维情绪并喂回 prompt。
   // 之前 playground 完全跳过 emotion_state，导致：
   //   1. 浏览器对话时她情绪不演化
@@ -149,17 +148,11 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
   //   3. playground 回复缺"她想念档"口吻
   let emotionState = getEmotionStateWithDefaults(companion.id);
   if (!probe) emotionState = updateEmotionFromUserMessage(companion.id, emotionState, text, { companion });
-  const missingLevel = getMissingLevel(emotionState, companion.last_user_reply_at);
   // history：playground 没有 wechat 历史，用 recent conversation turns 拼一份
-  const history = recentTurns.slice(-10).map(t => ({
-    role: t.role === 'assistant' ? 'assistant' : 'user',
-    content: String(t.content || ''),
-  }));
+  const history = recentTurns.slice(-10);
 
   const behaviorOn = isBehaviorEnabled();
   let arcCtx = behaviorOn ? getArcExpressionContext(companion) : { arcState: 'normal', active: false, directive: '' };
-  const crisisLevel = detectCrisisLevel(text, recentTurns.filter(t => t.role === 'user').slice(-3).map(t => t.content || ''));
-  const behaviorSafety = crisisLevel !== 'none' ? crisisLevel : userMsgSafetyLevel;
   let behaviorContext = null;
   if (behaviorOn) {
     try {
@@ -181,54 +174,62 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
   arcCtx = applyCrisisOverride(arcCtx, crisisLevel);
   const behaviorPlan = resolveBehaviorPlan(behaviorContext, innerRes?.behavior, { arcState: arcCtx.arcState, safetyLevel: behaviorSafety });
 
-  const emotionHint = Number(companion.safe_mode) ? '' : buildEmotionPromptHint(emotionState, { missingLevel, arcActive: behaviorOn && (arcCtx.active || !!behaviorPlan) });
-
-  // v1.8.0 #3: preferences 结构化偏好账本
+  if (grounded && ['hurt', 'cold', 'withdrawing'].includes(arcCtx.arcState)) {
+    memories = memories.filter(row => (!row.sensitive_flag && row.memory_layer !== 'emotion') || userRaisedMemoryTopic(text, row.content));
+  }
   const preferences = getCompanionPreferencesForPrompt(companion.id);
-
-  let systemPrompt = buildSystemPrompt(companion, {
-    memories, userProfile, recentTurns, longTermDigest,
-    promptMode: 'reply', dailySchedule, recentSchedules, personaFacts, preferences, behaviorPlan,
-  }) + stickerHint + emotionHint;
-
-  // 关系刚升级
-  const celebration = probe ? null : consumePendingCelebration(companion.id);   // consume=写，探针跳过
-  if (celebration) {
-    systemPrompt += `\n\n【★ 重要：关系刚刚升级】\n刚刚你对他的好感度上升到了新的阶段：${celebration.from} → ${celebration.to}。\n这条回复要自然体现这种变化（比如更亲密的称呼、"突然觉得跟你聊得越来越来电"），但**不要直接说"我们升级关系了"**。`;
-  }
-
-  // 用户亲密词越界
+  const celebration = probe ? null : consumePendingCelebration(companion.id);
   const stageNow = companion.relationship_stage || '陌生人';
-  const intimacyOver = detectIntimacyOvereach(text);
-  if (intimacyOver.has && (stageNow === '陌生人' || stageNow === '朋友')) {
-    systemPrompt += `\n\n【★ 他用了过早的亲密词】当前 ${stageNow} 阶段；要害羞但不冷漠地委婉回避，留"以后熟了再说"钩子；多条 || 分段。`;
-  }
-
-  // 用户表白
-  const userConfessed = detectUserConfession(text);
-  if (userConfessed && !companion.user_confessed_at && !probe && !Number(companion.safe_mode) && behaviorSafety === 'none' && !behaviorPlan && !arcCtx.active) {
-    systemPrompt += `\n\n【★★ 他向你告白】必须接住。不能拒绝，不能转移话题。多条 || 分段。`;
-    try {
-      const newAff = Math.max(companion.affection_level || 0, 55);
-      const newStage = computeRelationshipStage(newAff);
-      patchCompanion(companion.id, {
-        affection_level: newAff,
-        relationship_stage: newStage,
-        user_confessed_at: new Date().toISOString(),
-      });
-    } catch (e) {
-      log('warn', `[Playground] 表白后处理失败: ${e.message}`);
+  const acceptConfession = !probe && !Number(companion.safe_mode) && behaviorSafety === 'none' && !behaviorPlan && !arcCtx.active
+    && !companion.user_confessed_at && detectUserConfession(text);
+  const relationshipEvent = celebration || acceptConfession ? {
+    from: celebration?.from, to: celebration?.to, confession: acceptConfession ? 'accepted' : null,
+  } : null;
+  let shapingHint = '';
+  if (grounded) {
+    if (!probe) {
+      for (const item of detectTeaching(text)) upsertShaping({ companionId: companion.id, ...item, rawMsg: text });
     }
+    shapingHint = buildShapingPromptHint(listShaping(companion.id), { expressionOnly: true });
   }
 
-  if (innerRes?.thought) systemPrompt += buildInnerOsHint(innerRes.thought, { behaviorPlan });
-  if (behaviorOn && !behaviorPlan) systemPrompt += arcCtx.directive || '';
-  systemPrompt += buildBehaviorReplyHint(behaviorPlan);
+  async function buildLegacyWebPrompt() {
+    const recentSchedules = getRecentSchedules(companion.id, todayKey, 3);
+    const longTermDigest = await buildLongTermDigest(companion.id, companion.user_id, { isPro: true });
+    const stickerHint = buildStickerPromptHint(!!companion.sticker_reply_enabled && hasStickers());
+    const missingLevel = getMissingLevel(emotionState, companion.last_user_reply_at);
+    const emotionHint = Number(companion.safe_mode) ? '' : buildEmotionPromptHint(emotionState, { missingLevel, arcActive: behaviorOn && (arcCtx.active || !!behaviorPlan) });
+    let systemPrompt = buildSystemPrompt(companion, {
+      memories, userProfile, recentTurns, longTermDigest,
+      promptMode: 'reply', dailySchedule, recentSchedules, personaFacts, preferences, behaviorPlan,
+    }) + stickerHint + emotionHint;
 
+    // 关系刚升级
+    if (celebration) {
+      systemPrompt += `\n\n【★ 重要：关系刚刚升级】\n刚刚你对他的好感度上升到了新的阶段：${celebration.from} → ${celebration.to}。\n这条回复要自然体现这种变化（比如更亲密的称呼、"突然觉得跟你聊得越来越来电"），但**不要直接说"我们升级关系了"**。`;
+    }
+
+    // 用户亲密词越界
+    const intimacyOver = detectIntimacyOvereach(text);
+    if (intimacyOver.has && (stageNow === '陌生人' || stageNow === '朋友')) {
+      systemPrompt += `\n\n【★ 他用了过早的亲密词】当前 ${stageNow} 阶段；要害羞但不冷漠地委婉回避，留"以后熟了再说"钩子；多条 || 分段。`;
+    }
+
+    if (acceptConfession) systemPrompt += '\n\n【★★ 他向你告白】必须接住。不能拒绝，不能转移话题。多条 || 分段。';
+    if (innerRes?.thought) systemPrompt += buildInnerOsHint(innerRes.thought, { behaviorPlan });
+    if (behaviorOn && !behaviorPlan) systemPrompt += arcCtx.directive || '';
+    return systemPrompt;
+  }
+
+  const systemPrompt = grounded || (behaviorOn && crisisLevel === 'high') ? null : await buildLegacyWebPrompt();
   let reply;
   try {
     if (!probe) touchRecalledMemories(companion.id, companion.user_id, memories.map(row => row.id));
-    reply = behaviorOn && crisisLevel === 'high' ? buildCrisisReply() : await generateReply(systemPrompt, history, text, {
+    reply = behaviorOn && crisisLevel === 'high' ? buildCrisisReply()
+      : grounded ? (await generateGroundedReply({ companion, userText: text, history,
+        memories, userProfile, behaviorPlan, arcState: arcCtx.arcState, probe, channel: 'web',
+        personaFacts, preferences, dailySchedule, shapingHint, relationshipEvent,
+      })).reply : await generateReply(systemPrompt, history, text, {
       temperature: companion.temperature,
       max_tokens: companion.max_tokens,
       top_p: companion.top_p,
@@ -249,7 +250,14 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
   if (behaviorOn) reply = scrubConflictRedline(reply, arcCtx.arcState, probe ? null : companion.id);
   reply = scrubPhotoImpersonation(reply, companion.id);   // #281：playground 无照片链路，同罩
 
-  reply = await reviewPressureTail(reply, { enabled: companion.no_pressure, userText: text, safetyLevel: userMsgSafetyLevel });
+  reply = await reviewPressureTail(reply, { enabled: !grounded && companion.no_pressure, userText: text, safetyLevel: userMsgSafetyLevel });
+
+  if (acceptConfession) {
+    try {
+      const affection = Math.max(companion.affection_level || 0, 55);
+      patchCompanion(companion.id, { affection_level: affection, relationship_stage: computeRelationshipStage(affection), user_confessed_at: new Date().toISOString() });
+    } catch (e) { log('warn', '[Playground] 表白后处理失败: ' + e.message); }
+  }
 
   // v1.5.2 PR E: assistant reply 后也走情绪更新（mood drift / energy 恢复等），跟 bot.mjs 对齐
   try {

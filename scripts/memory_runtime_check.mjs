@@ -1,4 +1,5 @@
 import * as behavior from '../src/behavior_runtime.mjs';
+import { usesGroundedReplies } from '../src/reply_pipeline.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import vm from 'node:vm';
@@ -61,7 +62,7 @@ async function execute(kind, f, { probe = false, provider = 'ok', crisis = 'none
   cooled = [], windowOpen = true, throwBeforeGeneration = false, source = sections[kind] } = {}) {
   const events = [], generated = [], prompts = [], query = '周末骑车';
   const sandbox = {
-    ...behavior,
+    ...behavior, usesGroundedReplies,
     console, Set, Date, companion: f.companion, userText: query, text: query, probe,
     ctx: {}, msg: { fromUser: 'synthetic-runtime' }, botId: 'fixture', userParts: null,
     binding: {}, userMsgSafetyLevel: 'none', kind: 'normal', account: { bot_token: 'fixture-token', bot_id: 'fixture' }, opts: {},

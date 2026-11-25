@@ -1,4 +1,5 @@
-import {isMemoryRecallable} from './memory_admission.mjs';
+import {isMemoryRecallable, memorySourceIds} from './memory_admission.mjs';
+import {readStoredMemoryEvidence} from './memory_provenance.mjs';
 import {validMemoryVector,storedMemoryVector,sameEmbeddingSpace,memoryCosine} from './memory_vectors.mjs';
 
 function utcMillis(value,fallback) {
@@ -22,10 +23,13 @@ function tokens(text) {
   for(const chunk of chinese.match(/[\p{Script=Han}]+/gu)||[]){for(let i=0;i+1<chunk.length;i++)words.add(chunk.slice(i,i+2));}
   return words;
 }
-export function rankMemoryCandidates(rows,message,{queryEmbedding=null,limit=7,now=new Date(),maxPinned=2}={}) {
+export function rankMemoryCandidates(rows,message,{queryEmbedding=null,limit=7,now=new Date(),maxPinned=2,evidenceOnly=false}={}) {
   const eligible=rows.filter(isMemoryRecallable);const ids=new Set(eligible.map(row=>row.id));
   const queryTokens=tokens(message);const useVector=validMemoryVector(queryEmbedding,message);
-  const scored=eligible.filter(row=>!row.compacted_into || !ids.has(row.compacted_into)).map(row=>{
+  const candidates = evidenceOnly
+    ? eligible.filter(row => row.memory_layer !== 'summary' && !/_summary$/.test(row.memory_type) && readStoredMemoryEvidence(row))
+    : eligible.filter(row => !row.compacted_into || !ids.has(row.compacted_into));
+  const scored=candidates.map(row=>{
     const own=tokens(row.content);let matched=0;for(const token of queryTokens)if(own.has(token))matched++;
     const lexical=queryTokens.size?matched/queryTokens.size:0;
     const stored=useVector?storedMemoryVector(row):null;
@@ -46,6 +50,28 @@ export function rankMemoryCandidates(rows,message,{queryEmbedding=null,limit=7,n
     if(pinnedFallback && pins>=maxPinned)continue;
     if(pinnedFallback)pins++;
     result.push(row);
+  }
+  if (evidenceOnly) {
+    const byId = new Map(eligible.map(row => [row.id, row]));
+    for (const row of result) {
+      // Limit selects what to say. Dependencies outside the limit can still prove eligibility.
+      // Carry only admission fields from the scope-checked source graph, never their text.
+      const visited = new Set();
+      const pending = [...(memorySourceIds(row.source_memory_ids) || [])];
+      row.recallSources = [];
+      while (pending.length) {
+        const key = pending.pop();
+        if (visited.has(key)) continue;
+        visited.add(key);
+        const source = byId.get(key);
+        if (!source) continue;
+        const { id, companion_id, user_id, source_memory_ids, memory_status, recall_blocked,
+          do_not_mention, memory_origin, memory_source } = source;
+        row.recallSources.push({ id, companion_id, user_id, source_memory_ids, memory_status,
+          recall_blocked, do_not_mention, memory_origin, memory_source });
+        pending.push(...(memorySourceIds(source_memory_ids) || []));
+      }
+    }
   }
   return result;
 }

@@ -1,3 +1,4 @@
+import { generateGroundedReply as realGroundedReply, usesGroundedReplies } from '../src/reply_pipeline.mjs';
 import { reviewPressureTail } from '../src/pressure_tail.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -15,13 +16,21 @@ const pipeline = source.slice(source.indexOf('async function processUserTurn('),
   .replace("import('./backfill_history.mjs')", 'Promise.resolve({maybeAutoBackfill(){}})');
 const sender = source.slice(source.indexOf('async function sendAndRecord('), source.indexOf('async function sendStickerAndRecord('));
 const companion = { id: 1, user_id: 1, name: '素晴', proactive_enabled: 1, relationship_stage: '朋友', memory_enabled: 0 };
-for (const test of ['sent', 'failed', 'partial', 'throw', 'fallback', 'discard', 'off', 'safe', 'cold']) {
+for (const test of ['sent', 'failed', 'partial', 'throw', 'fallback', 'discard', 'review_failed', 'revised', 'off', 'safe', 'cold']) {
   process.env.BEHAVIOR_ENABLED = test === 'off' ? 'false' : 'true';
   const seen = { plans: [], sends: [], turns: [], prompts: [], errors: [], post: [] };
   const pendingBursts = new Map();
   let generation = 0;
   const context = {
-    reviewPressureTail, touchRecalledMemories() {},
+    reviewPressureTail, usesGroundedReplies,
+    generateGroundedReply: opts => realGroundedReply({ ...opts, events: [] }, {
+      generate: (...args) => context.generateReply(...args),
+      review: async ({ draft }) => {
+        if (test === 'review_failed') return { reply: CHAT_FALLBACK, status: 'fallback', reasons: ['invalid_review'] };
+        if (test === 'revised') return { reply: '可以慢慢说。', status: 'revised', reasons: ['unsupported_fact'] };
+        return { reply: draft, status: 'kept', reasons: [] };
+      },
+    }), touchRecalledMemories() {},
     ...behavior, buildInnerOsHint, randomUUID, process, Date, Math, Set, Map, clearTimeout,
     inflightUsers: new Set(), inflightPhoto: new Set(), pendingBursts,
     log: (level, text) => { if (level === 'error') seen.errors.push(text); },
@@ -45,7 +54,7 @@ for (const test of ['sent', 'failed', 'partial', 'throw', 'fallback', 'discard',
     isPeriodHeavyWindow: () => false, isPmsActive: () => false,
     getCompanionPreferencesForPrompt: () => '', detectTeaching: () => [], buildShapingConfirmHint: () => '',
     listShaping: () => [], buildShapingPromptHint: () => '', getActiveCurrentWorks: () => [], buildWorksPromptHint: () => '',
-    buildOpenLoopsHint: () => '', buildSystemPrompt: () => 'PERSONA', escalationDirective: () => '',
+    buildOpenLoopsHint: () => '', buildSystemPrompt: () => { assert.ok(test === 'off' || test === 'safe', 'grounded replies cannot assemble the legacy template'); return 'PERSONA'; }, escalationDirective: () => '',
     recentIntentEvents: () => [], buildIntentDedupHint: () => '', buildRealityFacts: () => '', isNightShanghai: () => false,
     buildFirstTurnHint: () => '', consumePendingCelebration: () => null, detectIntimacyOvereach: () => ({ has: false }), detectUserConfession: () => false,
     generateReply: async prompt => {
@@ -72,7 +81,7 @@ for (const test of ['sent', 'failed', 'partial', 'throw', 'fallback', 'discard',
   const turn = { companion: { ...companion, safe_mode: test === 'safe' ? 1 : 0 }, binding: {}, ctx: {}, botId: 'b', fromUser: 'fixture', userText: '工作搞砸了，我特别委屈，10分钟后再问我', contextToken: 'fixture' };
   await run(turn);
   assert.deepEqual(seen.errors, [], `${test}: production pipeline must reach delivery, not silently catch a wiring error`);
-  if (test === 'failed' || test === 'fallback') {
+  if (test === 'failed' || test === 'fallback' || test === 'review_failed') {
     assert.equal(seen.plans.length, 0, test);
     assert.equal(seen.turns.filter(t => t.role === 'assistant').length, 0, test);
   } else if (test === 'off' || test === 'safe') {
@@ -83,6 +92,11 @@ for (const test of ['sent', 'failed', 'partial', 'throw', 'fallback', 'discard',
     assert.ok(Number.isFinite(seen.plans[0].inputStartedAt), 'cancellation race token is passed');
     assert.equal(seen.plans[0].deliveredText, seen.post[0]);
     assert.ok(seen.sends.every(s => s.opts?._allowQueue === false), 'behavior delivery must not be an unconfirmed queue receipt');
+    if (test === 'revised') {
+      assert.deepEqual(seen.sends.map(s => s.text), ['可以慢慢说。']);
+      assert.equal(seen.plans[0].deliveredText, '可以慢慢说。');
+      assert.equal(seen.turns.at(-1).text, '可以慢慢说。');
+    }
     if (test === 'partial' || test === 'throw') assert.equal(seen.plans[0].deliveredText, '先听你说1');
     if (test === 'discard') {
       assert.equal(generation, 2);
