@@ -36,3 +36,22 @@ export async function reviewPressureTail(reply, { enabled, userText = '', safety
     return reply;
   }
 }
+
+const clockTime = /(?:[零〇一二两三四五六七八九十\d]{1,3}[点时](?:半|一刻|三刻|[零一二三四五六七八九十\d]{1,3}分?)?|\d{1,2}[:：]\d{2})/u.source;
+const availabilityWindow = new RegExp('(' + clockTime + ')\\s*(?:到|至|[-~～—])\\s*(' + clockTime + ')(?:左右)?', 'u');
+const fixedAgreement = new RegExp('(那就|那定在|那约在)(' + clockTime + ')(?=[，,。！!]|$)', 'u');
+
+export function availabilityWindowForReply(text) {
+  if (!text || !/(?:有空|有时间|能到|才到|才能|可以到)/u.test(text)) return null;
+  if (/没空|没时间|不方便|没法|不能|以外|之外|[？?]|[吗么]|你(?:来|看着)?(?:定|选|挑|决定)|具体|几点合适|就定|就约在/u.test(text)) return null;
+  // Multiple times outside the range may include an explicitly chosen appointment.
+  if ([...text.matchAll(new RegExp(clockTime, 'gu'))].length !== 2) return null;
+  const match = availabilityWindow.exec(text);
+  return match ? { text: match[0], start: match[1], end: match[2] } : null;
+}
+
+export function preserveAvailabilityWindow(reply, window) {
+  if (!window || !reply || /[？?]|行吗|可以吗|好不好/u.test(reply)) return reply;
+  return reply.replace(fixedAgreement, (original, lead, point) =>
+    point === window.start || point === window.end ? lead + window.text : original);
+}

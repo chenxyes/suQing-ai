@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { reviewPressureTail } from '../src/pressure_tail.mjs';
+import { availabilityWindowForReply, preserveAvailabilityWindow, reviewPressureTail } from '../src/pressure_tail.mjs';
 
 const context = { enabled: true, userText: '我八点半到九点有空' };
 const drop = async () => ({ text: '1' });
@@ -28,4 +28,13 @@ assert.equal(await reviewPressureTail(boundary, context, async () => ({ text: 'K
 for (const failed of [async () => ({ text: '自由改写' }), async () => { throw Error('timeout'); }]) {
   assert.equal(await reviewPressureTail(draft, context, failed), draft);
 }
+const window = availabilityWindowForReply('我八点半到九点左右才有时间');
+const incident = '行吧，那就八点半，我等你。别拖到九点半去啊。';
+assert.equal(preserveAvailabilityWindow(await reviewPressureTail(incident, context, drop), window), '行吧，那就八点半到九点左右，我等你。');
+assert.equal(preserveAvailabilityWindow('那就九点，可以吗？', window), '那就九点，可以吗？');
+assert.equal(preserveAvailabilityWindow('那就八点半到九点，我等你。', window), '那就八点半到九点，我等你。');
+for (const user of ['八点半到九点有空，你选一个', '八点半到九点有空，就约在八点半', '八点半到九点没空，之后才有时间', '八点半有空']) {
+  assert.equal(availabilityWindowForReply(user), null);
+}
+assert.equal(availabilityWindowForReply('20:30 到 21:00 有空').text, '20:30 到 21:00');
 console.log('pressure_tail_check passed');

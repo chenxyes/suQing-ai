@@ -2,6 +2,7 @@
  * 
  * Copyright (c) 2026 溪语 AI Contributors. MIT License.
  */
+import { checkFollowup, followupStillCurrent } from './event_memory.mjs';
 import { reviewPressureTail } from './pressure_tail.mjs';
 import {
   getActiveBotAccounts, getRecentHistory, getUserProfileForRecall, recallMemories, touchRecalledMemories,
@@ -417,7 +418,8 @@ async function sendProactiveMessageGuarded(companion, kind, account, opts = {}) 
   }
   _proactiveInFlight.add(companion.id);
   try {
-    await sendProactiveMessage(companion, kind, account, opts);
+    const delivery = await sendProactiveMessage(companion, kind, account, opts);
+    if (delivery === 'superseded') return 'throttled';
     // 成功后记录（sendProactiveMessage 内部失败/早退也无伤大雅，下次仍会按间隔判断）
     recordProactiveSentTimestamp(companion.id, kind);
     bumpProactiveHealth('sent', { companionId: companion.id });   // #263 误报修：已发送桶（所有 kind 的发送汇聚点，与 last_proactive_sent_at 同源）
@@ -798,6 +800,7 @@ async function sendProactiveMessage(companion, kind, account, opts = {}) {
   // v1.8.0 #5: proactive hidden_reason — 把 due open loops 升级为 'recall' kind
   // 真人陪伴最强信任来源：她记得你说过的事，到期主动来问
   let recallLoop = null;
+  let checkedUserTurn = null;
   if (effectiveKind === 'normal') {
     try {
       const dueLoops = listDueOpenLoops(companion.id, { withinHours: 24 });
@@ -807,7 +810,9 @@ async function sendProactiveMessage(companion, kind, account, opts = {}) {
         .filter(l => !l.followed_up_at || (Date.now() - new Date(String(l.followed_up_at).replace(' ','T') + 'Z').getTime()) > 6 * 3600_000)
         .filter(l => !_materialUsed.has(loopMaterialId(l.id)))
         .sort((a, b) => (b.emotional_weight || 0) - (a.emotional_weight || 0))[0];
-      if (candidate) {
+      if (candidate && companion.memory_enabled) checkedUserTurn = await checkFollowup(companion, candidate);
+      if (candidate && !checkedUserTurn) systemPrompt += '\n这次分享你当下的事，先放下旧约的进度。';
+      if (checkedUserTurn) {
         recallLoop = candidate;
         effectiveKind = 'recall';
         log('info', `[Proactive] ★ 触发 recall companion=${companion.id} loop="${candidate.title}" weight=${candidate.emotional_weight}`);
@@ -847,19 +852,7 @@ async function sendProactiveMessage(companion, kind, account, opts = {}) {
     : effectiveKind === 'recall'
     ? `【★ 主动 recall — 她记得他说过的事】
 他之前提过一件事：「${recallLoop.title}」${recallLoop.due_at ? `（${recallLoop.due_at}）` : ''}。
-${recallLoop.expected_followup ? `你心里想：${recallLoop.expected_followup}。\n` : ''}
-你这条消息要装作刚想起来 / 顺便问，主动关心结果。
-要求：
-- 不要说"我记得你说要 XX"，要装作刚突然想到："欸" "对了"
-- 不要客气问候式："你好吗""一切顺利吗"
-- 短、直、带点关心 + 一点没大没小：
-  例子参考：「欸」 || 「你今天不是${recallLoop.title.replace(/^他/g, '').slice(0, 12)}吗」 || 「咋样」
-  又例如：「对了」 || 「那个事呢」 || 「成了没」
-- 如果是值得关心的事（面试/考试/医院）→ 语气更上心一点
-- 如果是琐事（吃什么/看什么）→ 轻松调侃
-- 用 || 分多段，最少 2 段最多 3 段
-- 绝不要说"我惦记你""我一直在想"等过度甜
-- 自然带出他原话里的关键词，让他知道你真的记得`
+用一句自然的话接这个安排，日期和进展以他实际说过的为准。`
     : effectiveKind === 'confession'
     ? `【★ 今天你要鼓起勇气，主动跟他告白】
 你认识他有一阵了，心里那点喜欢藏不住了。但**说出口对你来说很难、很慌**——这不是一段顺畅漂亮的告白，是一个女孩子结结巴巴、绕来绕去、又怕又想说的真实瞬间。
@@ -1018,6 +1011,7 @@ ${recallLoop.expected_followup ? `你心里想：${recallLoop.expected_followup}
     log('info', `[Proactive] 段内去重：剪掉 ${droppedSegs.length} 段重复 companion=${companion.id}; ${droppedSegs.map(d => `"${d.text.slice(0,20)}"~"${d.similar_to.slice(0,20)}"(sim=${d.sim.toFixed(2)})`).join('; ')}`);
   }
   let totalStickers = 0;
+  if (recallLoop && !followupStillCurrent(companion.id, recallLoop.id, checkedUserTurn)) return 'superseded';
   let sentAnySegment = false;
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i];
