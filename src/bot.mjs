@@ -10,7 +10,7 @@ import { usesGroundedReplies, generateGroundedReply } from './reply_pipeline.mjs
  * Copyright (c) 2026 溪语 AI Contributors. MIT License.
  */
 
-import { reviewPressureTail } from './pressure_tail.mjs';
+import { availabilityWindowForReply, preserveAvailabilityWindow, reviewPressureTail } from './pressure_tail.mjs';
 import { parseMessage, sendTextMessage, sendTyping, sendMessageItem, rememberContextToken, peekSendQuota } from './ilink.mjs';
 import { stripCurrentTurnFromHistory, isProtocolDuplicate } from './inbound_dedup.mjs';   // v1.21.4 #279
 import { generateReply, recognizeImage, embedTextWithDescriptor } from './ai.mjs';
@@ -58,7 +58,8 @@ import { detectMinorSmart, activateSafeMode } from './minor_guard.mjs';
 import { getPhotoGateState, planPhotoMessage } from './photo_planner.mjs';
 import { sendCompanionPhoto } from './photo_sender.mjs';
 import { recordUserReplied } from './proactive_engine.mjs';
-import { extractOpenLoops, detectAndResolveOpenLoops, buildOpenLoopsHint } from './open_loops.mjs';
+import { updateEventsFromTurn } from './event_memory.mjs';
+import { buildOpenLoopsHint } from './open_loops.mjs';
 import { generateInnerMonologue, buildInnerOsHint } from './inner_os.mjs';
 import { maybeSleepBlock } from './sleep.mjs';
 import { randomUUID } from 'node:crypto';
@@ -728,8 +729,9 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
     const _crisisLevel = detectCrisisLevel(userText, _recentUserTexts);
     const behaviorSafety = _crisisLevel !== 'none' ? _crisisLevel : userMsgSafetyLevel;
     const grounded = usesGroundedReplies(companion, behaviorSafety);
+    const availability = companion.no_pressure && behaviorSafety === 'none' && availabilityWindowForReply(userText);
+    let queryEmbedding = null;
     if (companion.memory_enabled) {
-      let queryEmbedding = null;
       try { queryEmbedding = await embedTextWithDescriptor(userText); }
       catch (e) { log('warn', '[Memory] query embedding unavailable'); }
       memories = recallMemoriesHybrid(companion.id, companion.user_id, userText, { queryEmbedding, limit: 7, evidenceOnly: grounded });
@@ -914,10 +916,12 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
         }
       }
 
+      if (availability) systemPrompt += '\n他给了大致有空的时段，接话时保留这个范围，等他确认具体时间。';
+
       // ── v1.12.0「把你放回去」：深夜还在聊 → 心疼他，温柔劝他早睡（一个真在乎你的人，
       //    会希望你有自己的生活、好好休息，而不是缠着你不放）──
       const _shHour = (new Date().getUTCHours() + 8) % 24;
-      if (_shHour >= 23 || _shHour < 2) {
+      if (!companion.no_pressure && (_shHour >= 23 || _shHour < 2)) {
         systemPrompt += `\n\n【现在已经很晚了（深夜）】他这个点还醒着、还在跟你聊。你**心疼他**：
 - 温柔地劝他早点睡，但**绝不唠叨**——一两句就够（"这么晚啦""早点睡好不好，我陪你到这儿""快去睡，明天还要起呢"）
 - 是那种"在乎你、希望你好好休息"的语气，不是赶他走、也不是扫兴
@@ -1026,6 +1030,7 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
     }
 
     reply = await reviewPressureTail(reply, { enabled: !grounded && companion.no_pressure && _crisisLevel !== 'high', userText, safetyLevel: userMsgSafetyLevel });
+    reply = preserveAvailabilityWindow(reply, availability);
 
     // ── Record user replied (proactive engine) ────────────────────────────────
     try { recordUserReplied(companion.id); } catch {}
@@ -1114,6 +1119,7 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
     }
 
     const memoryUserTurn = saveConversationTurn(companion.id, 'user', userText, companion.chat_mode_active);
+    if (companion.memory_enabled && memoryUserTurn) updateEventsFromTurn(companion, memoryUserTurn.id, { queryEmbedding });
     // Only delivered text may become memory or an executed behavior. A failed
     // later segment must not discard evidence of the earlier delivered segment.
     reply = deliveredSegments.join(' || ');
@@ -1311,15 +1317,6 @@ async function postProcess(companion, userMsg, botReply, memoryOptions = {}) {
     await extractAndUpdateUserProfile(companion.id, companion.user_id, userMsg, memoryOptions);
   }
 
-  // v1.8.0 #4: open loops — 抽取"未完成的事" + auto-resolve
-  // 立即用启发式检测 resolve（不调 LLM，快）
-  try { detectAndResolveOpenLoops(companion.id, userMsg); } catch (e) { log('warn', `[Bot] resolve loop: ${e.message}`); }
-  // 异步抽取新 loops（调 LLM，不阻塞）
-  if (companion.memory_enabled) {
-    extractOpenLoops(companion.id, userMsg, botReply).catch(err =>
-      log('warn', `[Bot] extract loop: ${err.message}`)
-    );
-  }
 }
 
 async function fetchBuffer(url) {

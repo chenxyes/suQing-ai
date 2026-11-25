@@ -1,6 +1,6 @@
 /** The shared V1 generation/review boundary. It never sends or saves turns. */
 import { generateReply, resolveReplySearchContext } from './ai.mjs';
-import { listOpenLoops } from './db.mjs';
+import { listReplyEvents } from './event_memory.mjs';
 import { CHAT_FALLBACK, isChatFallback } from './chat_response.mjs';
 import { isBehaviorEnabled } from './behavior_runtime.mjs';
 import { buildReplyContext } from './reply_context.mjs';
@@ -20,7 +20,7 @@ export async function generateGroundedReply(options, { generate = generateReply,
   const recallEnabled = !!Number(companion.memory_enabled);
   let eventRecords = recallEnabled ? events : [];
   if (eventRecords == null) {
-    try { eventRecords = ['open', 'resolved', 'stale'].flatMap(status => listOpenLoops(companion.id, { status, limit: 4 })); }
+    try { eventRecords = listReplyEvents(companion.id); }
     catch { eventRecords = []; }
   }
   const context = buildReplyContext({ userText, history, memories: recallEnabled ? memories : [],

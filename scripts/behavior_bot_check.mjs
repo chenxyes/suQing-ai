@@ -1,5 +1,5 @@
 import { generateGroundedReply as realGroundedReply, usesGroundedReplies } from '../src/reply_pipeline.mjs';
-import { reviewPressureTail } from '../src/pressure_tail.mjs';
+import { availabilityWindowForReply, preserveAvailabilityWindow, reviewPressureTail } from '../src/pressure_tail.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
@@ -22,7 +22,7 @@ for (const test of ['sent', 'failed', 'partial', 'throw', 'fallback', 'discard',
   const pendingBursts = new Map();
   let generation = 0;
   const context = {
-    reviewPressureTail, usesGroundedReplies,
+    availabilityWindowForReply, preserveAvailabilityWindow, reviewPressureTail, usesGroundedReplies,
     generateGroundedReply: opts => realGroundedReply({ ...opts, events: [] }, {
       generate: (...args) => context.generateReply(...args),
       review: async ({ draft }) => {

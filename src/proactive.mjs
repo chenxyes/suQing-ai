@@ -3,12 +3,13 @@ import { usesGroundedReplies, generateGroundedReply } from './reply_pipeline.mjs
  * 
  * Copyright (c) 2026 溪语 AI Contributors. MIT License.
  */
+import { checkFollowup, followupStillCurrent } from './event_memory.mjs';
 import { reviewPressureTail } from './pressure_tail.mjs';
 import {
   getActiveBotAccounts, getRecentHistory, getUserProfileForRecall, recallMemories, touchRecalledMemories,
   getConversationContext, getDueReminders, markRemindersTriggered, ensureRelationshipReminders,
   saveMessage, saveConversationTurn,
-  getCompanionById, getBotContextForCompanion, getDb,
+  getCompanionById, getBotContextForCompanion, getDb, getUnconsumedMissed,
   getActiveWechatBinding, getDailySchedule, shanghaiDateKey, getRecentSchedules, getPersonaFacts,
   markCompanionConfessed, patchCompanion,
   recordProactiveSentTimestamp, getProactiveLastSent, markWindowLastCallSent, bumpProactiveUnanswered,
@@ -287,7 +288,7 @@ async function tick(now = new Date()) {
           } else if (result === 'arc_skip') {
             item._v2_deny_until = Date.now() + 90 * 60_000;   // v1.21 冷战降频，1.5 小时后再评估
             bumpProactiveHealth('restrained', { companionId: companion.id, reason: 'arc_skip' });
-          } else if (result === 'sent' || result === 'partial' || result === 'dup') {
+          } else if (result === 'sent' || result === 'partial' || result === 'dup' || result === 'superseded') {
             item.sent = true;
           } else {
             item._v2_deny_until = Date.now() + 15 * 60_000;
@@ -334,6 +335,25 @@ export function shouldDemoteMorning({ goodmorningSentForDate, todayKey, lastUser
     }
   }
   return { demote: alreadySent || talkedThisMorning, alreadySent, talkedThisMorning };
+}
+
+const morningReceivedTime = new Intl.DateTimeFormat('sv-SE', {
+  timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+});
+
+export function buildMorningMissedHint(missed = []) {
+  const previews = [];
+  for (const row of missed) {
+    if (!Number.isSafeInteger(row.received_at) || row.received_at <= 0) continue;
+    const received = new Date(row.received_at);
+    if (!Number.isFinite(received.getTime())) continue;
+    const content = String(row.content || '').trim().slice(0, 30);
+    previews.push(`${morningReceivedTime.format(received)} | ${JSON.stringify(content || '[无文字内容]')}`);
+    if (previews.length === 5) break;
+  }
+  if (!previews.length) return '\n直接问早，省去任何关于他发过消息或你漏回消息的说法。';
+  return `\n【待回复消息 · 北京时间】\n${previews.join('\n')}\n选一条直接接他的话。时间只用来理解先后，省去报时和解释为什么现在才回。`;
 }
 
 async function sendProactiveMessageGuarded(companion, kind, account, opts = {}) {
@@ -808,6 +828,7 @@ async function sendProactiveMessage(companion, kind, account, opts = {}) {
   // v1.8.0 #5: proactive hidden_reason — 把 due open loops 升级为 'recall' kind
   // 真人陪伴最强信任来源：她记得你说过的事，到期主动来问
   let recallLoop = null;
+  let checkedUserTurn = null;
   if (effectiveKind === 'normal') {
     try {
       const dueLoops = listDueOpenLoops(companion.id, { withinHours: 24 });
@@ -817,7 +838,9 @@ async function sendProactiveMessage(companion, kind, account, opts = {}) {
         .filter(l => !l.followed_up_at || (Date.now() - new Date(String(l.followed_up_at).replace(' ','T') + 'Z').getTime()) > 6 * 3600_000)
         .filter(l => !_materialUsed.has(loopMaterialId(l.id)))
         .sort((a, b) => (b.emotional_weight || 0) - (a.emotional_weight || 0))[0];
-      if (candidate) {
+      if (candidate && companion.memory_enabled) checkedUserTurn = await checkFollowup(companion, candidate);
+      if (candidate && !checkedUserTurn) systemPrompt += '\n这次分享你当下的事，先放下旧约的进度。';
+      if (checkedUserTurn) {
         recallLoop = candidate;
         effectiveKind = 'recall';
         log('info', `[Proactive] ★ 触发 recall companion=${companion.id} loop="${candidate.title}" weight=${candidate.emotional_weight}`);
@@ -828,21 +851,14 @@ async function sendProactiveMessage(companion, kind, account, opts = {}) {
   }
 
   const reminderTitles = (opts.reminders || []).map(r => r.title).filter(Boolean).join('、');
-  // v1.10.0: morning kind 拼上昨晚 missed 摘要（不消费，由 wrapper 在发完后 drain）
+  // v1.10.0: morning kind 拼上实际待回复消息（不消费，由 wrapper 在发完后 drain）
   let missedHint = '';
   if (effectiveKind === 'morning') {
     try {
-      // peek 不 consume —— 用 getUnconsumedMissed 内部 import 避免循环依赖
-      const { getUnconsumedMissed } = await import('./db.mjs');
       const missed = getUnconsumedMissed(companion.id, 20) || [];
-      if (missed.length > 0) {
-        const preview = missed
-          .slice(0, 5)
-          .map(m => String(m.content || '').slice(0, 30))
-          .join('』『');
-        missedHint = `\n【昨晚他在你睡着后发了 ${missed.length} 条消息】内容片段：『${preview}』。\n你刚醒来看到，要自然地：1) 表达"刚醒"的迷糊；2) 不要装作没看到；3) 不要逐条回复，用一句"看到你昨晚发了好多 / 我刚看到 / 我睡着了对不起"概括；4) 然后选一条你最想回应的话题轻轻接一下。`;
-      }
+      missedHint = buildMorningMissedHint(missed);
     } catch (e) {
+      missedHint = buildMorningMissedHint();
       log('warn', `[Proactive] morning missed peek failed: ${e.message}`);
     }
   }
@@ -864,19 +880,7 @@ async function sendProactiveMessage(companion, kind, account, opts = {}) {
     : effectiveKind === 'recall'
     ? `【★ 主动 recall — 她记得他说过的事】
 他之前提过一件事：「${recallLoop.title}」${recallLoop.due_at ? `（${recallLoop.due_at}）` : ''}。
-${recallLoop.expected_followup ? `你心里想：${recallLoop.expected_followup}。\n` : ''}
-你这条消息要装作刚想起来 / 顺便问，主动关心结果。
-要求：
-- 不要说"我记得你说要 XX"，要装作刚突然想到："欸" "对了"
-- 不要客气问候式："你好吗""一切顺利吗"
-- 短、直、带点关心 + 一点没大没小：
-  例子参考：「欸」 || 「你今天不是${recallLoop.title.replace(/^他/g, '').slice(0, 12)}吗」 || 「咋样」
-  又例如：「对了」 || 「那个事呢」 || 「成了没」
-- 如果是值得关心的事（面试/考试/医院）→ 语气更上心一点
-- 如果是琐事（吃什么/看什么）→ 轻松调侃
-- 用 || 分多段，最少 2 段最多 3 段
-- 绝不要说"我惦记你""我一直在想"等过度甜
-- 自然带出他原话里的关键词，让他知道你真的记得`
+用一句自然的话接这个安排，日期和进展以他实际说过的为准。`
     : effectiveKind === 'confession'
     ? `【★ 今天你要鼓起勇气，主动跟他告白】
 你认识他有一阵了，心里那点喜欢藏不住了。但**说出口对你来说很难、很慌**——这不是一段顺畅漂亮的告白，是一个女孩子结结巴巴、绕来绕去、又怕又想说的真实瞬间。
@@ -995,7 +999,7 @@ ${recallLoop.expected_followup ? `你心里想：${recallLoop.expected_followup}
     }
   }
 
-  return deliverProactiveText(companion, ctx, { reply, kind, effectiveKind, recallLoop, chosenWorkMatId,
+  return deliverProactiveText(companion, ctx, { reply, kind, effectiveKind, recallLoop, checkedUserTurn, chosenWorkMatId,
     recalledRaw: _recalledRaw, dailySchedule: proactiveDailySchedule, recentTurns, history });
 }
 
@@ -1030,7 +1034,7 @@ async function sendRequestedFollowup(companion, ctx, task) {
 }
 
 async function deliverProactiveText(companion, ctx, { reply, kind, effectiveKind = kind, task = null,
-  recallLoop, chosenWorkMatId, recalledRaw, dailySchedule, recentTurns, history }) {
+  recallLoop, checkedUserTurn, chosenWorkMatId, recalledRaw, dailySchedule, recentTurns, history }) {
   // #317 四档身体事件出站闸（v1.22 PR-L1）：severe/自伤无条件拦 / diagnosed 无档案则拦 /
   // symptom-only / transient 放行。reply 定稿单点，覆盖主+撞车重生。fail-open：gate 查不到不开。
   let _activeLifeStates;
@@ -1071,16 +1075,22 @@ async function deliverProactiveText(companion, ctx, { reply, kind, effectiveKind
     log('info', `[Proactive] 段内去重：剪掉 ${droppedSegs.length} 段重复 companion=${companion.id}; ${droppedSegs.map(d => `"${d.text.slice(0,20)}"~"${d.similar_to.slice(0,20)}"(sim=${d.sim.toFixed(2)})`).join('; ')}`);
   }
   let totalStickers = 0;
+  const recallSuperseded = () => recallLoop && !followupStillCurrent(companion.id, recallLoop.id, checkedUserTurn);
   let sentAnySegment = false;
   let partial = false;
   const deliveredParts = [];
-  for (let i = 0; i < segments.length; i++) {
+  delivery: for (let i = 0; i < segments.length; i++) {
     const seg = segments[i];
     const { text: textOnly, stickers: parsedStickers } = parseStickerMarkers(seg);
     const stickers = task ? [] : parsedStickers;
     // Recheck after generation and before every network send (user may have cancelled meanwhile).
     if (task && (!isBehaviorTaskCurrent(task) || getSleepRow(companion.id)?.is_sleeping)) {
       if (!sentAnySegment) return { status: 'cancelled', reason: 'stale_task', deliveredText: '' };
+      partial = true;
+      break;
+    }
+    if (recallSuperseded()) {
+      if (!sentAnySegment) return { status: 'superseded', deliveredText: '' };
       partial = true;
       break;
     }
@@ -1117,6 +1127,11 @@ async function deliverProactiveText(companion, ctx, { reply, kind, effectiveKind
       try {
         const { data, name } = await readMediaBuffer(picked.fullPath);
         const { item } = await uploadFile({ data, fileName: name, toUserId: companion.wechat_user_id, ctx });
+        if (recallSuperseded()) {
+          if (!sentAnySegment) return { status: 'superseded', deliveredText: '' };
+          partial = true;
+          break delivery;
+        }
         const ok = await sendMessageItem(ctx, companion.wechat_user_id, item, null, { _allowQueue: false });
         if (!ok) { partial = true; continue; }
         sentAnySegment = true;

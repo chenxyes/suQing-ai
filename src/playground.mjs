@@ -14,7 +14,7 @@ import { usesGroundedReplies, generateGroundedReply } from './reply_pipeline.mjs
  * Copyright (c) 2026 溪语 AI Contributors. MIT License.
  */
 
-import { reviewPressureTail } from './pressure_tail.mjs';
+import { availabilityWindowForReply, preserveAvailabilityWindow, reviewPressureTail } from './pressure_tail.mjs';
 import { log } from './logger.mjs';
 import { generateReply, embedTextWithDescriptor } from './ai.mjs';
 import { isChatFallback } from './chat_response.mjs';
@@ -46,7 +46,7 @@ import { getArcExpressionContext, runArcSignalTick } from './relationship_arc_ru
 import { detectTeaching, buildShapingPromptHint } from './shaping.mjs';
 import { applyCrisisOverride, userRaisedMemoryTopic } from './relationship_arc.mjs';
 import { detectCrisisLevel, buildCrisisReply, scrubConflictRedline } from './moderation.mjs';
-import { extractOpenLoops, detectAndResolveOpenLoops } from './open_loops.mjs';
+import { updateEventsFromTurn } from './event_memory.mjs';
 
 /**
  * @param {object} companion 由调用方查好的 companion 行
@@ -129,8 +129,9 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
   const crisisLevel = detectCrisisLevel(text, recentTurns.filter(t => t.role === 'user').slice(-3).map(t => t.content || ''));
   const behaviorSafety = crisisLevel !== 'none' ? crisisLevel : userMsgSafetyLevel;
   const grounded = usesGroundedReplies(companion, behaviorSafety);
+  const availability = companion.no_pressure && behaviorSafety === 'none' && availabilityWindowForReply(text);
+  let queryEmbedding = null;
   if (companion.memory_enabled) {
-    let queryEmbedding = null;
     try { queryEmbedding = await embedTextWithDescriptor(text); }
     catch (e) { log('warn', '[Memory] query embedding unavailable'); }
     memories = recallMemoriesHybrid(companion.id, companion.user_id, text, { queryEmbedding, limit: 7, evidenceOnly: grounded });
@@ -203,6 +204,7 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
       memories, userProfile, recentTurns, longTermDigest,
       promptMode: 'reply', dailySchedule, recentSchedules, personaFacts, preferences, behaviorPlan,
     }) + stickerHint + emotionHint;
+    if (availability) systemPrompt += '\n他给了大致有空的时段，接话时保留这个范围，等他确认具体时间。';
 
     // 关系刚升级
     if (celebration) {
@@ -251,6 +253,7 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
   reply = scrubPhotoImpersonation(reply, companion.id);   // #281：playground 无照片链路，同罩
 
   reply = await reviewPressureTail(reply, { enabled: !grounded && companion.no_pressure, userText: text, safetyLevel: userMsgSafetyLevel });
+  reply = preserveAvailabilityWindow(reply, availability);
 
   if (acceptConfession) {
     try {
@@ -284,6 +287,7 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
     try {
       const userTurn = saveConversationTurn(companion.id, 'user', text, companion.chat_mode_active);
       const assistantTurn = saveConversationTurn(companion.id, 'assistant', reply, companion.chat_mode_active);
+      if (companion.memory_enabled && userTurn) updateEventsFromTurn(companion, userTurn.id, { queryEmbedding });
       memoryTurnIds.push(...[userTurn?.id,assistantTurn?.id].filter(Boolean));
       if (behaviorPlan) recordBehaviorDelivery({ companionId: companion.id, turnKey: randomUUID(), inputStartedAt, plan: behaviorPlan,
         userText: text, deliveredText: reply, channel: 'web' });
@@ -291,20 +295,13 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
       log('warn', `[Playground] saveConversationTurn 失败: ${e.message}`);
     }
 
-    // v1.8.0 #4: open loops —— 启发式 resolve 立即跑（不调 LLM，快）
-    try { detectAndResolveOpenLoops(companion.id, text); }
-    catch (e) { log('warn', `[Playground] resolve loop: ${e.message}`); }
-
-    // 后处理（异步，不阻塞响应）：好感度 + 心情 + 记忆提取 + open loops 抽取
+    // 后处理（异步，不阻塞响应）：好感度、心情和记忆提取
     (async () => {
       try {
         syncUpdateCompanionState(companion, text, reply);
         if (companion.memory_enabled) {
           await extractAndSaveMemories(companion.id, companion.user_id, text, reply, { turnIds: memoryTurnIds });
           await extractAndUpdateUserProfile(companion.id, companion.user_id, text, { turnIds: memoryTurnIds });
-          extractOpenLoops(companion.id, text, reply).catch(err =>
-            log('warn', `[Playground] extract loop: ${err.message}`)
-          );
         }
       } catch (e) {
         log('warn', `[Playground] postProcess 失败: ${e.message}`);

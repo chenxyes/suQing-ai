@@ -10,6 +10,8 @@
  * Copyright (c) 2026 溪语 AI Contributors. MIT License.
  */
 
+const directQuestionPact = '关心我时直接问，问完就停。句尾省去“别……”的叮嘱，也别预设我已经做错了什么。';
+
 // 明显不是"称呼"的词，避免 "叫我去/叫我走" 误判
 const NICK_STOP = ['一下', '他', '她', '它', '你', '我', '人', '的', '了', '吗', '点', '别', '去', '来', '滚', '走', '走开', '闭嘴', '过来', '起来', '出去'];
 // "叫我X"里 X 以动词开头多半不是称呼（叫我去开会 / 叫我等一下）
@@ -21,9 +23,28 @@ const VERB_HEAD = ['去', '来', '滚', '走', '帮', '陪', '看', '听', '想'
  */
 export function detectTeaching(text = '') {
   const t = String(text || '').trim();
+  // 成对示例可以跨行。只保存正例，也避免把反例里的称呼、约定当成指令。
+  if (/(?:坏|好)例子\s*[:：]/u.test(t)) {
+    if (t.length > 1200) return [];
+    const lines = t.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+    if (/^(?:嗯+|好的?|明白了)[，。！!]?$/u.test(lines[0])) lines.shift();
+    if (!lines.length || lines.length % 2 !== 0) return [];
+    const examples = [];
+    for (let i = 0; i < lines.length; i += 2) {
+      const good = lines[i + 1].match(/^好例子\s*[:：]\s*(.+)$/u);
+      if (!/^坏例子\s*[:：]\s*\S/u.test(lines[i]) || !good) return [];
+      examples.push(good[1]);
+    }
+    const content = `照这些正例的语气说，内容随当下情境调整：${examples.join(' / ')}`;
+    return content.length <= 120 ? [{ kind: 'style', content }] : [];
+  }
   if (!t || t.length > 60) return [];   // 太长多半是叙述
   const out = [];
   let m;
+
+  if (/^(?:以后)?(?:不允许|不要|别)(?:再|在)?(?:每句(?:话)?|任何(?:一句)?话|句子|问句)(?:的)?(?:后面|末尾|结尾)(?:再)?(?:加|跟|接|补|带)(?:上|一句)?\s*[“「"‘']?别(?:[.。…xX×]|[”」"'’]|$)/u.test(t)) {
+    out.push({ kind: 'pact', content: directQuestionPact });
+  }
 
   // 称呼：叫我X / 喊我X（排除动词开头如"叫我去开会"；称呼限 1-4 字）
   if ((m = t.match(/(?:以后)?(?:叫我|喊我|叫人家)\s*([^\s，。,.!！?？、]{1,4})/))
@@ -90,8 +111,10 @@ export function buildShapingPromptHint(shapingList = [], { expressionOnly = fals
   if (!Array.isArray(shapingList) || !shapingList.length) return '';
   const byKind = {};
   for (const s of shapingList) {
-    if (expressionOnly && !['nickname', 'style', 'taboo', 'lexicon'].includes(s.kind)) continue;
-    (byKind[s.kind] ||= []).push(s.content);
+    // This specific expression pact can coexist with the user's most recent style setting.
+    const kind = s.kind === 'pact' && s.content === directQuestionPact ? 'style' : s.kind;
+    if (expressionOnly && !['nickname', 'style', 'taboo', 'lexicon'].includes(kind)) continue;
+    (byKind[kind] ||= []).push(s.content);
   }
   const parts = [];
   if (byKind.nickname?.length) parts.push(`- 称呼他：「${byKind.nickname[0]}」（他亲自定的，别用别的）`);

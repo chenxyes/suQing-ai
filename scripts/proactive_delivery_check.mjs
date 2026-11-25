@@ -15,7 +15,8 @@ const sender = source.slice(source.indexOf('async function sendProactiveMessage(
 process.env.BEHAVIOR_ENABLED = 'true';
 const realPlan = resolveBehaviorPlan(prepareBehaviorContext({ companion: { id: 1, proactive_enabled: 1 }, userText: '我今天很难受，10分钟后再问我', channel: 'wechat' }));
 assert.ok(realPlan?.sourceId);
-for (const scenario of ['missing_binding', 'expired_context', 'first_failed', 'partial', 'sent', 'empty', 'cancelled', 'sleeping', 'history_error', 'late_cancel', 'behavior_sent', 'behavior_retry', 'review_failed', 'safety', 'source_removed']) {
+for (const scenario of ['recall_obsolete', 'recall_partial', 'missing_binding', 'expired_context', 'first_failed', 'partial', 'sent', 'empty', 'cancelled', 'sleeping', 'history_error', 'late_cancel', 'behavior_sent', 'behavior_retry', 'review_failed', 'safety', 'source_removed']) {
+  const recallCase = scenario.startsWith('recall_');
   const collisionRetry = scenario === 'behavior_retry';
   const behaviorCase = ['cancelled', 'sleeping', 'late_cancel', 'behavior_sent', 'behavior_retry', 'review_failed', 'safety', 'source_removed'].includes(scenario);
   const calls = { generated: 0, transformed: [], sent: 0, history: 0, accounted: 0, turns: [] };
@@ -23,6 +24,12 @@ for (const scenario of ['missing_binding', 'expired_context', 'first_failed', 'p
   const recentText = '刚看完一本很有意思的书';
   const context = {
     reviewPressureTail, usesGroundedReplies,
+    recallMemories: () => [], listDueOpenLoops: () => [{ id: 9, title: '周末去公园' }], loopMaterialId: id => 'loop:' + id,
+    checkFollowup: async () => 42,
+    followupStillCurrent: (cid, id, turn) => {
+      assert.deepEqual([cid, id, turn], [1, 9, 42]);
+      return scenario === 'recall_partial' && calls.sent === 0;
+    },
     generateGroundedReply: opts => realGroundedReply({ ...opts, events: [] }, {
       generate: (...args) => context.generateReply(...args),
       review: async ({ draft }) => scenario === 'review_failed' ? { reply: CHAT_FALLBACK, status: 'fallback', reasons: ['invalid_review'] } : { reply: draft, status: 'kept', reasons: [] },
@@ -67,12 +74,14 @@ for (const scenario of ['missing_binding', 'expired_context', 'first_failed', 'p
     tryAchievement() {}, classifyIntent: () => 'other', topicKey: () => '', recentIntentEvents: () => [], trailingAckStreak: () => 0, isIntentCooled: () => ({cooled:false}), extractMaterialRefs: () => [],
   };
   const run = vm.runInNewContext(`${guarded}\n${sender}\nsendProactiveMessageGuarded`, context);
-  const result = await run({ id: 1, user_id: 1, wechat_user_id: scenario === 'missing_binding' ? null : 'fixture', bot_id: 'fixture', safe_mode: behaviorCase ? 0 : 1 },
-    behaviorCase ? 'behavior_followup' : 'reminder', { bot_token: 'fixture', bot_id: 'fixture' }, behaviorCase ? { behaviorTask: { id: 1, context_text: '工作受挫', original_text: '我在听', plan_json: JSON.stringify(realPlan) } } : {});
+  const result = await run({ id: 1, user_id: 1, memory_enabled: recallCase, wechat_user_id: scenario === 'missing_binding' ? null : 'fixture', bot_id: 'fixture', safe_mode: behaviorCase ? 0 : 1 },
+    behaviorCase ? 'behavior_followup' : recallCase ? 'normal' : 'reminder', { bot_token: 'fixture', bot_id: 'fixture' }, behaviorCase ? { behaviorTask: { id: 1, context_text: '工作受挫', original_text: '我在听', plan_json: JSON.stringify(realPlan) } } : {});
   const status = result?.status || result;
-  if (['sent', 'partial', 'history_error', 'behavior_sent', 'behavior_retry'].includes(scenario)) {
-    assert.equal(status, scenario === 'partial' ? 'partial' : 'sent', scenario + ' reports actual delivery');
-    assert.equal(calls.turns[0], scenario === 'partial' ? '现在好些了吗' : '现在好些了吗 || 我在这里', 'history includes only delivered segments');
+  if (scenario === 'recall_obsolete') { assert.equal(status, 'superseded'); assert.equal(calls.sent, 0); }
+  if (scenario === 'recall_partial') assert.equal(calls.sent, 1);
+  if (['sent', 'partial', 'recall_partial', 'history_error', 'behavior_sent', 'behavior_retry'].includes(scenario)) {
+    assert.equal(status, ['partial', 'recall_partial'].includes(scenario) ? 'partial' : 'sent', scenario + ' reports actual delivery');
+    assert.equal(calls.turns[0], ['partial', 'recall_partial'].includes(scenario) ? '现在好些了吗' : '现在好些了吗 || 我在这里', 'history includes only delivered segments');
     if (collisionRetry) assert.equal(calls.generated, 2, 'a collision retries the same authorized topic');
     assert.ok(calls.accounted > 0);
   } else {
