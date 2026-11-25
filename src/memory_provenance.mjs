@@ -45,3 +45,33 @@ export function isRelatedExplicitCorrection(previous, evidence) {
   const a=topic(old); const b=topic(evidence.map(e=>e.quote).join(''));
   return a.length>=2 && b.includes(a);
 }
+
+export function readStoredMemoryEvidence(row) {
+  if (!MEMORY_SUBJECTS.has(row.memory_subject)) return null;
+  let evidence = row.memory_evidence;
+  if (typeof evidence === 'string') {
+    if (evidence.length > 5000) return null;
+    try { evidence = JSON.parse(evidence); } catch { return null; }
+  }
+  if (!Array.isArray(evidence) || evidence.length < 1 || evidence.length > 6) return null;
+  const result = [];
+  for (const item of evidence) {
+    if (!item || !Number.isSafeInteger(item.turn_id) || item.turn_id <= 0
+        || !['user', 'assistant'].includes(item.role) || typeof item.quote !== 'string'
+        || item.quote.trim().length < 3 || item.quote.length > 500) return null;
+    if ((row.memory_subject === 'user' && item.role !== 'user')
+        || (row.memory_subject === 'companion' && item.role !== 'assistant')) return null;
+    result.push({ turn_id: item.turn_id, role: item.role, quote: item.quote.trim() });
+  }
+  // Stored evidence was checked against the original source at admission. Reuse
+  // its assertion rules here so corrupted/legacy metadata cannot turn a quoted
+  // or hypothetical statement into a fact. This is not a new source lookup.
+  const turns = new Map();
+  for (const item of result) {
+    const existing = turns.get(item.turn_id);
+    if (existing && existing.role !== item.role) return null;
+    if (existing) existing.content += `；${item.quote}`;
+    else turns.set(item.turn_id, { id: item.turn_id, role: item.role, content: item.quote });
+  }
+  return validateMemoryEvidence({ subject: row.memory_subject, evidence: result, turns: [...turns.values()] })?.evidence || null;
+}

@@ -133,7 +133,7 @@ export function buildFirstTurnHint(companion) {
 }
 
 // ─── 主函数 ───────────────────────────────────────────────────────────────────
-export function buildSystemPrompt(companion, { memories = [], userProfile = null, recentTurns = [], longTermDigest = null, promptMode = 'reply', dailySchedule = null, recentSchedules = null, personaFacts = null, preferences = null, shapingHint = '', worksHint = '', openLoopsHint = '', locale = null } = {}) {
+export function buildSystemPrompt(companion, { memories = [], userProfile = null, recentTurns = [], longTermDigest = null, promptMode = 'reply', dailySchedule = null, recentSchedules = null, personaFacts = null, preferences = null, shapingHint = '', worksHint = '', openLoopsHint = '', locale = null, behaviorPlan = null } = {}) {
   memories = memories.filter(isMemoryRecallable);
   const c     = companion;
   const parts = [];
@@ -276,10 +276,10 @@ export function buildSystemPrompt(companion, { memories = [], userProfile = null
 
   // ── 9. 互动原则 ──────────────────────────────────────────────────────────────
   const rules = [];
-  if (c.can_joke)           rules.push('可以和对方开玩笑、斗嘴，不必总是正经');
+  if (!behaviorPlan && c.can_joke) rules.push('可以和对方开玩笑、斗嘴，不必总是正经');
   if (c.avoid_cheesy)       rules.push('不说过于肉麻的话，保持自然真实');
   if (c.no_pressure)        rules.push('不催促对方，不给对方压力');
-  if (c.occasional_tantrum) rules.push('偶尔可以有点小脾气或小委屈，真实表达情绪，但不过分');
+  if (!behaviorPlan && c.occasional_tantrum) rules.push('偶尔可以有点小脾气或小委屈，真实表达情绪，但不过分');
   if (c.encouraging)        rules.push('多给对方鼓励和支持，让他感到被理解');
   if (rules.length > 0)     parts.push(`\n【互动原则】${rules.join('；')}。`);
 
@@ -287,7 +287,7 @@ export function buildSystemPrompt(companion, { memories = [], userProfile = null
 
   // v1.7.0 块 B: 你也会逗他 —— 不是只被调侃
   // 依赖 can_joke=true 且 stage 不是陌生人（陌生人阶段太早，逗会显得唐突）
-  if (c.can_joke && stage !== '陌生人') {
+  if (!behaviorPlan && c.can_joke && stage !== '陌生人') {
     parts.push('【熟人之间的玩笑】可以顺着具体话题轻轻调侃或自嘲，不按频率凑玩笑。只用有依据的共同话题，不编造他做过的事；他不舒服时就收住，认真回应。分寸遵循当前关系阶段。');
   }
 

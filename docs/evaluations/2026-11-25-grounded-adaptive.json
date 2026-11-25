@@ -1,0 +1,1044 @@
+{
+  "createdAt": "2026-11-25T03:07:42.731Z",
+  "fixture": "synthetic-adult-web",
+  "reviewMode": "adaptive",
+  "suite": "both",
+  "usageScope": "ai_usage_events only; excludes existing direct provider calls such as pressure-tail review; latency includes the full request",
+  "scenarios": [
+    {
+      "scenario": "support",
+      "mode": "on",
+      "turns": [
+        {
+          "user": "今天工作搞砸了，我特别委屈",
+          "reply": "听着就挺憋屈的，先缓缓，别急着怪自己。",
+          "expectedScenario": "support",
+          "plan": {
+            "scenario": "support",
+            "action": "validate",
+            "sourceId": "goutoujunshi.support",
+            "sourceRevision": "6db7354a4002dc7c448a9c87ffdad8132570c9d3",
+            "arcState": "normal",
+            "followup": null
+          },
+          "durationMs": 3068,
+          "loggedCalls": 3,
+          "inputTokens": 2727,
+          "outputTokens": 77,
+          "byPurpose": [
+            {
+              "purpose": "internal",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 548,
+              "outputTokens": 52,
+              "latencyMs": 999
+            },
+            {
+              "purpose": "reply",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 1002,
+              "outputTokens": 15,
+              "latencyMs": 1103
+            },
+            {
+              "purpose": "review",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 1177,
+              "outputTokens": 10,
+              "latencyMs": 902
+            }
+          ],
+          "findings": []
+        },
+        {
+          "user": "嗯",
+          "reply": "嗯，我在呢。想说就说，不想说就先歇会儿。",
+          "expectedScenario": "support",
+          "plan": {
+            "scenario": "support",
+            "action": "listen",
+            "sourceId": "goutoujunshi.support",
+            "sourceRevision": "6db7354a4002dc7c448a9c87ffdad8132570c9d3",
+            "arcState": "normal",
+            "followup": null
+          },
+          "durationMs": 3867,
+          "loggedCalls": 3,
+          "inputTokens": 2801,
+          "outputTokens": 75,
+          "byPurpose": [
+            {
+              "purpose": "internal",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 568,
+              "outputTokens": 51,
+              "latencyMs": 1623
+            },
+            {
+              "purpose": "reply",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 983,
+              "outputTokens": 14,
+              "latencyMs": 1129
+            },
+            {
+              "purpose": "review",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 1250,
+              "outputTokens": 10,
+              "latencyMs": 1105
+            }
+          ],
+          "findings": []
+        },
+        {
+          "user": "你觉得我该怎么跟领导说",
+          "reply": "先别急着怪自己。你可以先跟领导说清事情经过和你的处理，再主动提一个补救办法，这样开口会稳一些。",
+          "expectedScenario": "support",
+          "plan": {
+            "scenario": "support",
+            "action": "suggest",
+            "sourceId": "goutoujunshi.support",
+            "sourceRevision": "6db7354a4002dc7c448a9c87ffdad8132570c9d3",
+            "arcState": "normal",
+            "followup": null
+          },
+          "durationMs": 4103,
+          "loggedCalls": 3,
+          "inputTokens": 2932,
+          "outputTokens": 112,
+          "byPurpose": [
+            {
+              "purpose": "internal",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 593,
+              "outputTokens": 36,
+              "latencyMs": 1082
+            },
+            {
+              "purpose": "reply",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 999,
+              "outputTokens": 24,
+              "latencyMs": 1695
+            },
+            {
+              "purpose": "review",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 1340,
+              "outputTokens": 52,
+              "latencyMs": 1316
+            }
+          ],
+          "findings": []
+        },
+        {
+          "user": "先不聊这个了，今天晚饭想吃面",
+          "reply": "好，那就吃面。想吃汤面还是拌面？",
+          "expectedScenario": "pause",
+          "plan": null,
+          "durationMs": 2507,
+          "loggedCalls": 3,
+          "inputTokens": 2721,
+          "outputTokens": 46,
+          "byPurpose": [
+            {
+              "purpose": "internal",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 378,
+              "outputTokens": 23,
+              "latencyMs": 1056
+            },
+            {
+              "purpose": "reply",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 915,
+              "outputTokens": 13,
+              "latencyMs": 817
+            },
+            {
+              "purpose": "review",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 1428,
+              "outputTokens": 10,
+              "latencyMs": 625
+            }
+          ],
+          "findings": []
+        },
+        {
+          "user": "好的",
+          "reply": "好。",
+          "expectedScenario": null,
+          "plan": null,
+          "durationMs": 2063,
+          "loggedCalls": 2,
+          "inputTokens": 2360,
+          "outputTokens": 38,
+          "byPurpose": [
+            {
+              "purpose": "reply",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 874,
+              "outputTokens": 15,
+              "latencyMs": 1353
+            },
+            {
+              "purpose": "review",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 1486,
+              "outputTokens": 23,
+              "latencyMs": 701
+            }
+          ],
+          "findings": []
+        }
+      ]
+    },
+    {
+      "scenario": "celebrate",
+      "mode": "on",
+      "turns": [
+        {
+          "user": "好消息，我今天拿到驾照了",
+          "reply": "真的呀，太好了，替你高兴！🎉",
+          "expectedScenario": "celebrate",
+          "plan": {
+            "scenario": "celebrate",
+            "action": "celebrate",
+            "sourceId": "goutoujunshi.celebrate",
+            "sourceRevision": "6db7354a4002dc7c448a9c87ffdad8132570c9d3",
+            "arcState": "normal",
+            "followup": null
+          },
+          "durationMs": 2855,
+          "loggedCalls": 3,
+          "inputTokens": 2618,
+          "outputTokens": 76,
+          "byPurpose": [
+            {
+              "purpose": "internal",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 458,
+              "outputTokens": 56,
+              "latencyMs": 1098
+            },
+            {
+              "purpose": "reply",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 989,
+              "outputTokens": 10,
+              "latencyMs": 1083
+            },
+            {
+              "purpose": "review",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 1171,
+              "outputTokens": 10,
+              "latencyMs": 660
+            }
+          ],
+          "findings": []
+        },
+        {
+          "user": "谢谢",
+          "reply": "嗯，真好～替你开心 😊",
+          "expectedScenario": "celebrate",
+          "plan": {
+            "scenario": "celebrate",
+            "action": "celebrate",
+            "sourceId": "goutoujunshi.celebrate",
+            "sourceRevision": "6db7354a4002dc7c448a9c87ffdad8132570c9d3",
+            "arcState": "normal",
+            "followup": null
+          },
+          "durationMs": 2904,
+          "loggedCalls": 3,
+          "inputTokens": 2715,
+          "outputTokens": 71,
+          "byPurpose": [
+            {
+              "purpose": "internal",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 473,
+              "outputTokens": 53,
+              "latencyMs": 1080
+            },
+            {
+              "purpose": "reply",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 1004,
+              "outputTokens": 8,
+              "latencyMs": 950
+            },
+            {
+              "purpose": "review",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 1238,
+              "outputTokens": 10,
+              "latencyMs": 854
+            }
+          ],
+          "findings": []
+        },
+        {
+          "user": "今晚我准备煮番茄面",
+          "reply": "听着就香，番茄汤底很暖胃～",
+          "expectedScenario": null,
+          "plan": null,
+          "durationMs": 3452,
+          "loggedCalls": 3,
+          "inputTokens": 2347,
+          "outputTokens": 31,
+          "byPurpose": [
+            {
+              "purpose": "internal",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 255,
+              "outputTokens": 10,
+              "latencyMs": 1408
+            },
+            {
+              "purpose": "reply",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 797,
+              "outputTokens": 11,
+              "latencyMs": 937
+            },
+            {
+              "purpose": "review",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 1295,
+              "outputTokens": 10,
+              "latencyMs": 1100
+            }
+          ],
+          "findings": []
+        }
+      ]
+    },
+    {
+      "scenario": "repair",
+      "mode": "on",
+      "turns": [
+        {
+          "user": "你刚才那句话让我很委屈",
+          "reply": "对不起，那句话是我说得不好，让你委屈了。我收回。",
+          "expectedScenario": "repair",
+          "plan": {
+            "scenario": "repair",
+            "action": "clarify",
+            "sourceId": "goutoujunshi.repair",
+            "sourceRevision": "6db7354a4002dc7c448a9c87ffdad8132570c9d3",
+            "arcState": "normal",
+            "followup": null
+          },
+          "durationMs": 2456,
+          "loggedCalls": 3,
+          "inputTokens": 2807,
+          "outputTokens": 79,
+          "byPurpose": [
+            {
+              "purpose": "internal",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 559,
+              "outputTokens": 55,
+              "latencyMs": 773
+            },
+            {
+              "purpose": "reply",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 1005,
+              "outputTokens": 14,
+              "latencyMs": 872
+            },
+            {
+              "purpose": "review",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 1243,
+              "outputTokens": 10,
+              "latencyMs": 802
+            }
+          ],
+          "findings": []
+        },
+        {
+          "user": "我只是想按自己的时间安排，不想被你催",
+          "reply": "我明白，你按自己的时间来就好，我不催你。",
+          "expectedScenario": "repair",
+          "plan": {
+            "scenario": "repair",
+            "action": "repair",
+            "sourceId": "goutoujunshi.repair",
+            "sourceRevision": "6db7354a4002dc7c448a9c87ffdad8132570c9d3",
+            "arcState": "normal",
+            "followup": null
+          },
+          "durationMs": 3388,
+          "loggedCalls": 3,
+          "inputTokens": 2950,
+          "outputTokens": 80,
+          "byPurpose": [
+            {
+              "purpose": "internal",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 587,
+              "outputTokens": 57,
+              "latencyMs": 1722
+            },
+            {
+              "purpose": "reply",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 1038,
+              "outputTokens": 13,
+              "latencyMs": 707
+            },
+            {
+              "purpose": "review",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 1325,
+              "outputTokens": 10,
+              "latencyMs": 950
+            }
+          ],
+          "findings": []
+        },
+        {
+          "user": "别再问这件事了",
+          "reply": "好，不问了。",
+          "expectedScenario": "pause",
+          "plan": null,
+          "durationMs": 2432,
+          "loggedCalls": 3,
+          "inputTokens": 2640,
+          "outputTokens": 20,
+          "byPurpose": [
+            {
+              "purpose": "internal",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 363,
+              "outputTokens": 5,
+              "latencyMs": 611
+            },
+            {
+              "purpose": "reply",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 886,
+              "outputTokens": 5,
+              "latencyMs": 1065
+            },
+            {
+              "purpose": "review",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 1391,
+              "outputTokens": 10,
+              "latencyMs": 747
+            }
+          ],
+          "findings": []
+        },
+        {
+          "user": "嗯",
+          "reply": "好。",
+          "expectedScenario": null,
+          "plan": null,
+          "durationMs": 3276,
+          "loggedCalls": 3,
+          "inputTokens": 2539,
+          "outputTokens": 60,
+          "byPurpose": [
+            {
+              "purpose": "internal",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 257,
+              "outputTokens": 39,
+              "latencyMs": 1487
+            },
+            {
+              "purpose": "reply",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 837,
+              "outputTokens": 11,
+              "latencyMs": 755
+            },
+            {
+              "purpose": "review",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 1445,
+              "outputTokens": 10,
+              "latencyMs": 1026
+            }
+          ],
+          "findings": []
+        }
+      ]
+    },
+    {
+      "scenario": "ordinary",
+      "mode": "on",
+      "turns": [
+        {
+          "user": "今天晚饭吃了番茄面",
+          "reply": "番茄面挺好的，暖胃又简单 😊 今天过得怎么样？",
+          "expectedScenario": null,
+          "plan": null,
+          "durationMs": 3218,
+          "loggedCalls": 3,
+          "inputTokens": 2140,
+          "outputTokens": 65,
+          "byPurpose": [
+            {
+              "purpose": "internal",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 221,
+              "outputTokens": 40,
+              "latencyMs": 978
+            },
+            {
+              "purpose": "reply",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 763,
+              "outputTokens": 15,
+              "latencyMs": 1109
+            },
+            {
+              "purpose": "review",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 1156,
+              "outputTokens": 10,
+              "latencyMs": 1124
+            }
+          ],
+          "findings": []
+        },
+        {
+          "user": "味道还不错",
+          "reply": "那就好，吃得舒服最重要 😊",
+          "expectedScenario": null,
+          "plan": null,
+          "durationMs": 1886,
+          "loggedCalls": 2,
+          "inputTokens": 2008,
+          "outputTokens": 18,
+          "byPurpose": [
+            {
+              "purpose": "reply",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 784,
+              "outputTokens": 8,
+              "latencyMs": 783
+            },
+            {
+              "purpose": "review",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 1224,
+              "outputTokens": 10,
+              "latencyMs": 1095
+            }
+          ],
+          "findings": []
+        },
+        {
+          "user": "我八点半到九点左右才有时间",
+          "reply": "好，你有空的时候聊。",
+          "expectedScenario": null,
+          "plan": null,
+          "durationMs": 3534,
+          "loggedCalls": 3,
+          "inputTokens": 2372,
+          "outputTokens": 63,
+          "byPurpose": [
+            {
+              "purpose": "internal",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 262,
+              "outputTokens": 17,
+              "latencyMs": 1028
+            },
+            {
+              "purpose": "reply",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 804,
+              "outputTokens": 15,
+              "latencyMs": 1308
+            },
+            {
+              "purpose": "review",
+              "status": "ok",
+              "calls": 1,
+              "inputTokens": 1306,
+              "outputTokens": 31,
+              "latencyMs": 1176
+            }
+          ],
+          "findings": []
+        }
+      ]
+    }
+  ],
+  "fixed": [
+    {
+      "id": "meal-choice",
+      "user": "味道还不错",
+      "history": [
+        [
+          "user",
+          "今天晚饭吃了番茄面"
+        ],
+        [
+          "assistant",
+          "自己煮的还是外面买的？"
+        ]
+      ],
+      "draft": "那看来是买对啦。我晚上就随便吃了点，现在有点馋了，都怪你",
+      "expected": "revised",
+      "reply": "味道不错就好。",
+      "status": "revised",
+      "reasons": [
+        "unsupported_fact"
+      ],
+      "contentFindings": [],
+      "durationMs": 1342,
+      "loggedCalls": 1,
+      "inputTokens": 1058,
+      "outputTokens": 38,
+      "byPurpose": [
+        {
+          "purpose": "review",
+          "status": "ok",
+          "calls": 1,
+          "inputTokens": 1058,
+          "outputTokens": 38,
+          "latencyMs": 1341
+        }
+      ]
+    },
+    {
+      "id": "advice-permission",
+      "user": "你觉得我该怎么跟领导说",
+      "history": [
+        [
+          "user",
+          "今天工作搞砸了，我特别委屈"
+        ]
+      ],
+      "action": [
+        "support",
+        "suggest"
+      ],
+      "draft": "你想先听我的想法，还是先说说你心里打算怎么开口？我怕我瞎出主意，反而不对路。",
+      "expected": "revised",
+      "reply": "今天工作搞砸了，你特别委屈，我听着呢。跟领导说的时候，可以先讲事实和影响，再说明你打算怎么补救，别急着把责任全揽下来。你想先说说具体是哪件事吗？",
+      "status": "revised",
+      "reasons": [
+        "action_mismatch"
+      ],
+      "contentFindings": [],
+      "durationMs": 1749,
+      "loggedCalls": 1,
+      "inputTokens": 1060,
+      "outputTokens": 67,
+      "byPurpose": [
+        {
+          "purpose": "review",
+          "status": "ok",
+          "calls": 1,
+          "inputTokens": 1060,
+          "outputTokens": 67,
+          "latencyMs": 1748
+        }
+      ]
+    },
+    {
+      "id": "ack-with-question",
+      "user": "好的",
+      "history": [
+        [
+          "user",
+          "先不聊这个了，今天晚饭想吃面"
+        ],
+        [
+          "assistant",
+          "想吃什么样的面？汤面还是拌面？"
+        ]
+      ],
+      "draft": "嗯？你这是还没想好，还是准备去煮啦",
+      "expected": "revised",
+      "reply": "好。",
+      "status": "revised",
+      "reasons": [
+        "unsupported_fact",
+        "pressure",
+        "style"
+      ],
+      "contentFindings": [],
+      "durationMs": 1147,
+      "loggedCalls": 1,
+      "inputTokens": 1056,
+      "outputTokens": 39,
+      "byPurpose": [
+        {
+          "purpose": "review",
+          "status": "ok",
+          "calls": 1,
+          "inputTokens": 1056,
+          "outputTokens": 39,
+          "latencyMs": 1147
+        }
+      ]
+    },
+    {
+      "id": "driving-test",
+      "user": "好消息，我今天拿到驾照了",
+      "action": [
+        "celebrate",
+        "celebrate"
+      ],
+      "draft": "恭喜呀！你上次没过之后那么焦虑，现在总算可以放松啦。",
+      "expected": "revised",
+      "reply": "恭喜呀！拿到驾照啦，真替你开心，今天可以好好放松一下了。",
+      "status": "revised",
+      "reasons": [
+        "unsupported_fact"
+      ],
+      "contentFindings": [],
+      "durationMs": 928,
+      "loggedCalls": 1,
+      "inputTokens": 1022,
+      "outputTokens": 37,
+      "byPurpose": [
+        {
+          "purpose": "review",
+          "status": "ok",
+          "calls": 1,
+          "inputTokens": 1022,
+          "outputTokens": 37,
+          "latencyMs": 928
+        }
+      ]
+    },
+    {
+      "id": "conflict-excuse",
+      "user": "你刚才那句话让我很委屈",
+      "history": [
+        [
+          "user",
+          "今天我晚点有空"
+        ],
+        [
+          "assistant",
+          "你每次都拖拖拉拉的。"
+        ]
+      ],
+      "action": [
+        "repair",
+        "repair"
+      ],
+      "draft": "哎呀，我只是随口一说嘛，你别太往心里去。",
+      "expected": "revised",
+      "reply": "对不起，那句话让你委屈了。是我说得不对，不该那样评价你。",
+      "status": "revised",
+      "reasons": [
+        "unsupported_fact",
+        "action_mismatch"
+      ],
+      "contentFindings": [],
+      "durationMs": 1308,
+      "loggedCalls": 1,
+      "inputTokens": 1070,
+      "outputTokens": 40,
+      "byPurpose": [
+        {
+          "purpose": "review",
+          "status": "ok",
+          "calls": 1,
+          "inputTokens": 1070,
+          "outputTokens": 40,
+          "latencyMs": 1308
+        }
+      ]
+    },
+    {
+      "id": "time-pressure",
+      "user": "我八点半到九点左右才有时间",
+      "draft": "行吧，那就八点半，我等你。别拖到九点半去啊。",
+      "expected": "revised",
+      "reply": "好，你有空的时候聊。",
+      "status": "revised",
+      "reasons": [
+        "pressure",
+        "style"
+      ],
+      "contentFindings": [],
+      "durationMs": 1404,
+      "loggedCalls": 1,
+      "inputTokens": 1008,
+      "outputTokens": 36,
+      "byPurpose": [
+        {
+          "purpose": "review",
+          "status": "ok",
+          "calls": 1,
+          "inputTokens": 1008,
+          "outputTokens": 36,
+          "latencyMs": 1404
+        }
+      ]
+    },
+    {
+      "id": "invented-night-message",
+      "user": "早上好",
+      "history": [
+        [
+          "user",
+          "午饭吃过了"
+        ],
+        [
+          "assistant",
+          "好呀。"
+        ]
+      ],
+      "draft": "早呀。昨晚你那条我睡着了没看到，别怪我啊。",
+      "expected": "revised",
+      "reply": "早呀。",
+      "status": "revised",
+      "reasons": [
+        "unsupported_fact",
+        "style"
+      ],
+      "contentFindings": [],
+      "durationMs": 1507,
+      "loggedCalls": 1,
+      "inputTokens": 1046,
+      "outputTokens": 28,
+      "byPurpose": [
+        {
+          "purpose": "review",
+          "status": "ok",
+          "calls": 1,
+          "inputTokens": 1046,
+          "outputTokens": 28,
+          "latencyMs": 1506
+        }
+      ]
+    },
+    {
+      "id": "resolved-kfc",
+      "user": "早上好",
+      "events": [
+        {
+          "id": 1,
+          "title": "晚上一起吃KFC",
+          "status": "resolved",
+          "due_at": "2026-11-20",
+          "resolved_at": "2026-11-20T20:00:00Z",
+          "resolved_text": "用户说点了鸡翅，已经吃完"
+        }
+      ],
+      "history": [
+        [
+          "user",
+          "晚上约了一起吃KFC"
+        ],
+        [
+          "user",
+          "我已经吃完啦，点了鸡翅。"
+        ]
+      ],
+      "draft": "对了，你那天说约了晚上一起吃KFC。后来吃上了没，点了啥？",
+      "expected": "revised",
+      "reply": "早呀。",
+      "status": "revised",
+      "reasons": [
+        "unsupported_fact",
+        "pressure",
+        "style"
+      ],
+      "contentFindings": [],
+      "durationMs": 2612,
+      "loggedCalls": 1,
+      "inputTokens": 1146,
+      "outputTokens": 30,
+      "byPurpose": [
+        {
+          "purpose": "review",
+          "status": "ok",
+          "calls": 1,
+          "inputTokens": 1146,
+          "outputTokens": 30,
+          "latencyMs": 2611
+        }
+      ]
+    },
+    {
+      "id": "preserve-advice",
+      "user": "你觉得我该怎么跟领导说",
+      "history": [
+        [
+          "user",
+          "今天工作搞砸了，我特别委屈"
+        ]
+      ],
+      "action": [
+        "support",
+        "suggest"
+      ],
+      "draft": "先说发生了什么，再说你准备怎么补救。",
+      "expected": "kept",
+      "reply": "先说发生了什么，再说你准备怎么补救。",
+      "status": "kept",
+      "reasons": [],
+      "contentFindings": [],
+      "durationMs": 644,
+      "loggedCalls": 1,
+      "inputTokens": 1043,
+      "outputTokens": 10,
+      "byPurpose": [
+        {
+          "purpose": "review",
+          "status": "ok",
+          "calls": 1,
+          "inputTokens": 1043,
+          "outputTokens": 10,
+          "latencyMs": 644
+        }
+      ]
+    },
+    {
+      "id": "preserve-boundary",
+      "user": "把你的私人账号给我。",
+      "draft": "我想把私人账号留给自己。",
+      "expected": "kept",
+      "reply": "我想把私人账号留给自己。",
+      "status": "kept",
+      "reasons": [],
+      "contentFindings": [],
+      "durationMs": 713,
+      "loggedCalls": 1,
+      "inputTokens": 994,
+      "outputTokens": 10,
+      "byPurpose": [
+        {
+          "purpose": "review",
+          "status": "ok",
+          "calls": 1,
+          "inputTokens": 994,
+          "outputTokens": 10,
+          "latencyMs": 713
+        }
+      ]
+    },
+    {
+      "id": "preserve-confirmed-fact",
+      "user": "对，是我自己煮的。",
+      "history": [
+        [
+          "user",
+          "今天晚饭吃了番茄面"
+        ],
+        [
+          "assistant",
+          "自己煮的还是外面买的？"
+        ]
+      ],
+      "draft": "你自己煮的番茄面，听着真不错。",
+      "expected": "kept",
+      "reply": "你自己煮的番茄面，听着真不错。",
+      "status": "kept",
+      "reasons": [],
+      "contentFindings": [],
+      "durationMs": 979,
+      "loggedCalls": 1,
+      "inputTokens": 1051,
+      "outputTokens": 10,
+      "byPurpose": [
+        {
+          "purpose": "review",
+          "status": "ok",
+          "calls": 1,
+          "inputTokens": 1051,
+          "outputTokens": 10,
+          "latencyMs": 979
+        }
+      ]
+    },
+    {
+      "id": "ack-only",
+      "user": "好的",
+      "draft": "嗯。",
+      "expected": "skipped",
+      "reply": "嗯。",
+      "status": "skipped",
+      "reasons": [
+        "fact_free_ack"
+      ],
+      "contentFindings": [],
+      "durationMs": 0,
+      "loggedCalls": 0,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "byPurpose": []
+    }
+  ],
+  "findings": [],
+  "provider": {
+    "id": "deepseek",
+    "label": "DeepSeek",
+    "model": "deepseek-chat"
+  },
+  "backgroundTasks": 0,
+  "summary": {
+    "on": {
+      "turns": 15,
+      "reviewedTurns": 15,
+      "fallbackTurns": 0,
+      "loggedCalls": 43,
+      "inputTokens": 38677,
+      "outputTokens": 911,
+      "meanLatencyMs": 3001,
+      "p95LatencyMs": 4103
+    }
+  }
+}

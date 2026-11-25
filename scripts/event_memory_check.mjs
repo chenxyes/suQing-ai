@@ -11,7 +11,7 @@ globalThis.fetch = async () => {
   throw Error('unexpected network');
 };
 const m = await import('../src/db.mjs');
-const { updateEventsFromTurn, checkFollowup, followupStillCurrent } = await import('../src/event_memory.mjs');
+const { updateEventsFromTurn, checkFollowup, followupStillCurrent, listReplyEvents } = await import('../src/event_memory.mjs');
 const db = m.getDb();
 db.pragma('foreign_keys = OFF');
 const c = { id: 71, user_id: 51, memory_enabled: 1 };
@@ -109,6 +109,7 @@ try {
     const cancel = turn('那天公园就不去了');
     await updateEventsFromTurn(c, cancel.id, deps({ changes: [change(plan.id, 'cancelled', cancel)] }));
     assert.equal(get(plan.id).status, 'dismissed');
+    assert.ok(listReplyEvents(c.id).some(e => e.id === plan.id && e.status === 'dismissed'));
     assert.equal(get(plan.id).resolved_turn_id, cancel.id);
   });
   await check('有用户证据才可追问；新回复使已生成的追问失效', async () => {
@@ -144,6 +145,7 @@ try {
     };
     await updateEventsFromTurn(c, rev.id, options);
     assert.equal(m.getMemoryRecallBarrier(c.id, c.user_id).turn_id_cutoff, rev.id);
+    assert.deepEqual(listReplyEvents(c.id), []);
     assert.equal(get(next).status, 'open');
   });
 } finally {

@@ -102,7 +102,11 @@ async function load(file) {
     if (spec === './achievements.mjs') values.tryAchievement = () => {};
     if (spec === 'node:fs/promises') Object.assign(values, { mkdir: async () => {}, writeFile: async (...args) => files.push(args) });
     if (spec === 'node:path') values.default = path;
-    return new vm.SyntheticModule(Object.keys(values), function () { for (const [key, value] of Object.entries(values)) this.setExport(key, value); }, { context });
+    const stub = new vm.SyntheticModule(Object.keys(values), function () { for (const [key, value] of Object.entries(values)) this.setExport(key, value); }, { context });
+    // Retain synthetic wrappers throughout evaluation: Node 20 can otherwise
+    // collect a linked wrapper and crash, as in memory_maintenance_check.
+    modules.set(`stub:${file}:${spec}`, stub);
+    return stub;
   });
   return mod;
 }

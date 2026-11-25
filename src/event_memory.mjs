@@ -35,6 +35,11 @@ function eventRows(companionId, barrier) {
     .all(companionId, barrier.turn_id_cutoff, barrier.turn_id_cutoff, barrier.revoked_at);
 }
 
+export function listReplyEvents(companionId) {
+  const rows = eventRows(companionId, getMemoryRecallBarrier(companionId));
+  return ['open', 'resolved', 'dismissed', 'stale'].flatMap(status => rows.filter(row => row.status === status).slice(0, 4));
+}
+
 function recentTurns(companionId, cutoff, lastId, limit) {
   return getDb()
     .prepare(

@@ -1,3 +1,4 @@
+import { usesGroundedReplies, generateGroundedReply } from './reply_pipeline.mjs';
 /**
  * 
  * Copyright (c) 2026 溪语 AI Contributors. MIT License.
@@ -24,6 +25,8 @@ import {
   getActiveCurrentWorks, countRecentMaterialUse,   // v1.21.4 PR-W2 works 注入 + 周上限计数
   getActiveLifeStates,                        // v1.22 PR-L1: #317 四档身体事件闸查档案
 } from './db.mjs';
+import { claimDueBehaviorTask, isBehaviorTaskCurrent, finishBehaviorTask } from './behavior_tasks.mjs';
+import { buildBehaviorReplyHint } from './behavior_runtime.mjs';
 import { getActivePeriodContext, isPeriodHeavyWindow, isPmsActive } from './life_state.mjs';   // v1.22 PR-L3 经期情绪路由
 import { buildWorksPromptHint, buildProactiveWorkHint, isWorkPhotoEligible, worksSceneSeed, pickProactiveWork, workMaterialId, worksConfig } from './current_works.mjs';  // v1.21.4 PR-W2 表达层
 import { pickProactiveCategory, cappedCategoryIds } from './photo_categories.mjs';  // v1.21.6 PR-A 照片品类加权采样（默认关）
@@ -175,6 +178,21 @@ async function tick(now = new Date()) {
         if (minuteNow < window.start) continue;
         if (minuteNow > window.end) continue;
 
+        // Explicit followups are independent of random daily slots and motivation rolls.
+        // All existing window/safety/arc/frequency/context gates still apply.
+        const behaviorTask = claimDueBehaviorTask(companion.id, { now: now.getTime() });
+        if (behaviorTask) {
+          try {
+            const outcome = await sendProactiveMessageGuarded(companion, 'behavior_followup', account, { behaviorTask });
+            finishBehaviorTask(behaviorTask, typeof outcome === 'string'
+              ? { status: 'skipped', reason: outcome }
+              : outcome);
+          } catch (e) {
+            finishBehaviorTask(behaviorTask, { status: 'failed', reason: 'delivery_error' });
+            log('warn', `[Behavior] followup failed companion=${companion.id}: ${e.message}`);
+          }
+        }
+
         // 自愈：若 DB 里没有今天的日程（cron 失败或刚绑定），按需触发一次生成
         // ensureScheduleForCompanion 内置 30 分钟级 debounce 防止持续失败时反复重试
         if (!getDailySchedule(companion.id, dateKey)) {
@@ -189,8 +207,8 @@ async function tick(now = new Date()) {
           ensureRelationshipReminders(companion); // 懒初始化关系里程碑（仅一次）
           const dueReminders = getDueReminders(companion.id, dateKey);
           if (dueReminders.length > 0) {
-            await sendProactiveMessageGuarded(companion, 'reminder', account, { reminders: dueReminders });
-            markRemindersTriggered(companion.id, dueReminders.map(r => r.id), dateKey);
+            const result = await sendProactiveMessageGuarded(companion, 'reminder', account, { reminders: dueReminders });
+            if (result === 'sent' || result === 'partial') markRemindersTriggered(companion.id, dueReminders.map(r => r.id), dateKey);
           }
         } catch (e) {
           log('warn', `[Proactive] reminder 推送异常 companion=${companion.id}: ${e.message}`);
@@ -202,7 +220,7 @@ async function tick(now = new Date()) {
         try {
           if (shouldSendWindowLastCall(companion, now)) {
             const r = await sendProactiveMessageGuarded(companion, 'lastcall', account);
-            if (r === 'sent') {
+            if (r === 'sent' || r === 'partial') {
               markWindowLastCallSent(companion.id);
               log('info', `[Proactive] ★ 窗口将关·临门一脚 companion=${companion.id}`);
             }
@@ -270,10 +288,10 @@ async function tick(now = new Date()) {
           } else if (result === 'arc_skip') {
             item._v2_deny_until = Date.now() + 90 * 60_000;   // v1.21 冷战降频，1.5 小时后再评估
             bumpProactiveHealth('restrained', { companionId: companion.id, reason: 'arc_skip' });
-          } else {
-            // 'sent' 或内部早退（撞车/无 ctx）都算今日已尝试；'sent' 桶已在
-            // recordProactiveSentTimestamp 汇聚点计（含 reminder/lastcall 等所有 kind）
+          } else if (result === 'sent' || result === 'partial' || result === 'dup' || result === 'superseded') {
             item.sent = true;
+          } else {
+            item._v2_deny_until = Date.now() + 15 * 60_000;
           }
         }
       } catch (e) {
@@ -339,6 +357,10 @@ export function buildMorningMissedHint(missed = []) {
 }
 
 async function sendProactiveMessageGuarded(companion, kind, account, opts = {}) {
+  if (opts.behaviorTask) {
+    if (!isBehaviorTaskCurrent(opts.behaviorTask)) return { status: 'cancelled', reason: 'stale_task' };
+    if (getSleepRow(companion.id)?.is_sleeping) return { status: 'skipped', reason: 'sleeping' };
+  }
   if (_proactiveInFlight.has(companion.id)) {
     log('info', `[Proactive] 跳过：companion=${companion.id} 已有发送在进行中（kind=${kind}）`);
     return 'inflight';
@@ -379,7 +401,7 @@ async function sendProactiveMessageGuarded(companion, kind, account, opts = {}) 
     const risk = getRecentSafetyRisk(companion.id);
     if (risk.level === 'high' || risk.level === 'medium') {
       log('warn', `[Proactive] 安全门拦截 companion=${companion.id} kind=${kind} risk=${risk.level} signals=${(risk.signals || []).join(',')}`);
-      return 'safety';
+      return opts.behaviorTask ? { status: 'cancelled', reason: 'safety' } : 'safety';
     }
   } catch (e) {
     // 查询失败不应阻塞 — 但也不静默继续发，保守起见同样跳过本次
@@ -418,11 +440,15 @@ async function sendProactiveMessageGuarded(companion, kind, account, opts = {}) 
   }
   _proactiveInFlight.add(companion.id);
   try {
-    const delivery = await sendProactiveMessage(companion, kind, account, opts);
-    if (delivery === 'superseded') return 'throttled';
-    // 成功后记录（sendProactiveMessage 内部失败/早退也无伤大雅，下次仍会按间隔判断）
-    recordProactiveSentTimestamp(companion.id, kind);
-    bumpProactiveHealth('sent', { companionId: companion.id });   // #263 误报修：已发送桶（所有 kind 的发送汇聚点，与 last_proactive_sent_at 同源）
+    const result = await sendProactiveMessage(companion, kind, account, opts);
+    if (!result || !['sent', 'partial'].includes(result.status)) return opts.behaviorTask ? (result || { status: 'skipped' }) : (result?.status || 'skipped');
+    // Only actual delivery consumes sent accounting; partial delivery must not replay.
+    if (arcOlive?.oliveEventId) {
+      try { markOliveBranchSent(arcOlive.oliveEventId); } catch (e) { log('warn', `[Proactive] olive accounting failed: ${e.message}`); }
+    }
+    try { recordProactiveSentTimestamp(companion.id, kind); }
+    catch (e) { log('warn', `[Proactive] sent timestamp failed: ${e.message}`); }
+    try { bumpProactiveHealth('sent', { companionId: companion.id }); } catch {}   // #263 误报修：已发送桶（所有 kind 的发送汇聚点，与 last_proactive_sent_at 同源）
 
     // v1.10.0 sleep 状态切换 hook
     try {
@@ -445,7 +471,7 @@ async function sendProactiveMessageGuarded(companion, kind, account, opts = {}) 
     } catch (e) {
       log('warn', `[Sleep] hook failed companion=${companion.id} kind=${kind}: ${e.message}`);
     }
-    return 'sent';
+    return opts.behaviorTask ? result : result.status;
   } finally {
     _proactiveInFlight.delete(companion.id);
   }
@@ -683,14 +709,14 @@ function hasMinGap(minutes, minGap) {
 async function sendProactiveMessage(companion, kind, account, opts = {}) {
   if (!companion.wechat_user_id) {
     log('warn', `[Proactive] 跳过：companion=${companion.id} kind=${kind} 未绑定微信（wechat_user_id 缺）`);
-    return;
+    return { status: 'skipped', reason: 'missing_binding', deliveredText: '' };
   }
   const ctx = account
     ? { token: account.bot_token, botId: account.bot_id }
     : getBotContextForCompanion(companion.id);
   if (!ctx?.token) {
     log('warn', `[Proactive] 找不到 bot context companion=${companion.id}`);
-    return;
+    return { status: 'skipped', reason: 'missing_context', deliveredText: '' };
   }
 
   // ── context_token 窗口预检（生成前）──────────────────────────────────────
@@ -701,16 +727,19 @@ async function sendProactiveMessage(companion, kind, account, opts = {}) {
   // 注：用户一旦回来发消息，token 立即刷新、窗口重开，引擎会按正常间隔重新主动。
   if (!recallContextToken(ctx.botId, companion.wechat_user_id)) {
     log('info', `[Proactive] 跳过：companion=${companion.id} kind=${kind} context_token 窗口已关闭（用户 >24h 未互动，主动消息发不出，不生成内容）`);
-    return;
+    return { status: 'skipped', reason: 'expired_context', deliveredText: '' };
   }
 
   // ── 单独分支：场景照片 ──
   if (kind === 'photo') {
     const t0 = Date.now();
-    return sendScenePhoto(companion, ctx).catch(err =>
-      logProactiveFailure({ companionId: companion.id, kind: 'photo', error: err, latencyMs: Date.now() - t0 })
-    );
+    return sendScenePhoto(companion, ctx).catch(err => {
+      logProactiveFailure({ companionId: companion.id, kind: 'photo', error: err, latencyMs: Date.now() - t0 });
+      return { status: 'failed', reason: 'photo_error', deliveredText: '' };
+    });
   }
+
+  if (opts.behaviorTask) return sendRequestedFollowup(companion, ctx, opts.behaviorTask);
 
   const userProfile = getUserProfileForRecall(companion.user_id, companion.id);
   const timeContext = buildTimeContext(userProfile, getDueReminders(companion.id, formatDateKey()));
@@ -748,7 +777,6 @@ async function sendProactiveMessage(companion, kind, account, opts = {}) {
   let arcHint = '';
   if (opts.arcOlive?.oliveBranch && opts.arcOlive.oliveEventId) {
     arcHint = buildOliveBranchHint(opts.arcOlive.arcState, _arcExpr.category);
-    markOliveBranchSent(opts.arcOlive.oliveEventId);   // 乐观置位：注入即消耗，防重复台阶
     log('info', `[Proactive] olive_branch 台阶消息 companion=${companion.id} arc=${opts.arcOlive.arcState}`);
   } else if (_arcExpr.active) {
     arcHint = _arcExpr.directive;
@@ -960,17 +988,53 @@ async function sendProactiveMessage(companion, kind, account, opts = {}) {
       top_p: companion.top_p,
     }, { accountId: proactiveBinding?.account_id || null });
     if (isChatFallback(retry)) throw new Error('proactive chat unavailable');
-    retry = safeOutboundReply(retry);
+    retry = scrubPhotoImpersonation(safeOutboundReply(retry), companion.id);
     const retryCollision = findCollision(retry, recentAssistantTexts);
     if (!retryCollision) {
       reply = retry;
     } else {
       // 重生后仍撞车 — 放弃本次主动消息，避免骚扰
       log('warn', `[Proactive] 重生后仍撞车，放弃本次主动 companion=${companion.id}`);
-      return;
+      return { status: 'skipped', reason: 'repeated', deliveredText: '' };
     }
   }
 
+  return deliverProactiveText(companion, ctx, { reply, kind, effectiveKind, recallLoop, checkedUserTurn, chosenWorkMatId,
+    recalledRaw: _recalledRaw, dailySchedule: proactiveDailySchedule, recentTurns, history });
+}
+
+async function sendRequestedFollowup(companion, ctx, task) {
+  if (!usesGroundedReplies(companion)) return { status: 'cancelled', reason: 'disabled', deliveredText: '' };
+  const arcState = getArcExpressionContext(companion).arcState;
+  const behaviorPlan = { ...JSON.parse(task.plan_json), arcState, followup: null };
+  if (!buildBehaviorReplyHint(behaviorPlan)) return { status: 'cancelled', reason: 'source_unavailable', deliveredText: '' };
+  const history = getConversationContext(companion.id, 16);
+  const recentAssistantTexts = history.filter(row => row.role === 'assistant').slice(-5).map(row => row.content);
+  const date = shanghaiDateKey();
+  const schedule = getDailySchedule(companion.id, date);
+  const dailySchedule = schedule ? { ...schedule, date_key: date } : null;
+  const inputs = { companion, userText: '', history, behaviorPlan, arcState, mode: 'followup', channel: 'wechat',
+    accountId: getActiveWechatBinding(companion.wechat_user_id, companion.bot_id)?.account_id || null,
+    personaFacts: getPersonaFacts(companion.id), preferences: getCompanionPreferencesForPrompt(companion.id),
+    dailySchedule, shapingHint: buildShapingPromptHint(listShaping(companion.id), { expressionOnly: true }),
+    // The request itself supplies the subject. Followups never surface unrelated stored facts or events.
+    memories: [], userProfile: null, events: [],
+  };
+  const followup = { topic: task.context_text, dueAt: task.due_at };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (!isBehaviorTaskCurrent(task)) return { status: 'cancelled', reason: 'stale_task', deliveredText: '' };
+    const result = await generateGroundedReply({ ...inputs, followup });
+    if (isChatFallback(result.reply)) return { status: 'failed', reason: result.review.status, deliveredText: '' };
+    const reply = scrubPhotoImpersonation(safeOutboundReply(result.reply), companion.id);
+    const collision = findCollision(reply, recentAssistantTexts);
+    if (!collision) return deliverProactiveText(companion, ctx, { reply, kind: 'behavior_followup', task });
+    followup.avoidWording = collision.text.slice(0, 160);
+  }
+  return { status: 'skipped', reason: 'repeated', deliveredText: '' };
+}
+
+async function deliverProactiveText(companion, ctx, { reply, kind, effectiveKind = kind, task = null,
+  recallLoop, checkedUserTurn, chosenWorkMatId, recalledRaw, dailySchedule, recentTurns, history }) {
   // #317 四档身体事件出站闸（v1.22 PR-L1）：severe/自伤无条件拦 / diagnosed 无档案则拦 /
   // symptom-only / transient 放行。reply 定稿单点，覆盖主+撞车重生。fail-open：gate 查不到不开。
   let _activeLifeStates;
@@ -979,14 +1043,14 @@ async function sendProactiveMessage(companion, kind, account, opts = {}) {
   // v1.22 PR-L2 经期披露门控：朋友/暧昧期（affection < 阈值）显式月经表述出站剥（只表现不点明）。
   reply = scrubPeriodDisclosure(reply, { affectionLevel: companion.affection_level });
 
-  if (effectiveKind !== 'reminder') {
+  if (!task && effectiveKind !== 'reminder') {
     reply = await reviewPressureTail(reply, { enabled: companion.no_pressure, userText: history.findLast(m => m.direction === 'in')?.content });
   }
 
   // PR-1（2026-06-14）intent 级复读止血：bot 主动重复的同 intent(+topic)在冷却窗内**直接不发**。
   // 比 3-gram 撞车检测多拦"语义同·文本不同"的复读(remind/ask_plan/miss_you 反复)。reminder 豁免；
   // morning/goodnight 走宽松窗(<24h，cross-day 早安必放行——红线：早安是唯一续命器，绝不误杀)。
-  if (effectiveKind !== 'reminder') {
+  if (effectiveKind !== 'reminder' && !task) {
     const _nowMs = Date.now();
     const _intent = classifyIntent(reply);
     const _cool = isIntentCooled({
@@ -996,7 +1060,7 @@ async function sendProactiveMessage(companion, kind, account, opts = {}) {
     });
     if (_cool.cooled) {
       log('info', `[IntentDedup] proactive 复读止血·不发 companion=${companion.id} kind=${kind} intent=${_intent}（${_cool.reason}）`);
-      return;
+      return { status: 'skipped', reason: 'intent_cooled', deliveredText: '' };
     }
   }
 
@@ -1011,41 +1075,67 @@ async function sendProactiveMessage(companion, kind, account, opts = {}) {
     log('info', `[Proactive] 段内去重：剪掉 ${droppedSegs.length} 段重复 companion=${companion.id}; ${droppedSegs.map(d => `"${d.text.slice(0,20)}"~"${d.similar_to.slice(0,20)}"(sim=${d.sim.toFixed(2)})`).join('; ')}`);
   }
   let totalStickers = 0;
-  if (recallLoop && !followupStillCurrent(companion.id, recallLoop.id, checkedUserTurn)) return 'superseded';
+  const recallSuperseded = () => recallLoop && !followupStillCurrent(companion.id, recallLoop.id, checkedUserTurn);
   let sentAnySegment = false;
-  for (let i = 0; i < segments.length; i++) {
+  let partial = false;
+  const deliveredParts = [];
+  delivery: for (let i = 0; i < segments.length; i++) {
     const seg = segments[i];
-    const { text: textOnly, stickers } = parseStickerMarkers(seg);
+    const { text: textOnly, stickers: parsedStickers } = parseStickerMarkers(seg);
+    const stickers = task ? [] : parsedStickers;
+    // Recheck after generation and before every network send (user may have cancelled meanwhile).
+    if (task && (!isBehaviorTaskCurrent(task) || getSleepRow(companion.id)?.is_sleeping)) {
+      if (!sentAnySegment) return { status: 'cancelled', reason: 'stale_task', deliveredText: '' };
+      partial = true;
+      break;
+    }
+    if (recallSuperseded()) {
+      if (!sentAnySegment) return { status: 'superseded', deliveredText: '' };
+      partial = true;
+      break;
+    }
     if (textOnly) {
-      const ok = await sendTextMessage(ctx, companion.wechat_user_id, textOnly, null);
+      let ok = false;
+      try { ok = await sendTextMessage(ctx, companion.wechat_user_id, textOnly, null, { _allowQueue: false }); }
+      catch (e) { log('warn', `[Proactive] text send failed: ${e.message}`); }
       if (!ok) {
         // 发送失败（context_token 窗口边界过期 → ret=-2，或缺 to_user）。第一段就失败 =
         // 整条没送达：直接 return，不写对话历史 / 不耗 backoff 配额 / 不升恋人 / 不记「已发送」，
         // 避免假报成功污染状态。用户回来刷新 token 后，引擎会按正常间隔重新主动。
         if (!sentAnySegment) {
           log('warn', `[Proactive] 发送失败，放弃本次主动 companion=${companion.id} kind=${kind}（context_token 窗口关闭/过期）`);
-          return;
+          return { status: 'failed', reason: 'send_failed', deliveredText: '' };
         }
         // 前面已有段落送达，仅后续段失败：截断停发，保留已送达部分走正常收尾。
         log('warn', `[Proactive] 后续段发送失败，截断 companion=${companion.id} 段=${i}/${segments.length}`);
+        partial = true;
         break;
       }
       sentAnySegment = true;
-      saveMessage({
+      deliveredParts.push(textOnly);
+      try { saveMessage({
         msgId: `proactive_${companion.id}_${Date.now()}_${i}`,
         fromUser: ctx.botId,
         toUser: companion.wechat_user_id,
         msgType: 'text',
         content: textOnly,
         direction: 'out',
-      });
+      }); } catch (e) { log('warn', `[Proactive] sent text history failed: ${e.message}`); }
     }
     for (const { picked } of stickers) {
       totalStickers++;
       try {
         const { data, name } = await readMediaBuffer(picked.fullPath);
         const { item } = await uploadFile({ data, fileName: name, toUserId: companion.wechat_user_id, ctx });
-        await sendMessageItem(ctx, companion.wechat_user_id, item, null);
+        if (recallSuperseded()) {
+          if (!sentAnySegment) return { status: 'superseded', deliveredText: '' };
+          partial = true;
+          break delivery;
+        }
+        const ok = await sendMessageItem(ctx, companion.wechat_user_id, item, null, { _allowQueue: false });
+        if (!ok) { partial = true; continue; }
+        sentAnySegment = true;
+        deliveredParts.push(`[STICKER:${picked.emotion || picked.tags?.[0] || picked.id}]`);
         saveMessage({
           msgId: `proactive_sticker_${companion.id}_${Date.now()}_${i}`,
           fromUser: ctx.botId,
@@ -1055,6 +1145,7 @@ async function sendProactiveMessage(companion, kind, account, opts = {}) {
           direction: 'out',
         });
       } catch (err) {
+        partial = true;
         log('warn', `[Proactive] sticker send failed: ${err.message}`);
       }
     }
@@ -1062,6 +1153,8 @@ async function sendProactiveMessage(companion, kind, account, opts = {}) {
       await new Promise(r => setTimeout(r, 600 + Math.floor(Math.random() * 1200)));
     }
   }
+  if (!sentAnySegment) return { status: 'skipped', reason: 'empty', deliveredText: '' };
+  reply = deliveredParts.join(' || ');
   const turnTopic = effectiveKind === 'goodnight' ? '晚安'
     : effectiveKind === 'morning' ? '早安'
     : effectiveKind === 'confession' ? '主动告白'
@@ -1069,15 +1162,16 @@ async function sendProactiveMessage(companion, kind, account, opts = {}) {
     : effectiveKind === 'recall' ? 'recall 关心'
     : effectiveKind === 'lastcall' ? '轻声问候'
     : '主动消息';
-  saveConversationTurn(companion.id, 'assistant', reply, turnTopic);
+  try { saveConversationTurn(companion.id, 'assistant', reply, turnTopic); }
+  catch (e) { log('warn', `[Proactive] sent turn history failed: ${e.message}`); }
 
   // v1.21.3 素材指纹落账：归因 reply 实际引用了哪些进过 prompt 的记忆（锚匹配），
   // 命中者进账本供下次召回冷却。reminder 豁免；fail-open 绝不阻断链路。
-  if (effectiveKind !== 'reminder') {
+  if (effectiveKind !== 'reminder' && !task) {
     try {
       // 归因对"过滤前全量召回"做：冷却中的梗若被她从对话历史里捡起来复读，
       // 也要记账续冷却（沙箱 day18"成都草莓"形态），不然冷却一到期立刻复活
-      const refs = extractMaterialRefs(reply, _recalledRaw.map(m => ({ id: memMaterialId(m.id), content: m.content })));
+      const refs = extractMaterialRefs(reply, recalledRaw.map(m => ({ id: memMaterialId(m.id), content: m.content })));
       if (effectiveKind === 'recall' && recallLoop?.id) refs.push(loopMaterialId(recallLoop.id));
       // v1.21.4 PR-W2: works 话题"注入即占一次出场"——发送成功就落账（48h 冷却的判定单位），
       // 不做锚匹配归因（她这次没提也算这本"轮过一次"，方向偏克制=少复读，符合 §8 手感）。
@@ -1086,7 +1180,7 @@ async function sendProactiveMessage(companion, kind, account, opts = {}) {
         insertProactiveMaterialLog(companion.id, {
           materialIds: refs,
           kind: effectiveKind,
-          scene: proactiveDailySchedule?.scene || companion.current_scene || null,
+          scene: dailySchedule?.scene || companion.current_scene || null,
         });
         log('info', `[Proactive] 素材落账 companion=${companion.id} refs=${refs.join(',')}`);
       }
@@ -1102,14 +1196,14 @@ async function sendProactiveMessage(companion, kind, account, opts = {}) {
 
   // ── 主动告白后处理：标记 + 升恋人。节奏闸门已在触发处校验(好感≥55+≥14天)，
   //    affection 本就够，不再硬跳分；记 became_lover_at 给"恋人→深爱"计时(对齐 v1.11.1)。
-  if (effectiveKind === 'confession') {
+  if (effectiveKind === 'confession' && !partial) {
     try {
       markCompanionConfessed(companion.id);
       patchCompanion(companion.id, {
         relationship_stage: '恋人',
         became_lover_at: new Date().toISOString(),
       });
-      log('info', `[Proactive] ★ 主动告白完成 companion=${companion.id} affection=${aff} stage→恋人`);
+      log('info', `[Proactive] ★ 主动告白完成 companion=${companion.id} affection=${companion.affection_level || 0} stage→恋人`);
     } catch (e) {
       log('warn', `[Proactive] 告白后处理失败: ${e.message}`);
     }
@@ -1120,9 +1214,11 @@ async function sendProactiveMessage(companion, kind, account, opts = {}) {
   try { bumpProactiveUnanswered(companion.id); } catch {}
 
   // 首次主动消息成就（静默）
-  tryAchievement(companion.id, 'first_proactive_message');
+  try { tryAchievement(companion.id, 'first_proactive_message'); } catch {}
 
+  const result = { status: partial ? 'partial' : 'sent', deliveredText: reply };
   log('info', `[Proactive] 已发送 companion=${companion.id} to=${companion.wechat_user_id} kind=${effectiveKind} segments=${segments.length} stickers=${totalStickers}`);
+  return result;
 }
 
 // v1.10.24: plan_tasks runSleepTick 进入 bed_at 前若 goodnight_sent_for_date 为空，
@@ -1225,7 +1321,7 @@ async function sendScenePhoto(companion, ctx) {
   });
   if (!gate.allowed) {
     log('debug', `[Proactive] 照片门闩未通过 companion=${companion.id} reason=${gate.reasons.join(',')}`);
-    return;
+    return { status: 'skipped', reason: 'photo_gate', deliveredText: '' };
   }
   const recentMessages = getRecentHistory(companion.wechat_user_id, ctx.botId, 10);
   let photoEmotionState = null;
@@ -1324,7 +1420,7 @@ async function sendScenePhoto(companion, ctx) {
   });
   if (!plan.shouldSendPhoto) {
     log('debug', `[Proactive] AI 决策不发照片 companion=${companion.id} reason=${plan.reason}`);
-    return;
+    return { status: 'skipped', reason: 'photo_declined', deliveredText: '' };
   }
   if (plan.delayImageMs) {
     await new Promise(r => setTimeout(r, plan.delayImageMs));
@@ -1345,9 +1441,10 @@ async function sendScenePhoto(companion, ctx) {
   });
   if (!result.ok) {
     log('warn', `[Proactive] 场景照未发送 companion=${companion.id} code=${result.code || 'unknown'} error=${result.error || ''}`);
-    return;
+    return { status: 'failed', reason: 'photo_failed', deliveredText: '' };
   }
   // v1.21.6 PR-B: 想到你素材落 v1.21.3 指纹账本 → 同素材 14 天冷却（每周≤2 由品类 weeklyCap 管）
+  try {
   if (thoughtMaterialId) {
     insertProactiveMaterialLog(companion.id, {
       materialIds: [thoughtMaterialId], kind: 'photo_thought',
@@ -1368,24 +1465,28 @@ async function sendScenePhoto(companion, ctx) {
       scene: companion.current_scene || '', nowIso: new Date().toISOString(),
     });
   }
+  } catch (e) { log('warn', `[Proactive] sent photo material accounting failed: ${e.message}`); }
+  let captionSent = false;
   if (result.caption) {
     await new Promise(r => setTimeout(r, plan.delayCaptionMs || 900));
     // v1.20.1: caption 尽力而为——撞 iLink 限速时放弃不排队（排队 3 分钟后才到更怪）
     if (!peekSendQuota(ctx.botId)) {
       log('info', `[Proactive] 场景照 caption 撞限速 → 放弃不排队 companion=${companion.id}`);
     } else {
-    await sendTextMessage(ctx, companion.wechat_user_id, result.caption, null);
-    saveMessage({
+    try { captionSent = await sendTextMessage(ctx, companion.wechat_user_id, result.caption, null, { _allowQueue: false }); }
+    catch (e) { log('warn', `[Proactive] caption send failed: ${e.message}`); }
+    if (captionSent) { try { saveMessage({
       msgId: `proactive_photo_text_${companion.id}_${Date.now()}`,
       fromUser: ctx.botId,
       toUser: companion.wechat_user_id,
       msgType: 'text',
       content: result.caption,
       direction: 'out',
-    });
+    }); } catch (e) { log('warn', `[Proactive] sent caption history failed: ${e.message}`); } }
     }
   }
   log('info', `[Proactive] ★ 场景照已发送 companion=${companion.id} activity="${result.activity}" caption="${result.caption || ''}"`);
+  return { status: result.caption && !captionSent ? 'partial' : 'sent', deliveredText: captionSent ? result.caption : '[已发送照片]' };
 }
 
 // 撞车检测：把回复和最近 assistant 内容比相似度（char 3-gram Jaccard），

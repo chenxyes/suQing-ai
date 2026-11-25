@@ -68,12 +68,50 @@ export function getDb() {
     migratePreferences();  // v1.8.0 #3
     migrateCompanionShaping();  // 共建留痕（教她说话/称呼/雷区/约定/专属梗）
     migrateOpenLoops();    // v1.8.0 #4
+    migrateBehaviorTasks(); // 相处行为：独立执行账本与有限延时任务
     migrateSafetyEvents(); // v1.9.0 #1 安全事件记录（高危后暂停普通主动消息）
     migrateRelationshipArc(); // v1.21.0 冲突与和好弧（关系事件状态机）
     migrateCurrentWorks();    // v1.21.4 PR-W1 current_works 档案（她手头在看/在做的事）
     migrateLifeState();       // v1.22 PR-L1 life_state 身体状态档案（生理期/小恙/小伤）
   }
   return db;
+}
+
+function migrateBehaviorTasks() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS behavior_deliveries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      companion_id INTEGER NOT NULL REFERENCES companions(id) ON DELETE CASCADE,
+      turn_key TEXT NOT NULL,
+      plan_json TEXT NOT NULL,
+      context_text TEXT NOT NULL,
+      delivered_text TEXT NOT NULL,
+      channel TEXT NOT NULL CHECK(channel IN ('wechat','web')),
+      created_at INTEGER NOT NULL,
+      UNIQUE(companion_id, turn_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_behavior_delivery_recent ON behavior_deliveries(companion_id, created_at DESC);
+    CREATE TABLE IF NOT EXISTS behavior_state_resets (
+      companion_id INTEGER PRIMARY KEY REFERENCES companions(id) ON DELETE CASCADE,
+      reset_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS behavior_followup_tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      companion_id INTEGER NOT NULL REFERENCES companions(id) ON DELETE CASCADE,
+      delivery_id INTEGER NOT NULL UNIQUE REFERENCES behavior_deliveries(id) ON DELETE CASCADE,
+      due_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','claimed','sent','partial','cancelled','expired')),
+      lease_token TEXT,
+      lease_until INTEGER,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      retry_at INTEGER NOT NULL DEFAULT 0,
+      delivered_text TEXT NOT NULL DEFAULT '',
+      reason TEXT NOT NULL DEFAULT '',
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_behavior_task_due ON behavior_followup_tasks(companion_id, status, due_at);
+  `);
 }
 
 // ─── v1.9.0 #1: safety_events 高危/中危安全事件 ──────────────────────────
@@ -869,6 +907,7 @@ function initAiUsageTable() {
       provider TEXT,
       model TEXT,
       capability TEXT NOT NULL,            -- chat/image/vision/asr/tts/embedding/search
+      purpose TEXT NOT NULL DEFAULT 'reply', -- reply/internal/review for chat calls
       prompt_tokens INTEGER DEFAULT 0,
       completion_tokens INTEGER DEFAULT 0,
       images INTEGER DEFAULT 0,
@@ -949,6 +988,7 @@ function initAiUsageTable() {
     );
     CREATE INDEX IF NOT EXISTS idx_missed_msgs_comp ON companion_missed_messages(companion_id, consumed, received_at);
   `);
+  addColIfMissing('ai_usage_events', 'purpose', "TEXT NOT NULL DEFAULT 'reply'");
 }
 
 function migratePollState() {
@@ -2302,7 +2342,7 @@ export function recordAiUsage({ accountId, promptTokens = 0, completionTokens = 
  * best-effort：任何异常都吞掉，绝不影响主请求。accountId 可空（系统调用也记，成本才全）。
  */
 export function recordAiUsageEvent({
-  accountId = null, companionId = null, provider = '', model = '', capability = 'chat',
+  accountId = null, companionId = null, provider = '', model = '', capability = 'chat', purpose = 'reply',
   promptTokens = 0, completionTokens = 0, images = 0, audioSeconds = 0,
   latencyMs = null, status = 'ok',
 } = {}) {
@@ -2314,11 +2354,12 @@ export function recordAiUsageEvent({
     );
     getDb().prepare(`
       INSERT INTO ai_usage_events
-        (account_id, companion_id, provider, model, capability, prompt_tokens, completion_tokens,
+        (account_id, companion_id, provider, model, capability, purpose, prompt_tokens, completion_tokens,
          images, audio_seconds, latency_ms, status, estimated_cost, currency, created_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       accountId, companionId, String(provider || ''), String(model || ''), String(capability || 'chat'),
+      ['reply', 'internal', 'review'].includes(purpose) ? purpose : 'reply',
       promptTokens | 0, completionTokens | 0, images | 0, audioSeconds | 0,
       latencyMs == null ? null : (latencyMs | 0), String(status || 'ok'), estimated_cost, currency, Date.now(),
     );
@@ -3559,7 +3600,7 @@ export function resolveOpenLoop(loopId, resolvedText = null) {
     SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP,
         resolved_text = ?, updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
-  `).run(resolvedText, loopId).changes;
+  `).run(resolvedText ? filterForStorage(resolvedText).text || null : null, loopId).changes;
 }
 
 export function markOpenLoopFollowedUp(loopId) {

@@ -10,6 +10,8 @@
  * Copyright (c) 2026 溪语 AI Contributors. MIT License.
  */
 
+const directQuestionPact = '关心我时直接问，问完就停。句尾省去“别……”的叮嘱，也别预设我已经做错了什么。';
+
 // 明显不是"称呼"的词，避免 "叫我去/叫我走" 误判
 const NICK_STOP = ['一下', '他', '她', '它', '你', '我', '人', '的', '了', '吗', '点', '别', '去', '来', '滚', '走', '走开', '闭嘴', '过来', '起来', '出去'];
 // "叫我X"里 X 以动词开头多半不是称呼（叫我去开会 / 叫我等一下）
@@ -41,7 +43,7 @@ export function detectTeaching(text = '') {
   let m;
 
   if (/^(?:以后)?(?:不允许|不要|别)(?:再|在)?(?:每句(?:话)?|任何(?:一句)?话|句子|问句)(?:的)?(?:后面|末尾|结尾)(?:再)?(?:加|跟|接|补|带)(?:上|一句)?\s*[“「"‘']?别(?:[.。…xX×]|[”」"'’]|$)/u.test(t)) {
-    out.push({ kind: 'pact', content: '关心我时直接问，问完就停。句尾省去“别……”的叮嘱，也别预设我已经做错了什么。' });
+    out.push({ kind: 'pact', content: directQuestionPact });
   }
 
   // 称呼：叫我X / 喊我X（排除动词开头如"叫我去开会"；称呼限 1-4 字）
@@ -105,10 +107,15 @@ export function buildShapingConfirmHint(taught = []) {
 }
 
 /** 注入人设：把"他教过你的"作为高优先级规则带进每次回复。shapingList = listShaping(companionId)。 */
-export function buildShapingPromptHint(shapingList = []) {
+export function buildShapingPromptHint(shapingList = [], { expressionOnly = false } = {}) {
   if (!Array.isArray(shapingList) || !shapingList.length) return '';
   const byKind = {};
-  for (const s of shapingList) (byKind[s.kind] ||= []).push(s.content);
+  for (const s of shapingList) {
+    // This specific expression pact can coexist with the user's most recent style setting.
+    const kind = s.kind === 'pact' && s.content === directQuestionPact ? 'style' : s.kind;
+    if (expressionOnly && !['nickname', 'style', 'taboo', 'lexicon'].includes(kind)) continue;
+    (byKind[kind] ||= []).push(s.content);
+  }
   const parts = [];
   if (byKind.nickname?.length) parts.push(`- 称呼他：「${byKind.nickname[0]}」（他亲自定的，别用别的）`);
   if (byKind.style?.length)    parts.push(`- 说话风格：${byKind.style.join('；')}`);

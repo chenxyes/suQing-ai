@@ -38,6 +38,9 @@ jobs:
       - name: ESLint（真 bug 级规则，零风格审美）
         run: npm run lint
 
+      - name: suqing 相处行为与实际投递回归
+        run: npm run check:behavior
+
       - name: 自定义中转 API 与运行时回归
         run: |
           node scripts/custom_provider_check.mjs

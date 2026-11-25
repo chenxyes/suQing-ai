@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { CHAT_FALLBACK, isChatFallback } from '../src/chat_response.mjs';
+import { parseInnerResponse } from '../src/inner_os.mjs';
 
 const innerSource = readFileSync(new URL('../src/inner_os.mjs', import.meta.url), 'utf8');
 const innerFunction = innerSource.slice(innerSource.indexOf('export async function generateInnerMonologue(')).replace(/^export /, '');
@@ -10,7 +11,7 @@ let reply = CHAT_FALLBACK;
 const inner = vm.runInNewContext(`${innerFunction}\ngenerateInnerMonologue`, {
   isInnerOsEnabled: () => true, shouldRunInnerOs: () => true, buildInnerSystemPrompt: () => 'fixture',
   generateReply: async () => reply, MAX_INNER_TOKENS: 160, isChatFallback,
-  parseInnerStruct: () => { parsed++; return null; }, log() {},
+  parseInnerResponse: raw => { parsed++; return parseInnerResponse(raw); }, log() {},
 });
 assert.equal(await inner({ companion: { id: 1 }, userText: 'fixture' }), null, 'failed inner reply must not become a thought');
 assert.equal(parsed, 0, 'failed inner reply must stop before parsing');

@@ -496,23 +496,25 @@ export async function sendCompanionPhoto({
   }
 
   try {
-    const sent = await sendMessageItem(context, toUserId, item, contextToken);
+    const sent = await sendMessageItem(context, toUserId, item, contextToken, source === 'proactive' ? { _allowQueue: false } : {});
     if (!sent) {
       return { ok: false, code: 'send_failed', error: 'sendMessageItem returned false', caption: finalCaption, activity: finalActivity };
     }
-    saveMessage({
+    try { saveMessage({
       msgId: `photo_${source}_${companion.id}_${Date.now()}`,
       fromUser: context.botId || 'bot',
       toUser: toUserId,
       msgType: 'image',
       content: `照片：${finalActivity}`,
       direction: 'out',
-    });
-    markPhotoSent(companion.id, `${finalActivity} / ${finalCaption}`);
+    }); } catch (e) { log('warn', `[Photo] sent photo history failed: ${e.message}`); }
+    try { markPhotoSent(companion.id, `${finalActivity} / ${finalCaption}`); }
+    catch (e) { log('warn', `[Photo] sent photo state failed: ${e.message}`); }
     if (recordTurn) {
-      saveConversationTurn(companion.id, 'assistant', `发了一张照片：${finalActivity}。${finalCaption}`, '场景分享');
+      try { saveConversationTurn(companion.id, 'assistant', `发了一张照片：${finalActivity}。${finalCaption}`, '场景分享'); }
+      catch (e) { log('warn', `[Photo] sent photo turn failed: ${e.message}`); }
     }
-    tryAchievement(companion.id, 'first_scene_photo');
+    try { tryAchievement(companion.id, 'first_scene_photo'); } catch {}
     log('info', `[Photo] 已发送 companion=${companion.id} source=${source} activity="${finalActivity}"`);
     return {
       ok: true,

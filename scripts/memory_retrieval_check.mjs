@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {buildReplyContext} from '../src/reply_context.mjs';
 import {test} from 'node:test';
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import crypto from 'node:crypto';
 const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'memory-retrieval-'));process.env.DB_PATH=path.join(tmp,'test.db');process.env.LOG_DIR=path.join(tmp,'logs');
@@ -43,6 +44,13 @@ try{
  assert.equal(typeof m.compactMemories,'function');db.exec("CREATE TRIGGER reject_compact BEFORE UPDATE OF compacted_into ON companion_memories BEGIN SELECT RAISE(ABORT,'fixture rollback'); END");assert.throws(()=>m.compactMemories(input));assert.equal(db.prepare('SELECT COUNT(*) n FROM companion_memories WHERE companion_id=?').get(cid).n,3);db.exec('DROP TRIGGER reject_compact');
  m.patchMemory(ids[0],cid,{locked:1});assert.equal(m.compactMemories(input),null);m.patchMemory(ids[0],cid,{locked:0});const summary=m.compactMemories(input);assert.ok(summary);assert.ok(summary.importance<=10);assert.deepEqual(JSON.parse(summary.source_memory_ids),ids);assert.equal(m.compactMemories(input).id,summary.id);
  for(const id of ids)assert.equal(row(id).compacted_into,summary.id);assert.ok(!hybrid('骑车',{limit:20}).some(r=>ids.includes(r.id)));
- m.softDeleteMemory(ids[0],cid);assert.ok(!m.getRecallableMemories(cid,uid).some(r=>r.id===summary.id));assert.ok(hybrid('游泳',{limit:20}).some(r=>r.id===ids[1]));
+ const quote='我喜欢骑车';
+ db.prepare("UPDATE companion_memories SET memory_subject='user',memory_evidence=?,source_memory_ids=? WHERE id=?")
+   .run(JSON.stringify([{turn_id:1,role:'user',quote}]),JSON.stringify([ids[1]]),ids[0]);
+ const grounded=()=>buildReplyContext({companionId:cid,userId:uid,memories:hybrid('骑车',{evidenceOnly:true,limit:1})}).facts;
+ assert.deepEqual(grounded().map(f=>f.text),[quote], 'a compacted source survives top 1, with its admitted dependency outside top 1');
+ m.patchMemory(ids[1],cid,{do_not_mention:1});
+ assert.deepEqual(grounded(),[], 'withdrawing the dependency removes the dependent fact from grounded retrieval');
+ m.softDeleteMemory(ids[0],cid);assert.ok(!m.getRecallableMemories(cid,uid).some(r=>r.id===summary.id));assert.ok(hybrid('散步',{limit:20}).some(r=>r.id===ids[2]));
  });
 }finally{db.close();process.on('exit',()=>fs.rmSync(tmp,{recursive:true,force:true}));}

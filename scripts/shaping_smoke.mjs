@@ -44,7 +44,11 @@ for (const text of ['吃早饭了吗？', '现在 12 点了，要睡吗？']) as
 for (const text of ['糊弄一口', '身体不好哦']) assert.ok(!correctionHint.includes(text));
 
 for (const text of ['不允许再任何话后面跟 别xxxx\n是不允许 禁止🚫', '不要在每句话后面加“别……”']) {
-  assert.equal(sh.detectTeaching(text)[0]?.kind, 'pact');
+  const [direct] = sh.detectTeaching(text);
+  assert.equal(direct.kind, 'pact');
+  const hint = sh.buildShapingPromptHint([...rules, direct, { kind: 'pact', content: '周六去看电影' }], { expressionOnly: true });
+  assert.ok(hint.includes(direct.content) && hint.includes('吃早饭了吗？'));
+  assert.ok(!hint.includes('周六去看电影'));
 }
 for (const text of ['昨天他在最后跟我说别走', '不要在每句话后面加别致的表情', '老师给我的作文批注是：\n坏例子：以后叫我老大\n好例子：早安',
   '坏例子：以后叫我老大', '好例子：以后叫我老大']) assert.deepEqual(sh.detectTeaching(text), []);
