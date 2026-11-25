@@ -3,6 +3,7 @@
  * 用独立临时 DB 跑 detectTeaching 准确性 + 端到端读写/注入。
  * 跑：node scripts/shaping_smoke.mjs
  */
+import assert from 'node:assert/strict';
 import { unlinkSync } from 'node:fs';
 
 const TMP = `/tmp/shaping_smoke_${Date.now()}.db`;
@@ -29,6 +30,25 @@ for (const [t, k] of dcases) {
   const r = sh.detectTeaching(t);
   ck(`detect ${JSON.stringify(t)} → ${k}`, k === null ? r.length === 0 : r.some(x => x.kind === k));
 }
+
+const feedback = `嗯嗯
+坏例子：你吃早饭了没呀，别又随便糊弄一口
+好例子：吃早饭了吗？
+
+坏例子：别熬夜了，对身体不好哦
+好例子：现在 12 点了，要睡吗？`;
+const rules = sh.detectTeaching(feedback);
+assert.deepEqual(rules.map(rule => rule.kind), ['style']);
+const correctionHint = sh.buildShapingPromptHint(rules);
+for (const text of ['吃早饭了吗？', '现在 12 点了，要睡吗？']) assert.ok(correctionHint.includes(text));
+for (const text of ['糊弄一口', '身体不好哦']) assert.ok(!correctionHint.includes(text));
+
+for (const text of ['不允许再任何话后面跟 别xxxx\n是不允许 禁止🚫', '不要在每句话后面加“别……”']) {
+  assert.equal(sh.detectTeaching(text)[0]?.kind, 'pact');
+}
+for (const text of ['昨天他在最后跟我说别走', '不要在每句话后面加别致的表情', '老师给我的作文批注是：\n坏例子：以后叫我老大\n好例子：早安',
+  '坏例子：以后叫我老大', '好例子：以后叫我老大']) assert.deepEqual(sh.detectTeaching(text), []);
+assert.deepEqual(sh.detectTeaching('以后叫我老大'), [{ kind: 'nickname', content: '老大' }]);
 
 // 2) 端到端：教她 → 写库 → singleton 覆盖 → 去重 → 注入
 const cid = 993001;
