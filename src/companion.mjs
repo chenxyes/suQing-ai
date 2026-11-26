@@ -615,10 +615,10 @@ function buildTimeAwarenessBlock(now = new Date()) {
     timeZone: 'Asia/Shanghai',
     year: 'numeric', month: 'numeric', day: 'numeric',
     weekday: 'long', hour: 'numeric', minute: 'numeric',
-    hourCycle: 'h23', hour12: false,
+    hourCycle: 'h23',
   }).formatToParts(now).filter(p => p.type !== 'literal').map(p => [p.type, p.value]));
 
-  const hour = Number(parts.hour);
+  const hour = Number(parts.hour) % 24;
   const month = Number(parts.month);
   const day = Number(parts.day);
   const weekday = parts.weekday;
