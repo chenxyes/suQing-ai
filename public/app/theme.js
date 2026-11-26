@@ -51,6 +51,8 @@
         b = document.createElement('div');
         b.id = 'xiyu-theme-bubble';
         b.className = 'xiyu-theme-bubble';
+        b.setAttribute('role', 'status');
+        b.setAttribute('aria-live', 'polite');
         document.body.appendChild(b);
       }
       b.textContent = text;
@@ -60,13 +62,15 @@
     }
 
     const btn = document.createElement('button');
+    btn.type = 'button';
     btn.id = 'xiyu-theme-toggle';
     btn.className = 'xiyu-theme-toggle';
-    btn.setAttribute('aria-label', '切换主题');
     function render() {
       const pref = getPref();
+      const label = pref === 'auto' ? '跟随系统' : pref === 'dark' ? '深色' : '浅色';
       btn.textContent = pref === 'dark' ? '🌙' : pref === 'light' ? '☀️' : '🌓';
-      btn.title = '主题：' + (pref === 'auto' ? '跟随系统' : pref === 'dark' ? '深色' : '浅色') + '（点击切换：跟随系统 → 浅色 → 深色）';
+      btn.title = '主题：' + label + '（点击切换：跟随系统 → 浅色 → 深色）';
+      btn.setAttribute('aria-label', '切换主题，当前：' + label);
     }
     render();
     btn.addEventListener('click', () => {

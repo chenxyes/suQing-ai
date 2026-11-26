@@ -4394,9 +4394,8 @@ export function startApiServer() {
   app.use(express.urlencoded({ extended: false, limit: '2mb' }));   // 支付宝异步通知用 form 编码
   app.use((req, _res, next) => { log('debug', `[API] ${req.method} ${req.path}`); next(); });
 
-  // v1.11.0 安全(L1)：基础安全响应头。零风险的几个无条件加；CSP 因前端用
-  // Tailwind CDN(JIT 需 unsafe-eval)易打挂，默认关，置 CSP_ENABLED=true 且
-  // 浏览器自测通过后再在生产开启。
+  // v1.11.0 安全(L1)：基础安全响应头。零风险的几个无条件加；前端已迁移至预编译
+  // Tailwind CSS 与自托管 Lucide，CSP_ENABLED=true 时不再需要 unsafe-eval 或外链 CDN。
   app.use((_req, res, next) => {
     res.setHeader('X-Frame-Options', 'DENY');                          // 防点击劫持
     res.setHeader('X-Content-Type-Options', 'nosniff');                // 防 MIME 嗅探
@@ -4405,8 +4404,8 @@ export function startApiServer() {
     if (String(process.env.CSP_ENABLED || '').toLowerCase() === 'true') {
       res.setHeader('Content-Security-Policy', [
         "default-src 'self'",
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://challenges.cloudflare.com https://unpkg.com",
-        "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com",
+        "script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com",
+        "style-src 'self' 'unsafe-inline'",
         "img-src 'self' data: blob: https:",
         "connect-src 'self' https:",
         "font-src 'self' data:",

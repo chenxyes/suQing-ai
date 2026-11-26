@@ -149,19 +149,15 @@
     const en = getLang() === 'en';
     _btn.textContent = en ? 'EN' : '中';
     _btn.title = en ? 'Language: English (click for 中文)' : '语言：中文（点击切换 English）';
+    _btn.setAttribute('aria-label', en ? 'Switch language to Chinese' : '切换语言为 English');
+    _btn.setAttribute('aria-pressed', en ? 'true' : 'false');
   }
   function injectToggle() {
     if (document.getElementById('xiyu-lang-toggle')) return;
     const b = document.createElement('button');
+    b.type = 'button';
     b.id = 'xiyu-lang-toggle';
-    b.setAttribute('aria-label', 'Switch language / 切换语言');
-    // 内联定位，避免依赖 glass.css；放在主题开关上方
-    b.style.cssText = [
-      'position:fixed', 'right:1rem', 'bottom:4.5rem', 'z-index:9999',
-      'width:2.5rem', 'height:2.5rem', 'border-radius:9999px', 'border:none',
-      'cursor:pointer', 'font-size:0.85rem', 'font-weight:700', 'line-height:1',
-      'background:#fff', 'color:#1D1D1F', 'box-shadow:0 4px 16px rgba(0,0,0,0.12)',
-    ].join(';');
+    b.className = 'xiyu-lang-toggle';
     _btn = b;
     renderBtn();
     b.addEventListener('click', () => set(getLang() === 'en' ? 'zh' : 'en'));

@@ -4,8 +4,8 @@
   "description": "溪语 AI — 你的专属 AI 伙伴",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#fff5fb",
-  "theme_color": "#f472b6",
+  "background_color": "#FAF7FB",
+  "theme_color": "#FFB6D9",
   "orientation": "portrait-primary",
   "icons": [
     {

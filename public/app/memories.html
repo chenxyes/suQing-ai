@@ -5,22 +5,17 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5" />
   <meta name="color-scheme" content="light dark" />
-  <meta name="theme-color" content="#FFB6D9" />
+  <meta name="theme-color" content="#FFB6D9" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0F0F12" media="(prefers-color-scheme: dark)" />
+  <meta name="robots" content="noindex, nofollow" />
+  <meta name="description" content="管理溪语 AI 伴侣的长期记忆、置顶回忆与勿提项。" />
   <title>记忆管理 · 溪语AI</title>
-  <link rel="icon" href="/logo.png?v=2" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
 
-  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/app/tailwind.css" />
   <link rel="stylesheet" href="/app/glass.css" />
-  <script>
-    tailwind.config = {
-      theme: { extend: {
-        colors: { sakura:'#FFB6D9','sakura-soft':'#FFE8F2','sakura-deep':'#FF8FB8',
-          ink:'#1D1D1F', mute:'#86868B', line:'#F0F0F2', cloud:'#FAFAFA' },
-        fontFamily: { sans: ['-apple-system','BlinkMacSystemFont','"PingFang SC"','"Hiragino Sans GB"','"Microsoft YaHei"','sans-serif'] },
-        boxShadow: { sakura: '0 4px 24px rgba(255,182,217,.15)', card: '0 12px 48px rgba(0,0,0,.06)' },
-      } },
-    };
-  </script>
   <style>
     html { -webkit-font-smoothing: antialiased; }
     body {
@@ -49,6 +44,7 @@
   <script src="/app/theme.js" defer></script>
 </head>
 <body class="min-h-screen font-sans text-ink">
+<a href="#main-content" class="skip-link">跳到主要内容</a>
 
 <!-- Nav -->
 <header class="sticky top-0 z-50 bg-white/80 backdrop-blur border-b border-line px-6 h-14 flex items-center justify-between">
@@ -62,7 +58,7 @@
   </div>
 </header>
 
-<main class="max-w-4xl mx-auto px-4 py-6 pb-24">
+<main id="main-content" class="max-w-4xl mx-auto px-4 py-6 pb-24">
 
   <!-- Stats bar -->
   <div id="statsBar" class="mb-4 text-xs text-mute hidden">
@@ -398,6 +394,9 @@ document.getElementById('btnNext').addEventListener('click', () => { page++; loa
 document.getElementById('btnAdd').addEventListener('click', () => openAddModal());
 document.getElementById('modalCancel').addEventListener('click', closeModal);
 document.getElementById('modalOverlay').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !document.getElementById('modalOverlay').classList.contains('hidden')) closeModal();
+});
 
 document.getElementById('modalSave').addEventListener('click', async () => {
   const content = document.getElementById('modalContent').value.trim();

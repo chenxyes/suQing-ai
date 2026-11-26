@@ -6,25 +6,15 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5" />
   <meta name="color-scheme" content="light dark" />
-  <meta name="theme-color" content="#FFB6D9" />
+  <meta name="theme-color" content="#FFB6D9" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0F0F12" media="(prefers-color-scheme: dark)" />
+  <meta name="description" content="溪语 AI 完全开源免费（MIT 协议），无聊天条数限制，支持自托管与多模型切换。" />
   <title>开源 · 完全免费 · 溪语AI</title>
-  <link rel="icon" href="/logo.png?v=2" />
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      theme: { extend: {
-        colors: { sakura:'#FFB6D9','sakura-soft':'#FFE8F2','sakura-deep':'#FF8FB8',
-          ink:'#1D1D1F', mute:'#86868B', line:'#F0F0F2', cloud:'#FAFAFA' },
-        fontFamily: { sans: ['-apple-system','BlinkMacSystemFont','"PingFang SC"','"Hiragino Sans GB"','"Microsoft YaHei"','sans-serif'] },
-        boxShadow: {
-          sakura: '0 4px 24px rgba(255, 182, 217, 0.15)',
-          'sakura-lg':'0 16px 48px rgba(255, 143, 184, 0.22)',
-          card: '0 12px 48px rgba(0,0,0,0.06)',
-        },
-        letterSpacing: { tightest: '-0.04em' },
-      } },
-    };
-  </script>
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+  <link rel="stylesheet" href="/app/tailwind.css" />
+  <link rel="stylesheet" href="/app/glass.css" />
   <style> html { -webkit-font-smoothing: antialiased; } </style>
   <script src="/app/theme.js" defer></script>
 </head>
@@ -81,7 +71,7 @@
     </p>
   </main>
 
-  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
-  <script>lucide.createIcons({ attrs: { 'stroke-width': 1.8 } });</script>
+  <script src="/vendor/lucide.min.js"></script>
+  <script>lucide.createIcons({ attrs: { 'stroke-width': 1.8, 'aria-hidden': 'true' } });</script>
 </body>
 </html>

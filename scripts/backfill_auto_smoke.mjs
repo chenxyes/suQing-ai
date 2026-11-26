@@ -65,7 +65,8 @@ const r2 = await backfillTimelineForCompanion({ id: 5, user_id: 1 }, { tier: 'th
 ok(r2?.skipped === 'already-backfilled', 'full 后 thin → 跳过（不会降级）');
 
 // ── 5. 静态断言 ────────────────────────────────────────────────────────────
-const dash = readFileSync(new URL('../public/app/dashboard.html', import.meta.url), 'utf8');
+const dash = readFileSync(new URL('../public/app/dashboard.html', import.meta.url), 'utf8') + '\n' +
+  readFileSync(new URL('../public/app/dashboard.js', import.meta.url), 'utf8');
 ok(!dash.includes('backfill'), 'dashboard 零 backfill 引用（用户按钮已撤）');
 const api = readFileSync(new URL('../src/api.mjs', import.meta.url), 'utf8');
 const epIdx = api.indexOf("router.post('/companions/:id/backfill-history'");
