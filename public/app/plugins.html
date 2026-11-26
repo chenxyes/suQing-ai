@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <script>(function(){try{var p=localStorage.getItem('xiyu_theme')||'auto';var d=p==='dark'||(p==='auto'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.setAttribute('data-theme',d?'dark':'light');}catch(e){}})();</script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5" />
+  <title>插件与自主冲浪管理 · 溪语AI</title>
+  <link rel="icon" href="/logo.png?v=2" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: { extend: {
+        colors: { sakura:'#FFB6D9','sakura-soft':'#FFE8F2','sakura-deep':'#FF8FB8',
+          ink:'#1D1D1F', mute:'#86868B', line:'#F0F0F2', cloud:'#FAFAFA' },
+        fontFamily: { sans: ['-apple-system','BlinkMacSystemFont','"PingFang SC"','"Hiragino Sans GB"','"Microsoft YaHei"','sans-serif'] },
+      }},
+    };
+  </script>
+  <style>
+    html { -webkit-font-smoothing: antialiased; }
+    body { background: #FAFAFA; }
+    .card { background:#fff; border-radius:18px; box-shadow:0 4px 20px rgba(0,0,0,0.05); border:1px solid #F0F0F2; }
+    .btn-primary { background: linear-gradient(135deg, #FFB6D9 0%, #FF8FB8 100%); color:#fff; border-radius:999px; font-weight:600; transition:all .15s; }
+    .btn-primary:hover:not(:disabled) { opacity:.92; }
+    .btn-primary:disabled { opacity:.5; cursor:not-allowed; }
+    .pill { display:inline-block; padding:2px 10px; border-radius:999px; font-size:11px; font-weight:600; }
+  </style>
+  <script src="/app/theme.js" defer></script>
+</head>
+<body class="min-h-screen font-sans text-ink">
+
+<div class="max-w-4xl mx-auto px-4 py-8 space-y-6">
+  <header class="flex items-center justify-between gap-3 flex-wrap">
+    <div>
+      <div class="flex items-center gap-3 text-sm text-mute mb-1">
+        <a href="/app/dashboard.html" class="hover:text-sakura-deep">← 返回控制台</a>
+        <span>·</span>
+        <a href="/app/studio.html" class="hover:text-sakura-deep">个人抖音工作台 →</a>
+      </div>
+      <h1 class="text-2xl font-bold tracking-tight">插件与不定时自主冲浪管理</h1>
+      <p class="text-xs text-mute mt-1">所有外部插件严格限制 HTTPS-Only + SSRF 防护；冲浪节奏由她按心情与空闲不定时自主决定。</p>
+    </div>
+    <div class="flex items-center gap-2">
+      <span id="companionBadge" class="text-xs text-mute"></span>
+      <button id="btnReload" type="button" class="px-4 py-2 text-xs rounded-full border border-line bg-white hover:border-sakura">刷新状态</button>
+    </div>
+  </header>
+
+  <div id="msgBox" class="hidden rounded-xl px-4 py-3 text-sm"></div>
+
+  <!-- 1. 插件启停列表 -->
+  <section class="card p-5">
+    <div class="flex items-center justify-between mb-4">
+      <div>
+        <h2 class="text-base font-bold">已注册能力插件（Phase 2）</h2>
+        <p class="text-xs text-mute mt-0.5">按当前角色独立启停；Resolver 会在聊天中自动解析 HTTPS 链接，Feed 供她不定时自主冲浪。</p>
+      </div>
+      <span class="pill bg-emerald-50 text-emerald-700">HTTPS-Only</span>
+    </div>
+    <div id="pluginList" class="space-y-3 text-sm text-mute">加载中…</div>
+  </section>
+
+  <!-- 2. 不定时自主冲浪状态 + 手动试跑 -->
+  <section class="card p-5">
+    <h2 class="text-base font-bold mb-3">自主冲浪状态与手动试跑</h2>
+    <div id="surfStateGrid" class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4"></div>
+
+    <div class="pt-4 border-t border-line flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
+      <select id="refreshPlugin" class="px-3 py-2 text-sm rounded-xl border border-line bg-cloud"></select>
+      <input id="refreshQuery" type="text" placeholder="可选：指定想搜的关键词（如 橘猫 / 悬疑电影）"
+             class="flex-1 px-3 py-2 text-sm rounded-xl border border-line bg-cloud outline-none focus:border-sakura" />
+      <button id="btnManualSurf" type="button" class="btn-primary px-5 py-2 text-sm whitespace-nowrap">
+        🌊 立即冲浪试跑
+      </button>
+    </div>
+    <p id="manualSurfMsg" class="text-xs text-mute mt-2"></p>
+  </section>
+
+  <!-- 3. 最近刷到的新鲜见闻 -->
+  <section class="card p-5">
+    <div class="flex items-center justify-between mb-3">
+      <div>
+        <h2 class="text-base font-bold">她最近刷到的见闻与碎碎念</h2>
+        <p class="text-xs text-mute mt-0.5">新鲜素材（fresh）会自然进入主动聊天候选（14 天去重），也可直接送去个人抖音工作台当灵感。</p>
+      </div>
+      <select id="feedFilter" class="px-3 py-1.5 text-xs rounded-lg border border-line bg-white">
+        <option value="">全部状态</option>
+        <option value="fresh">新鲜未使用 (fresh)</option>
+        <option value="used_chat">已聊过 (used_chat)</option>
+        <option value="used_social">已用于抖音 (used_social)</option>
+      </select>
+    </div>
+    <div id="feedList" class="space-y-3 text-sm text-mute">加载中…</div>
+  </section>
+</div>
+
+<script>
+let companionId = '';
+let pluginsCache = [];
+
+function getToken() {
+  return localStorage.getItem('xiyu_token') || localStorage.getItem('jwt_token') || sessionStorage.getItem('jwt_token') || '';
+}
+
+function authHeaders(extra = {}) {
+  const t = getToken();
+  return { ...(t ? { Authorization: `Bearer ${t}` } : {}), ...extra };
+}
+
+function showMsg(text, kind = 'info') {
+  const el = document.getElementById('msgBox');
+  el.textContent = text;
+  el.className = 'rounded-xl px-4 py-3 text-sm ' + (
+    kind === 'err' ? 'bg-red-50 text-red-700 border border-red-200'
+      : kind === 'ok' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+      : 'bg-sakura-soft text-sakura-deep border border-sakura/30'
+  );
+  el.classList.remove('hidden');
+}
+
+function fmtTs(v) {
+  if (!v) return '—';
+  const d = typeof v === 'number' ? new Date(v) : new Date(String(v).replace(' ', 'T') + (String(v).includes('T') ? '' : 'Z'));
+  if (Number.isNaN(d.getTime())) return String(v);
+  return d.toLocaleString('zh-CN', { hour12: false });
+}
+
+async function resolveCompanionId() {
+  const q = new URLSearchParams(location.search).get('id');
+  if (q) return q;
+  const cached = localStorage.getItem('xiyu_companion_id');
+  if (cached) return cached;
+  const r = await fetch('/api/me/companion', { headers: authHeaders() });
+  const j = await r.json().catch(() => ({}));
+  if (r.ok && j.ok && j.data?.companion_id) {
+    localStorage.setItem('xiyu_companion_id', String(j.data.companion_id));
+    return String(j.data.companion_id);
+  }
+  return '';
+}
+
+function renderPlugins(plugins) {
+  pluginsCache = plugins || [];
+  const box = document.getElementById('pluginList');
+  const sel = document.getElementById('refreshPlugin');
+  box.innerHTML = '';
+  sel.innerHTML = '';
+
+  const feeds = pluginsCache.filter(p => p.kind === 'feed');
+  for (const f of feeds) {
+    const opt = document.createElement('option');
+    opt.value = f.id;
+    opt.textContent = `${f.name} (${f.id})`;
+    sel.appendChild(opt);
+  }
+
+  if (!pluginsCache.length) {
+    box.textContent = '暂无已注册插件。';
+    return;
+  }
+
+  for (const p of pluginsCache) {
+    const row = document.createElement('div');
+    row.className = 'flex items-center justify-between gap-4 p-3.5 rounded-xl bg-cloud border border-line';
+    const left = document.createElement('div');
+    left.className = 'min-w-0';
+
+    const titleLine = document.createElement('div');
+    titleLine.className = 'flex items-center gap-2 flex-wrap';
+    const nameEl = document.createElement('span');
+    nameEl.className = 'font-semibold text-ink text-sm';
+    nameEl.textContent = p.name;
+    const kindBadge = document.createElement('span');
+    kindBadge.className = `pill ${p.kind === 'feed' ? 'bg-sakura-soft text-sakura-deep' : 'bg-blue-50 text-blue-700'}`;
+    kindBadge.textContent = p.kind === 'feed' ? 'Feed 冲浪源' : 'Resolver 链接解析';
+    const idBadge = document.createElement('span');
+    idBadge.className = 'text-[11px] font-mono text-mute';
+    idBadge.textContent = p.id;
+    titleLine.append(nameEl, kindBadge, idBadge);
+
+    const descEl = document.createElement('p');
+    descEl.className = 'text-xs text-mute mt-1';
+    descEl.textContent = p.description + (p.cooldown_hours ? `（单源冷却 ${p.cooldown_hours} 小时）` : '');
+    left.append(titleLine, descEl);
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `px-4 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all ${
+      p.enabled
+        ? 'bg-emerald-500 text-white hover:bg-emerald-600'
+        : 'bg-white border border-line text-mute hover:border-sakura hover:text-sakura-deep'
+    }`;
+    btn.textContent = p.enabled ? '已开启' : '已关闭';
+    btn.addEventListener('click', () => togglePlugin(p.id, !p.enabled, btn));
+
+    row.append(left, btn);
+    box.appendChild(row);
+  }
+}
+
+function renderSurfState(state) {
+  const grid = document.getElementById('surfStateGrid');
+  grid.innerHTML = '';
+  const items = [
+    { label: '下次随机检视', value: fmtTs(state?.next_surf_check_at) },
+    { label: '上次自主冲浪', value: fmtTs(state?.last_surf_at) },
+    { label: '今日已冲浪次数', value: `${state?.surf_count_today ?? 0} 次` },
+    { label: '最近一次决策', value: state?.last_decision_note || '等待唤醒' },
+  ];
+  for (const it of items) {
+    const card = document.createElement('div');
+    card.className = 'p-3 rounded-xl bg-cloud border border-line';
+    const l = document.createElement('div');
+    l.className = 'text-[11px] text-mute';
+    l.textContent = it.label;
+    const v = document.createElement('div');
+    v.className = 'text-xs font-semibold text-ink mt-1 break-all';
+    v.textContent = it.value;
+    card.append(l, v);
+    grid.appendChild(card);
+  }
+}
+
+function renderFeeds(items) {
+  const box = document.getElementById('feedList');
+  box.innerHTML = '';
+  if (!items || !items.length) {
+    box.textContent = '暂时还没有冲浪见闻，可开启 Feed 插件后点上方「立即冲浪试跑」体验。';
+    return;
+  }
+  for (const it of items) {
+    const card = document.createElement('div');
+    card.className = 'p-4 rounded-xl bg-cloud border border-line space-y-2';
+
+    const top = document.createElement('div');
+    top.className = 'flex items-center justify-between gap-2 flex-wrap';
+    const title = document.createElement('div');
+    title.className = 'font-semibold text-ink text-sm';
+    title.textContent = it.title || '(无标题)';
+
+    const statusBadge = document.createElement('span');
+    statusBadge.className = `pill ${
+      it.status === 'fresh' ? 'bg-emerald-50 text-emerald-700'
+        : it.status === 'used_social' ? 'bg-purple-50 text-purple-700'
+        : 'bg-gray-100 text-mute'
+    }`;
+    statusBadge.textContent = `${it.plugin_id} · ${it.status}`;
+    top.append(title, statusBadge);
+
+    const thought = document.createElement('p');
+    thought.className = 'text-sm text-ink bg-white rounded-lg p-2.5 border border-line';
+    thought.textContent = `💭 她的碎碎念：${it.thought_text || '（无）'}`;
+
+    const meta = document.createElement('div');
+    meta.className = 'flex items-center justify-between gap-2 flex-wrap text-xs text-mute';
+    const timeEl = document.createElement('span');
+    timeEl.textContent = `记录时间：${fmtTs(it.created_at)}`;
+    const actions = document.createElement('div');
+    actions.className = 'flex items-center gap-3';
+    if (it.source_url && it.source_url.startsWith('https://')) {
+      const a = document.createElement('a');
+      a.href = it.source_url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.className = 'text-sakura-deep hover:underline';
+      a.textContent = '查看原链接 ↗';
+      actions.appendChild(a);
+    }
+    const studioLink = document.createElement('a');
+    studioLink.href = `/app/studio.html?id=${encodeURIComponent(companionId)}&feedId=${encodeURIComponent(it.id)}`;
+    studioLink.className = 'text-ink hover:text-sakura-deep font-medium';
+    studioLink.textContent = '用作抖音灵感 →';
+    actions.appendChild(studioLink);
+
+    meta.append(timeEl, actions);
+    card.append(top, thought, meta);
+    box.appendChild(card);
+  }
+}
+
+async function togglePlugin(pluginId, nextEnabled, btn) {
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/companions/${encodeURIComponent(companionId)}/plugins/${encodeURIComponent(pluginId)}`, {
+      method: 'PUT',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ enabled: nextEnabled }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error(j.error || '更新失败');
+    showMsg(`插件 ${pluginId} 已${nextEnabled ? '开启' : '关闭'}`, 'ok');
+    await loadAll();
+  } catch (e) {
+    showMsg(e.message || '切换失败', 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function loadFeeds() {
+  const status = document.getElementById('feedFilter').value;
+  const qs = status ? `?status=${encodeURIComponent(status)}` : '';
+  const r = await fetch(`/api/companions/${encodeURIComponent(companionId)}/feeds${qs}`, { headers: authHeaders() });
+  const j = await r.json();
+  if (r.ok && j.ok) {
+    renderSurfState(j.data?.surf_state);
+    renderFeeds(j.data?.items || []);
+  }
+}
+
+async function loadAll() {
+  if (!getToken()) {
+    location.href = '/app/auth.html';
+    return;
+  }
+  companionId = await resolveCompanionId();
+  if (!companionId) {
+    showMsg('未找到角色，请先创建 AI 角色。', 'err');
+    return;
+  }
+  document.getElementById('companionBadge').textContent = `角色 #${companionId}`;
+  try {
+    const r = await fetch(`/api/companions/${encodeURIComponent(companionId)}/plugins`, { headers: authHeaders() });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error(j.error || '加载插件列表失败');
+    renderPlugins(j.data?.plugins || []);
+    renderSurfState(j.data?.surf_state);
+    await loadFeeds();
+  } catch (e) {
+    showMsg(e.message || '加载失败', 'err');
+  }
+}
+
+document.getElementById('btnReload').addEventListener('click', loadAll);
+document.getElementById('feedFilter').addEventListener('change', loadFeeds);
+document.getElementById('btnManualSurf').addEventListener('click', async () => {
+  const btn = document.getElementById('btnManualSurf');
+  const msg = document.getElementById('manualSurfMsg');
+  const pluginId = document.getElementById('refreshPlugin').value;
+  const query = document.getElementById('refreshQuery').value.trim();
+  btn.disabled = true;
+  msg.textContent = '正在自主抓取并生成碎碎念…';
+  try {
+    const r = await fetch(`/api/companions/${encodeURIComponent(companionId)}/feeds/refresh`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ plugin_id: pluginId || undefined, query }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error(j.error || '冲浪刷新失败');
+    const n = j.data?.saved?.length || 0;
+    msg.textContent = n > 0 ? `✅ 新增 ${n} 条冲浪见闻！` : '本次未发现新的未读条目（可能未配置搜索 Key 或内容已存在）。';
+    await loadFeeds();
+  } catch (e) {
+    msg.textContent = '❌ ' + (e.message || '刷新失败');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+loadAll();
+</script>
+</body>
+</html>

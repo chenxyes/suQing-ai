@@ -58,6 +58,7 @@ export function getDb() {
     migrateSilentMode();
     migrateRelationalDiary();
     migratePluginsAndFeeds();
+    migrateSocialStudio();
     migrateProactiveLastSent();
     migrateConversationTurnSynthetic();
     migrateBackfillFlag();
@@ -5363,4 +5364,172 @@ export function expireStaleFeedItems(nowIso = new Date().toISOString()) {
     WHERE status = 'fresh' AND expires_at IS NOT NULL AND expires_at <= ?
   `).run(nowIso);
   return info.changes;
+}
+
+// ─── Phase 3: 个人抖音工作台（companion_social_drafts / reply_logs）──────────
+function migrateSocialStudio() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS companion_social_drafts (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      companion_id      INTEGER NOT NULL REFERENCES companions(id) ON DELETE CASCADE,
+      platform          TEXT    NOT NULL DEFAULT 'douyin',
+      format            TEXT    NOT NULL DEFAULT 'image_post',
+      title             TEXT    NOT NULL DEFAULT '',
+      caption           TEXT    NOT NULL DEFAULT '',
+      hashtags_json     TEXT    NOT NULL DEFAULT '[]',
+      voice_script      TEXT    NOT NULL DEFAULT '',
+      visual_prompts_json TEXT  NOT NULL DEFAULT '[]',
+      media_paths_json  TEXT    NOT NULL DEFAULT '[]',
+      audio_path        TEXT,
+      video_path        TEXT,
+      source_feed_id    INTEGER,
+      status            TEXT    NOT NULL DEFAULT 'draft',
+      published_at      DATETIME,
+      backflow_done     INTEGER NOT NULL DEFAULT 0,
+      created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_social_drafts_companion
+      ON companion_social_drafts(companion_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS companion_social_reply_logs (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      companion_id    INTEGER NOT NULL REFERENCES companions(id) ON DELETE CASCADE,
+      platform        TEXT    NOT NULL DEFAULT 'douyin',
+      draft_id        INTEGER,
+      inbound_kind    TEXT    NOT NULL DEFAULT 'comment',
+      inbound_summary TEXT    NOT NULL DEFAULT '',
+      suggestions_json TEXT   NOT NULL DEFAULT '[]',
+      chosen_reply    TEXT,
+      backflow_done   INTEGER NOT NULL DEFAULT 0,
+      created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_social_reply_logs_companion
+      ON companion_social_reply_logs(companion_id, created_at DESC);
+  `);
+}
+
+function parseSocialDraftRow(row) {
+  if (!row) return null;
+  const parseArr = (s) => {
+    try { const v = JSON.parse(s || '[]'); return Array.isArray(v) ? v : []; } catch { return []; }
+  };
+  return {
+    ...row,
+    hashtags: parseArr(row.hashtags_json),
+    visual_prompts: parseArr(row.visual_prompts_json),
+    media_paths: parseArr(row.media_paths_json),
+    backflow_done: Boolean(row.backflow_done),
+  };
+}
+
+export function createSocialDraft(companionId, draft = {}) {
+  const dbRef = getDb();
+  const info = dbRef.prepare(`
+    INSERT INTO companion_social_drafts
+      (companion_id, platform, format, title, caption, hashtags_json, voice_script, visual_prompts_json, source_feed_id, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')
+  `).run(
+    companionId,
+    String(draft.platform || 'douyin').slice(0, 32),
+    draft.format === 'voice_video' ? 'voice_video' : 'image_post',
+    String(draft.title || '').slice(0, 120),
+    String(draft.caption || '').slice(0, 1000),
+    JSON.stringify(Array.isArray(draft.hashtags) ? draft.hashtags.slice(0, 10) : []),
+    String(draft.voice_script || '').slice(0, 1000),
+    JSON.stringify(Array.isArray(draft.visual_prompts) ? draft.visual_prompts.slice(0, 4) : []),
+    draft.source_feed_id ? Number(draft.source_feed_id) : null,
+  );
+  return getSocialDraftById(info.lastInsertRowid);
+}
+
+export function getSocialDraftById(id) {
+  return parseSocialDraftRow(getDb().prepare('SELECT * FROM companion_social_drafts WHERE id = ?').get(id));
+}
+
+export function listSocialDrafts(companionId, { platform = null, status = null, limit = 20 } = {}) {
+  const clauses = ['companion_id = ?'];
+  const params = [companionId];
+  if (platform) { clauses.push('platform = ?'); params.push(String(platform)); }
+  if (status) { clauses.push('status = ?'); params.push(String(status)); }
+  params.push(Math.max(1, Math.min(50, Number(limit) || 20)));
+  return getDb().prepare(`
+    SELECT * FROM companion_social_drafts
+    WHERE ${clauses.join(' AND ')}
+    ORDER BY id DESC LIMIT ?
+  `).all(...params).map(parseSocialDraftRow);
+}
+
+export function updateSocialDraft(id, patch = {}) {
+  const allowed = {
+    title: v => String(v || '').slice(0, 120),
+    caption: v => String(v || '').slice(0, 1000),
+    hashtags_json: v => (typeof v === 'string' ? v : JSON.stringify(Array.isArray(v) ? v.slice(0, 10) : [])),
+    voice_script: v => String(v || '').slice(0, 1000),
+    visual_prompts_json: v => (typeof v === 'string' ? v : JSON.stringify(Array.isArray(v) ? v.slice(0, 4) : [])),
+    media_paths_json: v => (typeof v === 'string' ? v : JSON.stringify(Array.isArray(v) ? v.slice(0, 6) : [])),
+    audio_path: v => (v ? String(v).slice(0, 300) : null),
+    video_path: v => (v ? String(v).slice(0, 300) : null),
+    status: v => (['draft', 'ready', 'published', 'discarded'].includes(v) ? v : 'draft'),
+    published_at: v => (v ? String(v) : null),
+    backflow_done: v => (v ? 1 : 0),
+  };
+  const sets = [];
+  const vals = [];
+  for (const [k, fn] of Object.entries(allowed)) {
+    if (Object.prototype.hasOwnProperty.call(patch, k)) {
+      sets.push(`${k} = ?`);
+      vals.push(fn(patch[k]));
+    }
+  }
+  if (!sets.length) return getSocialDraftById(id);
+  sets.push('updated_at = CURRENT_TIMESTAMP');
+  vals.push(id);
+  getDb().prepare(`UPDATE companion_social_drafts SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+  return getSocialDraftById(id);
+}
+
+export function insertSocialReplyLog(companionId, entry = {}) {
+  const dbRef = getDb();
+  const info = dbRef.prepare(`
+    INSERT INTO companion_social_reply_logs
+      (companion_id, platform, draft_id, inbound_kind, inbound_summary, suggestions_json, chosen_reply, backflow_done)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    companionId,
+    String(entry.platform || 'douyin').slice(0, 32),
+    entry.draft_id ? Number(entry.draft_id) : null,
+    entry.inbound_kind === 'dm' ? 'dm' : 'comment',
+    String(entry.inbound_summary || '').slice(0, 500),
+    JSON.stringify(Array.isArray(entry.suggestions) ? entry.suggestions : []),
+    entry.chosen_reply ? String(entry.chosen_reply).slice(0, 300) : null,
+    entry.backflow_done ? 1 : 0,
+  );
+  const row = dbRef.prepare('SELECT * FROM companion_social_reply_logs WHERE id = ?').get(info.lastInsertRowid);
+  if (!row) return null;
+  let suggestions = [];
+  try { suggestions = JSON.parse(row.suggestions_json || '[]') || []; } catch {}
+  return { ...row, suggestions, backflow_done: Boolean(row.backflow_done) };
+}
+
+export function listSocialReplyLogs(companionId, limit = 20) {
+  const lim = Math.max(1, Math.min(50, Number(limit) || 20));
+  return getDb().prepare(`
+    SELECT * FROM companion_social_reply_logs
+    WHERE companion_id = ?
+    ORDER BY id DESC LIMIT ?
+  `).all(companionId, lim).map(r => {
+    let suggestions = [];
+    try { suggestions = JSON.parse(r.suggestions_json || '[]') || []; } catch {}
+    return { ...r, suggestions, backflow_done: Boolean(r.backflow_done) };
+  });
+}
+
+export function markSocialReplyBackflow(id, chosenReply = null) {
+  const info = getDb().prepare(`
+    UPDATE companion_social_reply_logs
+    SET backflow_done = 1, chosen_reply = COALESCE(?, chosen_reply)
+    WHERE id = ?
+  `).run(chosenReply ? String(chosenReply).slice(0, 300) : null, id);
+  return info.changes > 0;
 }

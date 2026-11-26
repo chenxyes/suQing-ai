@@ -86,6 +86,16 @@ import { getReasoningTraces, isReasoningCaptureEnabled } from './reasoning_debug
 import './plugins/builtins.mjs';
 import { getCompanionPluginsStatus, setCompanionPluginConfig } from './plugins/registry.mjs';
 import { runManualSurfForCompanion } from './plugins/surf_engine.mjs';
+import {
+  detectFfmpeg,
+  getStudioMediaDir,
+  generateDouyinDraft,
+  renderDouyinDraftAssets,
+  suggestPublicReplies,
+  markDraftPublishedWithBackflow,
+  recordSocialReplyBackflow,
+} from './plugins/publishers/douyin_studio.mjs';
+import { isPublicStudioAllowed } from './public_persona.mjs';
 import { getActiveImageProvider } from './providers/image.mjs';
 import { getActiveVisionProvider, REGISTRY as VISION_REGISTRY } from './providers/vision.mjs';
 import { getActiveAsrProvider, REGISTRY as ASR_REGISTRY } from './providers/asr.mjs';
@@ -167,6 +177,7 @@ import {
   deleteCompanionForAccount,
   getMemoriesV2, patchMemory, softDeleteMemory, archiveMemory, isCompanionOwnedByAccount,
   listCompanionFeedItems, getSurfState,
+  listSocialDrafts, getSocialDraftById, updateSocialDraft, listSocialReplyLogs,
   listPreferences, upsertPreference, deletePreference,  // v1.8.0 #3
   listShaping,  // 共建留痕（你们的默契）
   upsertEmotionState,
@@ -3877,6 +3888,153 @@ router.post('/companions/:id/feeds/refresh',
     }
   },
 );
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 3: public_mode 公域隔离 + 个人抖音工作台（Douyin Studio）
+// ─────────────────────────────────────────────────────────────────────────────
+
+// GET /api/companions/:id/social/drafts
+router.get('/companions/:id/social/drafts', requireAuth, (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+  const gate = isPublicStudioAllowed(c);
+  const status = typeof req.query.status === 'string' && req.query.status.trim() ? req.query.status.trim() : null;
+  const limit = Math.max(1, Math.min(50, Number(req.query.limit) || 20));
+  return ok(res, {
+    studio_allowed: gate.allowed,
+    studio_lock_reason: gate.allowed ? null : (gate.message || gate.reason),
+    ffmpeg: detectFfmpeg(),
+    drafts: listSocialDrafts(id, { platform: 'douyin', status, limit }),
+    reply_logs: listSocialReplyLogs(id, 15),
+  });
+});
+
+// POST /api/companions/:id/social/drafts/generate
+router.post('/companions/:id/social/drafts/generate',
+  requireAuth,
+  rateLimit({ scope: 'social-draft-gen', maxPerWindow: 6, windowMs: 60_000, message: '草稿生成过于频繁，请稍后再试' }),
+  async (req, res) => {
+    const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+    const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+    const format = req.body?.format === 'voice_video' ? 'voice_video' : 'image_post';
+    const topicHint = typeof req.body?.topic_hint === 'string' ? req.body.topic_hint.trim().slice(0, 120) : '';
+    const sourceFeedId = req.body?.source_feed_id ? intId(req.body.source_feed_id) : null;
+    try {
+      const result = await generateDouyinDraft(c, { format, topicHint, sourceFeedId });
+      return ok(res, result, 201);
+    } catch (e) {
+      if (e.code === 'FORBIDDEN') return err(res, e.message, 403);
+      log('warn', `[API] social/drafts/generate 失败 companion=${id}: ${e.message}`);
+      return err(res, e.message || '生成草稿失败', 502);
+    }
+  },
+);
+
+// POST /api/companions/:id/social/drafts/:draftId/render
+router.post('/companions/:id/social/drafts/:draftId/render',
+  requireAuth,
+  rateLimit({ scope: 'social-draft-render', maxPerWindow: 4, windowMs: 60_000, message: '素材合成过于频繁，请稍后再试' }),
+  async (req, res) => {
+    const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+    const draftId = intId(req.params.draftId); if (!draftId) return err(res, 'draftId 无效');
+    const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+    const draft = getSocialDraftById(draftId);
+    if (!draft || Number(draft.companion_id) !== id) return err(res, '草稿不存在', 404);
+    try {
+      const result = await renderDouyinDraftAssets(c, draft);
+      return ok(res, result);
+    } catch (e) {
+      if (e.code === 'FORBIDDEN') return err(res, e.message, 403);
+      log('warn', `[API] social/drafts/render 失败 companion=${id} draft=${draftId}: ${e.message}`);
+      return err(res, e.message || '素材合成失败', 500);
+    }
+  },
+);
+
+// POST /api/companions/:id/social/drafts/:draftId/mark-published
+router.post('/companions/:id/social/drafts/:draftId/mark-published', requireAuth, (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const draftId = intId(req.params.draftId); if (!draftId) return err(res, 'draftId 无效');
+  const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+  const backflow = req.body?.backflow !== false;
+  const note = typeof req.body?.note === 'string' ? req.body.note.trim().slice(0, 120) : '';
+  try {
+    const result = markDraftPublishedWithBackflow(c, draftId, { backflow, note });
+    return ok(res, result);
+  } catch (e) {
+    if (e.code === 'NOT_FOUND') return err(res, e.message, 404);
+    return err(res, e.message || '标记发布失败', 500);
+  }
+});
+
+// POST /api/companions/:id/social/drafts/:draftId/discard
+router.post('/companions/:id/social/drafts/:draftId/discard', requireAuth, (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const draftId = intId(req.params.draftId); if (!draftId) return err(res, 'draftId 无效');
+  const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+  const draft = getSocialDraftById(draftId);
+  if (!draft || Number(draft.companion_id) !== id) return err(res, '草稿不存在', 404);
+  return ok(res, { draft: updateSocialDraft(draftId, { status: 'discarded' }) });
+});
+
+// GET /api/companions/:id/social/media/:draftId/:filename — 鉴权受控下载合成的图片/配音/MP4
+router.get('/companions/:id/social/media/:draftId/:filename', requireAuth, (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const draftId = intId(req.params.draftId); if (!draftId) return err(res, 'draftId 无效');
+  const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+  const safeName = path.basename(String(req.params.filename || ''));
+  if (!/^[A-Za-z0-9_.-]+$/.test(safeName)) return err(res, '文件名无效', 400);
+  const fullPath = path.join(getStudioMediaDir(id, draftId), safeName);
+  if (!existsSync(fullPath)) return err(res, '文件不存在', 404);
+  return res.sendFile(fullPath);
+});
+
+// POST /api/companions/:id/social/reply-suggest
+router.post('/companions/:id/social/reply-suggest',
+  requireAuth,
+  rateLimit({ scope: 'social-reply-suggest', maxPerWindow: 12, windowMs: 60_000, message: '拟稿过于频繁，请稍后再试' }),
+  async (req, res) => {
+    const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+    const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+    const inboundKind = req.body?.inbound_kind === 'dm' ? 'dm' : 'comment';
+    const inboundText = typeof req.body?.inbound_text === 'string' ? req.body.inbound_text : '';
+    const screenshotBase64 = typeof req.body?.screenshot_base64 === 'string' ? req.body.screenshot_base64 : '';
+    const screenshotMime = typeof req.body?.screenshot_mime === 'string' ? req.body.screenshot_mime : 'image/jpeg';
+    const draftId = req.body?.draft_id ? intId(req.body.draft_id) : null;
+    try {
+      const result = await suggestPublicReplies(c, {
+        inboundKind,
+        inboundText,
+        screenshotBase64,
+        screenshotMime,
+        draftId,
+      });
+      return ok(res, result);
+    } catch (e) {
+      if (e.code === 'FORBIDDEN') return err(res, e.message, 403);
+      if (e.code === 'BAD_INPUT') return err(res, e.message, 400);
+      if (e.code === 'PAYLOAD_TOO_LARGE') return err(res, e.message, 413);
+      log('warn', `[API] social/reply-suggest 失败 companion=${id}: ${e.message}`);
+      return err(res, e.message || '生成候选回复失败', 502);
+    }
+  },
+);
+
+// POST /api/companions/:id/social/replies/:logId/backflow
+router.post('/companions/:id/social/replies/:logId/backflow', requireAuth, (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const logId = intId(req.params.logId); if (!logId) return err(res, 'logId 无效');
+  const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+  const chosenReply = typeof req.body?.chosen_reply === 'string' ? req.body.chosen_reply.trim().slice(0, 300) : '';
+  const note = typeof req.body?.note === 'string' ? req.body.note.trim().slice(0, 120) : '';
+  try {
+    const result = recordSocialReplyBackflow(c, logId, { chosenReply, note });
+    return ok(res, result);
+  } catch (e) {
+    if (e.code === 'NOT_FOUND') return err(res, e.message, 404);
+    return err(res, e.message || '回流失败', 500);
+  }
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 用户 AI 用量（自查）
