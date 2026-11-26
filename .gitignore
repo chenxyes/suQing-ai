@@ -78,3 +78,9 @@ data/exports/
 .worktrees/
 .superpowers/
 .release/
+.venv/
+
+# Local sticker assets & runtime wishlist (keep README and empty example tracked)
+assets/stickers/*
+!assets/stickers/README.md
+!assets/stickers/manifest.example.json

@@ -74,6 +74,10 @@ fetch('/api/setup/status').then(r => r.json()).then(d => {
     if (drawer) drawer.remove();
     const mask = document.getElementById('model-mask');
     if (mask) mask.remove();
+    const modelTabBtn = document.querySelector('.dash-tab[data-dash-tab="models"]');
+    if (modelTabBtn) modelTabBtn.remove();
+    const modelTabPanel = document.getElementById('dash-tab-models');
+    if (modelTabPanel) modelTabPanel.remove();
     const badge = document.getElementById('plan-badge');
     if (badge) badge.remove();
   }
@@ -1084,6 +1088,7 @@ async function loadTrendSection(companionId) {
 }
 
 function renderEmotionChart(points) {
+  window.__lastEmotionPoints = points;
   const canvas = document.getElementById('emotion-canvas');
   if (!canvas) return;
   const W = canvas.offsetWidth || 400;
@@ -1349,10 +1354,6 @@ async function loadP2Section(companionId) {
       importInput.value = '';
     });
   }
-}
-
-function escapeHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 function showToast(text) {
@@ -1685,6 +1686,96 @@ document.addEventListener('keydown', (e) => {
 document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.currentTarget.click(); }
 });
+
+// ─── 控制台 5 分区原生 Tab + 手风琴折叠交互（全部原地切换，不割裂跳页） ──────
+(function initDashboardWorkspace() {
+  const tabs = Array.from(document.querySelectorAll('.dash-tab[data-dash-tab]'));
+  const ALL_TABS = ['settings', 'stories', 'tools', 'stickers', 'models'];
+  function switchDashTab(name) {
+    tabs.forEach((btn) => {
+      const active = btn.dataset.dashTab === name;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    for (const k of ALL_TABS) {
+      document.getElementById('dash-tab-' + k)?.classList.toggle('hidden', k !== name);
+    }
+    const tabScroller = document.querySelector('#dash-workspace .dash-tab-scroll');
+    if (tabScroller) tabScroller.scrollTop = 0;
+    if (name === 'stories' && window.__lastEmotionPoints) {
+      requestAnimationFrame(() => renderEmotionChart(window.__lastEmotionPoints));
+    }
+    if (name === 'stickers' && window.XiyuStickerStudio) {
+      window.XiyuStickerStudio.mount('#dash-sticker-root', { standalone: false });
+    }
+    if (name === 'models' && window.XiyuModelPanel) {
+      window.XiyuModelPanel.refresh();
+    }
+  }
+  tabs.forEach((btn) => btn.addEventListener('click', () => switchDashTab(btn.dataset.dashTab)));
+  document.querySelectorAll('[data-jump-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const target = btn.dataset.jumpTab;
+      if (!target) return;
+      switchDashTab(target);
+      if (window.innerWidth < 860) {
+        document.getElementById('dash-workspace')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
+  });
+
+  // 手风琴项：点击标题行展开/折叠；点行内 toggle 或链接不触发折叠
+  const accItems = Array.from(document.querySelectorAll('.dash-acc-item'));
+  accItems.forEach((item) => {
+    const head = item.querySelector('.dash-acc-head');
+    const body = item.querySelector('.dash-acc-body');
+    if (!head || !body) return;
+
+    item.querySelectorAll('.dash-acc-stop').forEach((el) => {
+      el.addEventListener('click', (e) => e.stopPropagation());
+    });
+
+    function toggleItem() {
+      const willOpen = body.hidden;
+      // 同一个列表内手风琴互斥展开，保持页面简洁
+      const list = item.parentElement;
+      if (willOpen && list) {
+        list.querySelectorAll('.dash-acc-item.open').forEach((other) => {
+          if (other === item) return;
+          other.classList.remove('open');
+          const ob = other.querySelector('.dash-acc-body');
+          const oh = other.querySelector('.dash-acc-head');
+          if (ob) ob.hidden = true;
+          if (oh) oh.setAttribute('aria-expanded', 'false');
+        });
+      }
+      item.classList.toggle('open', willOpen);
+      body.hidden = !willOpen;
+      head.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+    }
+
+    head.addEventListener('click', toggleItem);
+    head.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleItem(); }
+    });
+  });
+
+  // 实时同步折叠行摘要（作息时间 / 主动找你条数）
+  const syncSummaries = () => {
+    const bed = document.getElementById('dial-bed-time')?.textContent;
+    const wake = document.getElementById('dial-wake-time')?.textContent;
+    const sleepSub = document.getElementById('acc-sub-sleep');
+    if (sleepSub && bed && wake) sleepSub.textContent = `${bed} – ${wake} · 点击调整作息`;
+    const target = document.getElementById('proactive-target-val')?.textContent;
+    const proOn = document.getElementById('t-proactive')?.checked;
+    const proSub = document.getElementById('acc-sub-proactive');
+    if (proSub) proSub.textContent = proOn ? `已开启 · 每天约 ${target || 4} 条` : '已关闭 · 点击调整频率';
+  };
+  document.getElementById('proactive-target-slider')?.addEventListener('input', syncSummaries);
+  document.getElementById('t-proactive')?.addEventListener('change', syncSummaries);
+  document.getElementById('btn-sleep-save')?.addEventListener('click', () => setTimeout(syncSummaries, 200));
+  setTimeout(syncSummaries, 900);
+})();
 
 load().catch(e => {
   document.getElementById('loading').classList.add('hidden');

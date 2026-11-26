@@ -112,19 +112,15 @@
     providers: {},
     activeChat: '',
     activeChatModel: '',
-    open: false,
     selectedCap: null,
   };
 
-  const mask        = document.getElementById('model-mask');
-  const drawer      = document.getElementById('model-drawer');
-  const openBtn     = document.getElementById('btn-open-model');
-  const closeBtn    = document.getElementById('ms-close');
-  const headerLabel = document.getElementById('header-model-label');
   const layoutEl    = document.getElementById('ms-layout');
   const detailEl    = document.getElementById('ms-detail');
   const detailClose = document.getElementById('ms-detail-close');
   const navItems    = Array.from(document.querySelectorAll('#ms-cap-list .ms-nav-item'));
+
+  if (!layoutEl || !detailEl) return;
 
   function placeDetailForViewport() {
     if (!MS.selectedCap) {
@@ -138,8 +134,6 @@
     }
   }
 
-  if (!drawer || !mask || !openBtn) return;
-
   function tokenHeaders() {
     const token = localStorage.getItem('xiyu_token') || '';
     return { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token };
@@ -147,38 +141,9 @@
 
   function isCustomChat(id) { return id === 'openai-compatible'; }
 
-  function openDrawer() {
-    mask.classList.add('open');
-    drawer.classList.add('open');
-    drawer.setAttribute('aria-hidden', 'false');
-    openBtn.setAttribute('aria-expanded', 'true');
-    MS.open = true;
-    // 打开时先以干净的一竖列呈现，点击某能力再弹出右侧配置详情
-    selectCap(null);
-    refreshAll();
-    closeBtn?.focus();
-  }
-
-  function closeDrawer() {
-    mask.classList.remove('open');
-    drawer.classList.remove('open');
-    drawer.classList.remove('has-detail');
-    drawer.setAttribute('aria-hidden', 'true');
-    openBtn.setAttribute('aria-expanded', 'false');
-    MS.open = false;
-    selectCap(null);
-    openBtn.focus();
-  }
-
-  openBtn.addEventListener('click', openDrawer);
-  closeBtn?.addEventListener('click', closeDrawer);
-  mask.addEventListener('click', closeDrawer);
   detailClose?.addEventListener('click', () => selectCap(null));
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && MS.open) {
-      if (MS.selectedCap) selectCap(null);
-      else closeDrawer();
-    }
+    if (e.key === 'Escape' && MS.selectedCap) selectCap(null);
   });
 
   navItems.forEach((btn) => {
@@ -203,7 +168,12 @@
     placeDetailForViewport();
     detailEl.hidden = false;
     renderDetail(MS.selectedCap);
-    setTimeout(() => detailEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 40);
+    setTimeout(() => {
+      const r = detailEl.getBoundingClientRect();
+      if (r.top < 80 || r.top > window.innerHeight - 100) {
+        detailEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }, 40);
   }
 
   function setMsg(elId, text, kind = 'info') {
@@ -267,20 +237,13 @@
       MS.activeChat = MS.data.chat_provider || '';
       MS.activeChatModel = MS.data.chat_model_override || '';
       refreshNavBadges();
-      updateHeaderLabel(MS.activeChat, MS.data.chat_model || '');
       if (MS.selectedCap) renderDetail(MS.selectedCap);
     } catch (e) {
       if (MS.selectedCap === 'chat') setMsg('ms-chat-msg', '加载失败：' + e.message, 'err');
     }
   }
 
-  function updateHeaderLabel(provider, model) {
-    if (!headerLabel) return;
-    if (!provider) { headerLabel.textContent = 'AI 模型'; return; }
-    const label = MS.providers[provider]?.label || provider;
-    const short = label.length > 14 ? label.slice(0, 13) + '…' : label;
-    headerLabel.textContent = model ? `${short} · ${model}` : short;
-  }
+  window.XiyuModelPanel = { refresh: refreshAll };
 
   function renderDetail(cap) {
     const meta = CAP_META[cap];

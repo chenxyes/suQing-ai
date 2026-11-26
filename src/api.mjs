@@ -1824,6 +1824,190 @@ router.post('/admin/stickers/reload', requireAdmin, async (req, res) => {
   return ok(res, { count: stickers.length });
 });
 
+// ─── 表情包工坊 & 心愿收藏箱（/api/stickers/*）───────────────────────────────
+async function resolveCompanionForStickerReq(req) {
+  const cid = intId(req.body?.companion_id || req.query?.companion_id);
+  if (cid) {
+    const c = getCompanionById(cid);
+    if (c && isCompanionOwnedByAccount(c.id, req.authUser.id)) return c;
+  }
+  const db = getDb();
+  const botId = process.env.ILINK_BOT_ID || '';
+  return findCurrentCompanionForAccount(db, req.authUser.id, botId) || null;
+}
+
+router.get('/stickers', requireAuth, async (_req, res) => {
+  try {
+    const { getStickerStudioState } = await import('./sticker_studio.mjs');
+    return ok(res, getStickerStudioState());
+  } catch (e) {
+    return err(res, e.message, 500);
+  }
+});
+
+router.get('/stickers/file/:fname', async (req, res) => {
+  const { resolveStickerFilePath } = await import('./sticker_studio.mjs');
+  const full = resolveStickerFilePath(req.params.fname, { candidate: false });
+  if (!full) return res.status(404).end();
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  return res.sendFile(full);
+});
+
+router.get('/stickers/candidate/:fname', async (req, res) => {
+  const { resolveStickerFilePath } = await import('./sticker_studio.mjs');
+  const full = resolveStickerFilePath(req.params.fname, { candidate: true });
+  if (!full) return res.status(404).end();
+  res.setHeader('Cache-Control', 'no-cache');
+  return res.sendFile(full);
+});
+
+router.post('/stickers/upload', requireAuth, blockIfHosted, async (req, res) => {
+  try {
+    const { importStickerFromBase64 } = await import('./sticker_studio.mjs');
+    const item = await importStickerFromBase64({
+      imageBase64: req.body?.image_base64,
+      filename: req.body?.filename,
+      tags: req.body?.tags,
+      emotion: req.body?.emotion,
+      description: req.body?.description,
+      autoTag: Boolean(req.body?.auto_tag),
+    });
+    return ok(res, item, 201);
+  } catch (e) {
+    return err(res, e.message, 400);
+  }
+});
+
+router.patch('/stickers/:id', requireAuth, blockIfHosted, async (req, res) => {
+  try {
+    const { updateStickerMeta } = await import('./sticker_studio.mjs');
+    const updated = updateStickerMeta(req.params.id, {
+      tags: req.body?.tags,
+      emotion: req.body?.emotion,
+      description: req.body?.description,
+      disabled: req.body?.disabled,
+    });
+    if (!updated) return err(res, '表情包不存在', 404);
+    return ok(res, updated);
+  } catch (e) {
+    return err(res, e.message, 400);
+  }
+});
+
+router.delete('/stickers/:id', requireAuth, blockIfHosted, async (req, res) => {
+  try {
+    const { deleteSticker } = await import('./sticker_studio.mjs');
+    const removed = deleteSticker(req.params.id);
+    if (!removed) return err(res, '表情包不存在', 404);
+    return ok(res, { deleted: true });
+  } catch (e) {
+    return err(res, e.message, 500);
+  }
+});
+
+router.post('/stickers/recommend-packs', requireAuth, async (req, res) => {
+  try {
+    const { recommendPacksForCompanion } = await import('./sticker_studio.mjs');
+    const companion = await resolveCompanionForStickerReq(req);
+    return ok(res, recommendPacksForCompanion(companion));
+  } catch (e) {
+    return err(res, e.message, 500);
+  }
+});
+
+router.post('/stickers/fetch-packs', requireAuth, blockIfHosted, async (req, res) => {
+  try {
+    const { fetchCuratedPacks } = await import('./sticker_studio.mjs');
+    const packIds = Array.isArray(req.body?.pack_ids) ? req.body.pack_ids : [];
+    const perPack = Number(req.body?.per_pack) || 8;
+    const result = await fetchCuratedPacks(packIds, { perPack });
+    return ok(res, result);
+  } catch (e) {
+    return err(res, e.message, 400);
+  }
+});
+
+router.post('/stickers/generate', requireAuth, blockIfHosted, async (req, res) => {
+  try {
+    const { generateCustomSticker } = await import('./sticker_studio.mjs');
+    const companion = await resolveCompanionForStickerReq(req);
+    const created = await generateCustomSticker({
+      companion,
+      emotion: req.body?.emotion || 'happy',
+      tags: req.body?.tags || [],
+      promptHint: req.body?.prompt_hint || '',
+      style: req.body?.style || 'chibi',
+    });
+    return ok(res, created, 201);
+  } catch (e) {
+    return err(res, e.message, 400);
+  }
+});
+
+router.post('/stickers/wishlist', requireAuth, blockIfHosted, async (req, res) => {
+  try {
+    const { recordStickerWish } = await import('./sticker_studio.mjs');
+    const companion = await resolveCompanionForStickerReq(req);
+    const tag = String(req.body?.tag || '').trim();
+    if (!tag) return err(res, '请输入想要收集的标签或情绪');
+    const wish = recordStickerWish({
+      tag,
+      companionId: companion?.id || null,
+      context: req.body?.context || '手动添加心愿',
+      autoCollect: Boolean(req.body?.auto_collect),
+    });
+    return ok(res, wish, 201);
+  } catch (e) {
+    return err(res, e.message, 400);
+  }
+});
+
+router.post('/stickers/wishlist/settings', requireAuth, blockIfHosted, async (req, res) => {
+  try {
+    const { setWishlistAutoApprove } = await import('./sticker_studio.mjs');
+    return ok(res, setWishlistAutoApprove(Boolean(req.body?.auto_approve)));
+  } catch (e) {
+    return err(res, e.message, 400);
+  }
+});
+
+router.post('/stickers/wishlist/:id/collect', requireAuth, blockIfHosted, async (req, res) => {
+  try {
+    const { fulfillStickerWish } = await import('./sticker_studio.mjs');
+    const companion = await resolveCompanionForStickerReq(req);
+    const strategy = ['auto', 'curated', 'ai'].includes(req.body?.strategy) ? req.body.strategy : 'auto';
+    const result = await fulfillStickerWish(req.params.id, { strategy, companion });
+    return ok(res, result);
+  } catch (e) {
+    return err(res, e.message, 400);
+  }
+});
+
+router.post('/stickers/wishlist/:id/approve', requireAuth, blockIfHosted, async (req, res) => {
+  try {
+    const { approveStickerWish } = await import('./sticker_studio.mjs');
+    const sticker = approveStickerWish(req.params.id, {
+      tags: req.body?.tags,
+      emotion: req.body?.emotion,
+      description: req.body?.description,
+    });
+    return ok(res, sticker);
+  } catch (e) {
+    return err(res, e.message, 400);
+  }
+});
+
+router.delete('/stickers/wishlist/:id', requireAuth, blockIfHosted, async (req, res) => {
+  try {
+    const { dismissStickerWish } = await import('./sticker_studio.mjs');
+    const removed = dismissStickerWish(req.params.id);
+    if (!removed) return err(res, '心愿记录不存在', 404);
+    return ok(res, { deleted: true });
+  } catch (e) {
+    return err(res, e.message, 500);
+  }
+});
+
 // GET /api/companions/user/:uid
 router.get('/companions/user/:uid', requireAuth, (req, res) => {
   const { uid } = req.params;

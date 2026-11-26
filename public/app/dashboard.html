@@ -14,9 +14,10 @@
   <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
   <link rel="manifest" href="/manifest.webmanifest" />
-  <link rel="stylesheet" href="/app/tailwind.css" />
-  <link rel="stylesheet" href="/app/glass.css" />
-  <link rel="stylesheet" href="/app/dashboard.css" />
+  <link rel="stylesheet" href="/app/tailwind.css?v=35" />
+  <link rel="stylesheet" href="/app/glass.css?v=35" />
+  <link rel="stylesheet" href="/app/dashboard.css?v=35" />
+  <link rel="stylesheet" href="/app/stickers.css?v=35" />
   <script src="/app/theme.js" defer></script>
   <script src="/app/shared.js" defer></script>
   <script src="/app/dashboard.i18n.js" defer></script>
@@ -28,15 +29,12 @@
   <!-- v1.9.7: 手机端 header 重构 — 缩 padding/gap、logo 文字不换行、
        model 按钮缩成图标、user-name 在小屏隐藏。整体不挤、不截断、不强制换行。 -->
   <header class="border-b border-line bg-white/80 backdrop-blur-xl sticky top-0 z-20">
-    <div class="max-w-content mx-auto px-3 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2" style="max-width:1120px;">
+    <div class="max-w-content mx-auto px-3 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2" style="max-width:1200px;">
       <a href="/" class="flex items-center gap-2 sm:gap-2.5 flex-shrink-0 min-w-0">
         <img src="/logo-256.webp?v=2" alt="溪语AI" class="w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex-shrink-0" />
         <span class="text-[15px] font-semibold tracking-tight whitespace-nowrap">溪语AI</span>
       </a>
       <div class="flex items-center gap-2 sm:gap-4 flex-shrink min-w-0">
-        <button type="button" id="btn-open-model" class="header-model-btn" title="切换 AI 模型" aria-label="切换 AI 模型" aria-expanded="false" aria-controls="model-drawer">
-          <span aria-hidden="true">⚙</span><span id="header-model-label">AI 模型</span>
-        </button>
         <span id="user-name" class="hidden sm:inline text-[13px] font-medium text-mute truncate max-w-[120px]"></span>
         <span id="plan-badge" class="text-[11px] font-bold px-2 py-0.5 rounded-full pro-chip whitespace-nowrap flex-shrink-0">开源版</span>
         <button type="button" id="btn-logout" class="text-[13px] font-medium text-mute hover:text-ink transition-colors whitespace-nowrap flex-shrink-0">登出</button>
@@ -56,22 +54,14 @@
     <svg class="petal" style="left:92%; width:14px; animation-duration:19s; animation-delay:5s"><use href="#petal-d"/></svg>
   </div>
 
-  <main id="main-content" class="relative z-10 max-w-[1120px] mx-auto px-4 sm:px-6 py-8 sm:py-10 lg:py-12">
-    <div id="toast" role="status" aria-live="polite" class="hidden mb-6 px-4 py-3 rounded-xl bg-emerald-50 text-emerald-600 text-[14px] font-semibold shadow-card"></div>
+  <main id="main-content" class="relative z-10 max-w-[1200px] mx-auto px-4 sm:px-6 py-4 sm:py-6">
+    <div id="toast" role="status" aria-live="polite" class="hidden fixed top-[76px] left-1/2 -translate-x-1/2 z-50 px-5 py-2.5 rounded-full bg-emerald-50 border border-emerald-200/80 text-emerald-700 text-[13px] font-semibold shadow-card pointer-events-none whitespace-nowrap"></div>
 
     <!-- v1.20 安全模式横幅（safe_mode=1 时显示） -->
-    <div id="safe-mode-banner" style="display:none" class="mb-6 p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-800">
+    <div id="safe-mode-banner" style="display:none" class="mb-4 p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-800">
       <p class="text-[14px] font-bold mb-1">🛡 当前处于安全模式</p>
       <p class="text-[12px] leading-relaxed">检测到对话中可能涉及未成年人，她已切换为<b>朋友身份</b>陪伴（无恋爱/暧昧内容）。这是为保护未成年人的固定策略，不能通过普通设置关闭。</p>
       <button id="btn-age-attest" type="button" class="mt-3 text-[12px] font-semibold text-amber-800 border border-amber-300 rounded-full px-3 py-1.5 hover:bg-amber-100 transition-all">我已成年 · 重新进行年龄声明</button>
-    </div>
-
-    <!-- Greeting -->
-    <div class="mb-8 reveal">
-      <h1 class="text-[28px] sm:text-[40px] font-bold tracking-tightest leading-[1.1]">
-        你好，<span id="greet-name" class="bg-gradient-to-r from-sakura-deep to-rose-500 bg-clip-text text-transparent">朋友</span>
-      </h1>
-      <p class="mt-3 text-[15px] text-mute font-medium" id="greet-subtitle">这是你和她共同的小世界 ✿</p>
     </div>
 
     <!-- Loading -->
@@ -81,7 +71,7 @@
     </div>
 
     <!-- No companion yet -->
-    <div id="no-companion" class="hidden card p-10 text-center">
+    <div id="no-companion" class="hidden card p-10 text-center max-w-lg mx-auto my-10">
       <div class="w-16 h-16 mx-auto rounded-2xl bg-sakura-soft flex items-center justify-center mb-5">
         <i data-lucide="user-plus" class="w-8 h-8 text-sakura-deep"></i>
       </div>
@@ -92,759 +82,801 @@
       </a>
     </div>
 
-    <!-- Has companion -->
-    <div id="has-companion" class="hidden grid lg:grid-cols-3 gap-5">
+    <!-- Has companion · 方案 2：左侧固定角色栏 + 右侧 5 Tab 工作区 -->
+    <div id="has-companion" class="hidden dash-shell">
 
-      <!-- Profile card (large) -->
-      <div class="lg:col-span-2 card p-8 relative overflow-hidden">
-        <!-- 装饰背景渐变 -->
-        <div class="absolute -top-20 -right-20 w-64 h-64 rounded-full bg-gradient-to-br from-sakura-soft to-transparent opacity-60 pointer-events-none" aria-hidden="true"></div>
+      <!-- ═══ 左侧固定角色名片栏 ═══ -->
+      <aside class="dash-sidebar space-y-3.5">
+        <!-- 紧凑角色名片卡 -->
+        <div class="card p-5 relative overflow-hidden">
+          <div class="absolute -top-16 -right-16 w-48 h-48 rounded-full bg-gradient-to-br from-sakura-soft to-transparent opacity-60 pointer-events-none" aria-hidden="true"></div>
 
-        <div class="relative flex items-start gap-5">
-          <div class="avatar-ring shrink-0">
-            <img id="c-avatar" src="/default-avatar.webp" class="w-20 h-20 object-cover" />
+          <!-- 1 行精简问候 -->
+          <div class="relative flex items-baseline justify-between gap-2 pb-3 mb-3.5 border-b border-line/70">
+            <h1 class="text-[13px] font-bold tracking-tight shrink-0">
+              你好，<span id="greet-name" class="bg-gradient-to-r from-sakura-deep to-rose-500 bg-clip-text text-transparent">朋友</span>
+            </h1>
+            <p class="text-[11px] text-mute font-medium truncate" id="greet-subtitle">这是你和她共同的小世界 ✿</p>
           </div>
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center gap-2 flex-wrap">
-              <h2 id="c-name" class="text-[26px] font-bold tracking-tight"></h2>
-              <span id="c-mood" class="mood-pill px-3 py-1 rounded-full text-[11px] font-semibold"></span>
+
+          <!-- 头像与身份 -->
+          <div class="relative flex items-center gap-3.5">
+            <div class="avatar-ring shrink-0">
+              <img id="c-avatar" src="/default-avatar.webp" alt="伴侣头像" class="w-14 h-14 object-cover" />
             </div>
-            <p id="c-meta" class="text-[13px] text-mute font-medium mt-1"></p>
-            <div class="flex items-center gap-3 mt-2.5">
-              <span id="c-stage" class="text-[12px] text-sakura-deep font-bold"></span>
-              <span class="text-[12px] text-mute font-medium" id="c-days">—</span>
-              <button id="btn-regen-identity" class="ml-auto text-[11px] text-sakura-deep hover:underline font-medium whitespace-nowrap" title="一次生成 4 张候选自拍，选最满意的锁为后续生图基准">🎨 重生形象</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- 5 段式关系阶段进度 -->
-        <div class="relative mt-8">
-          <div class="flex items-center justify-between mb-2.5">
-            <div class="flex items-center gap-2">
-              <i data-lucide="heart" class="w-4 h-4 text-sakura-deep"></i>
-              <span class="text-[13px] font-semibold">好感度</span>
-            </div>
-            <span class="text-[13px] font-bold text-sakura-deep"><span id="aff-val">0</span> <span class="text-mute font-medium">/ 100</span></span>
-          </div>
-          <div class="w-full h-2.5 bg-cloud rounded-full overflow-hidden mb-2">
-            <div id="aff-bar" class="stat-bar" style="width:0%"></div>
-          </div>
-          <div class="stage-track mb-2">
-            <div class="stage-seg" id="stage-seg-0"></div>
-            <div class="stage-seg" id="stage-seg-1"></div>
-            <div class="stage-seg" id="stage-seg-2"></div>
-            <div class="stage-seg" id="stage-seg-3"></div>
-            <div class="stage-seg" id="stage-seg-4"></div>
-          </div>
-          <div class="grid grid-cols-5 text-[10px] text-mute font-medium text-center">
-            <span>陌生</span><span>朋友</span><span>暧昧</span><span>恋人</span><span>深爱</span>
-          </div>
-        </div>
-
-        <!-- v1.4.1: 想念度小条 -->
-        <div class="mt-5" id="missing-meter-row" style="display:none;">
-          <div class="flex items-center justify-between mb-1.5">
-            <div class="flex items-center gap-2">
-              <i data-lucide="sparkles" class="w-3.5 h-3.5 text-sakura-deep"></i>
-              <span class="text-[12px] font-semibold text-mute">她想你的程度</span>
-            </div>
-            <span class="text-[12px] font-bold text-sakura-deep" id="missing-label">—</span>
-          </div>
-          <div class="w-full h-1.5 bg-cloud rounded-full overflow-hidden">
-            <div id="missing-bar" class="h-full transition-all duration-700" style="width:0%; background: linear-gradient(90deg, #FFC2E0, #FF8FB8);"></div>
-          </div>
-        </div>
-
-        <!-- v1.4.1: 今天她想对你说的话 -->
-        <div id="daily-thought-card" class="mt-5 p-4 rounded-2xl bg-gradient-to-br from-sakura-soft/60 to-white border border-sakura-soft/70" style="display:none;">
-          <div class="flex items-start justify-between gap-3">
             <div class="flex-1 min-w-0">
-              <div class="flex items-center gap-2 mb-2">
-                <i data-lucide="message-circle-heart" class="w-4 h-4 text-sakura-deep"></i>
-                <span class="text-[11px] font-bold tracking-wider text-sakura-deep">今天她想对你说</span>
+              <div class="flex items-center gap-1.5 flex-wrap">
+                <h2 id="c-name" class="text-[20px] font-bold tracking-tight leading-tight"></h2>
+                <span id="c-mood" class="mood-pill px-2.5 py-0.5 rounded-full text-[11px] font-semibold"></span>
               </div>
-              <p id="daily-thought-content" class="text-[14px] leading-relaxed text-ink/90 font-medium">—</p>
-              <p id="daily-thought-empty" class="text-[12px] text-mute" style="display:none;">她还在想该跟你说什么呢…多聊聊她就知道啦。</p>
+              <p id="c-meta" class="text-[12px] text-mute font-medium mt-0.5 truncate"></p>
+              <div class="flex items-center gap-2 mt-1 flex-wrap">
+                <span id="c-stage" class="text-[11px] text-sakura-deep font-bold"></span>
+                <span class="text-[11px] text-mute font-medium" id="c-days">—</span>
+                <button type="button" id="btn-regen-identity" class="ml-auto text-[11px] text-sakura-deep hover:underline font-medium whitespace-nowrap" title="一次生成 4 张候选自拍，选最满意的锁为后续生图基准">🎨 重生形象</button>
+              </div>
             </div>
-            <button id="btn-thought-play" type="button" class="flex-shrink-0 w-9 h-9 rounded-full bg-white border border-sakura-soft text-sakura-deep hover:bg-sakura-soft transition-all" title="听她念给你">
-              🔊
-            </button>
           </div>
-        </div>
 
-        <div class="relative grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-3 mt-7 pt-6 border-t border-line/70">
-          <div class="min-w-0">
-            <p class="text-[11px] text-mute font-semibold tracking-wider mb-1">她在做</p>
-            <p id="c-scene" class="text-[14px] font-semibold leading-snug break-words">—</p>
+          <!-- 5 段式关系阶段进度 -->
+          <div class="relative mt-4">
+            <div class="flex items-center justify-between mb-1.5">
+              <div class="flex items-center gap-1.5">
+                <i data-lucide="heart" class="w-3.5 h-3.5 text-sakura-deep"></i>
+                <span class="text-[12px] font-semibold">好感度</span>
+              </div>
+              <span class="text-[12px] font-bold text-sakura-deep"><span id="aff-val">0</span> <span class="text-mute font-medium">/ 100</span></span>
+            </div>
+            <div class="w-full h-2 bg-cloud rounded-full overflow-hidden mb-1.5">
+              <div id="aff-bar" class="stat-bar" style="width:0%"></div>
+            </div>
+            <div class="stage-track mb-1">
+              <div class="stage-seg" id="stage-seg-0"></div>
+              <div class="stage-seg" id="stage-seg-1"></div>
+              <div class="stage-seg" id="stage-seg-2"></div>
+              <div class="stage-seg" id="stage-seg-3"></div>
+              <div class="stage-seg" id="stage-seg-4"></div>
+            </div>
+            <div class="grid grid-cols-5 text-[10px] text-mute font-medium text-center">
+              <span>陌生</span><span>朋友</span><span>暧昧</span><span>恋人</span><span>深爱</span>
+            </div>
           </div>
-          <div class="min-w-0">
-            <p class="text-[11px] text-mute font-semibold tracking-wider mb-1">对话模式</p>
-            <p id="c-mode" class="text-[14px] font-semibold"><i data-lucide="sparkles" class="inline w-3.5 h-3.5 align-[-2px] text-sakura-deep"></i> 自适应</p>
+
+          <!-- v1.4.1: 想念度小条 -->
+          <div class="mt-3" id="missing-meter-row" style="display:none;">
+            <div class="flex items-center justify-between mb-1">
+              <div class="flex items-center gap-1.5">
+                <i data-lucide="sparkles" class="w-3 h-3 text-sakura-deep"></i>
+                <span class="text-[11px] font-semibold text-mute">她想你的程度</span>
+              </div>
+              <span class="text-[11px] font-bold text-sakura-deep" id="missing-label">—</span>
+            </div>
+            <div class="w-full h-1.5 bg-cloud rounded-full overflow-hidden">
+              <div id="missing-bar" class="h-full transition-all duration-700" style="width:0%; background: linear-gradient(90deg, #FFC2E0, #FF8FB8);"></div>
+            </div>
           </div>
-          <div class="min-w-0">
-            <p class="text-[11px] text-mute font-semibold tracking-wider mb-1">长期记忆</p>
-            <a href="/app/memories.html" class="text-[14px] font-semibold text-ink hover:text-sakura-deep transition-colors inline-flex items-center gap-1 group" title="查看 / 编辑 / 置顶 / 归档所有记忆">
-              <span id="c-mem">— 条</span>
-              <i data-lucide="external-link" class="w-3 h-3 opacity-50 group-hover:opacity-100"></i>
+
+          <!-- v1.4.1: 今天她想对你说的话 -->
+          <div id="daily-thought-card" class="mt-3 p-3 rounded-2xl bg-gradient-to-br from-sakura-soft/60 to-white border border-sakura-soft/70" style="display:none;">
+            <div class="flex items-start justify-between gap-2.5">
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-1.5 mb-1">
+                  <i data-lucide="message-circle-heart" class="w-3.5 h-3.5 text-sakura-deep"></i>
+                  <span class="text-[11px] font-bold tracking-wider text-sakura-deep">今天她想对你说</span>
+                </div>
+                <p id="daily-thought-content" class="text-[12.5px] leading-relaxed text-ink/90 font-medium">—</p>
+                <p id="daily-thought-empty" class="text-[11px] text-mute" style="display:none;">她还在想该跟你说什么呢…多聊聊她就知道啦。</p>
+              </div>
+              <button id="btn-thought-play" type="button" class="flex-shrink-0 w-8 h-8 rounded-full bg-white border border-sakura-soft text-sakura-deep hover:bg-sakura-soft transition-all text-[12px]" title="听她念给你" aria-label="朗读每日一句">
+                🔊
+              </button>
+            </div>
+          </div>
+
+          <!-- 3 项状态摘要 -->
+          <div class="relative grid grid-cols-3 gap-2 mt-4 pt-3.5 border-t border-line/70">
+            <div class="min-w-0">
+              <p class="text-[10px] text-mute font-semibold tracking-wider mb-0.5">她在做</p>
+              <p id="c-scene" class="text-[12px] font-semibold leading-snug truncate">—</p>
+            </div>
+            <div class="min-w-0">
+              <p class="text-[10px] text-mute font-semibold tracking-wider mb-0.5">对话模式</p>
+              <p id="c-mode" class="text-[12px] font-semibold truncate"><i data-lucide="sparkles" class="inline w-3 h-3 align-[-2px] text-sakura-deep"></i> 自适应</p>
+            </div>
+            <div class="min-w-0">
+              <p class="text-[10px] text-mute font-semibold tracking-wider mb-0.5">长期记忆</p>
+              <a href="/app/memories.html" class="text-[12px] font-semibold text-ink hover:text-sakura-deep transition-colors inline-flex items-center gap-0.5 group" title="查看 / 编辑 / 置顶 / 归档所有记忆">
+                <span id="c-mem">— 条</span>
+                <i data-lucide="external-link" class="w-3 h-3 opacity-50 group-hover:opacity-100"></i>
+              </a>
+            </div>
+          </div>
+
+          <!-- 主按钮：网页聊天 + 打开微信 -->
+          <div class="mt-4 grid grid-cols-2 gap-2">
+            <a href="/app/playground.html" class="text-center py-2.5 text-[12.5px] font-semibold text-ink border border-line rounded-full hover:border-sakura hover:text-sakura-deep transition-all whitespace-nowrap">
+              <span aria-hidden="true">💬</span> 网页聊天
+            </a>
+            <a id="btn-open-wechat" href="weixin://" class="text-center py-2.5 text-[12.5px] font-semibold text-white bg-gradient-to-r from-sakura to-sakura-deep rounded-full shadow-sakura hover:scale-[1.01] transition-all whitespace-nowrap">
+              <i data-lucide="message-circle" class="inline w-3.5 h-3.5 align-[-2px]"></i> 打开微信
             </a>
           </div>
+          <p id="wechat-fallback" class="hidden mt-2 text-center text-[11px] font-medium text-mute">请打开微信，找到溪语与她聊天；或点左侧「网页聊天」</p>
         </div>
 
-        <div class="mt-7 pt-6 border-t border-line flex flex-col sm:flex-row gap-3">
-          <a id="btn-edit-companion" href="/app/create.html" class="flex-1 text-center py-3 text-[13px] font-semibold text-ink border border-line rounded-full hover:border-sakura hover:text-sakura-deep transition-all">
-            <i data-lucide="settings-2" class="inline w-4 h-4 align-[-3px]"></i> 调整人设
-          </a>
-          <a href="/app/playground.html" class="flex-1 text-center py-3 text-[13px] font-semibold text-ink border border-line rounded-full hover:border-sakura hover:text-sakura-deep transition-all">
-            <i data-lucide="flask-conical" class="inline w-4 h-4 align-[-3px]"></i> 网页聊天
-          </a>
-          <a id="btn-open-wechat" href="weixin://" class="flex-1 text-center py-3 text-[13px] font-semibold text-white bg-gradient-to-r from-sakura to-sakura-deep rounded-full shadow-sakura hover:scale-[1.02] transition-all">
-            <i data-lucide="message-circle" class="inline w-4 h-4 align-[-3px]"></i> 打开微信
-          </a>
-        </div>
-        <p id="wechat-fallback" class="hidden mt-3 text-center text-[13px] font-medium text-mute">请打开微信，找到溪语与她聊天；或用上面「网页聊天」</p>
-        <div class="mt-5">
-          <a href="/app/memories.html" class="flex items-center justify-between w-full px-4 py-2.5 border border-line rounded-xl hover:border-sakura hover:bg-sakura-soft/30 transition-all group">
-            <span class="flex items-center gap-2 text-[13px] font-medium text-ink group-hover:text-sakura-deep">
-              <i data-lucide="brain" class="inline w-4 h-4"></i> 记忆管理
-            </span>
-            <span class="text-[11px] text-mute">查看 / 编辑 / 归档</span>
-          </a>
-        </div>
-        <div class="mt-3">
-          <a href="/app/diary.html" class="flex items-center justify-between w-full px-4 py-2.5 border border-line rounded-xl hover:border-sakura hover:bg-sakura-soft/30 transition-all group">
-            <span class="flex items-center gap-2 text-[13px] font-medium text-ink group-hover:text-sakura-deep">
-              <i data-lucide="book-heart" class="inline w-4 h-4"></i> 她的日记
-            </span>
-            <span class="text-[11px] text-mute">她每天写下的心里话</span>
-          </a>
-        </div>
-        <div class="mt-7 pt-5 border-t border-line flex items-center justify-between gap-3 flex-wrap">
-          <a href="/app/bind.html?rebind=true" class="text-[12px] font-medium text-mute hover:text-ink transition-colors">
-            重新绑定微信
-          </a>
-          <div class="flex items-center gap-4 ml-auto">
-            <button id="btn-reset-crush" type="button" class="text-[12px] font-medium text-mute hover:text-sakura-deep transition-colors" title="把好感度/关系/情绪拨回「她暗恋你」的默认起步状态">
-              重置为暗恋初心
-            </button>
-            <button id="btn-delete-companion" type="button" class="text-[12px] font-medium text-mute hover:text-red-500 transition-colors">
-              删除她
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Right column -->
-      <div class="space-y-5">
-
-        <!-- 她现在（实时状态）-->
-        <div id="now-card" class="hidden card p-6 relative overflow-hidden bg-gradient-to-br from-white to-sakura-soft/30">
-          <div class="absolute top-0 right-0 w-40 h-40 rounded-full bg-gradient-to-br from-sakura/15 to-transparent pointer-events-none" aria-hidden="true"></div>
+        <!-- 她现在（紧凑实时状态） -->
+        <div id="now-card" class="hidden card p-4 relative overflow-hidden bg-gradient-to-br from-white to-sakura-soft/30">
           <div class="relative">
-            <div class="flex items-center gap-2 mb-3">
+            <div class="flex items-center gap-2 mb-1.5">
               <span class="live-dot"></span>
-              <span class="text-[11px] text-mute font-bold tracking-wider uppercase">SHE'S</span>
+              <span class="text-[10px] text-mute font-bold tracking-wider uppercase">SHE'S NOW</span>
               <span id="now-time" class="ml-auto text-[11px] text-mute font-medium"></span>
             </div>
-            <p id="now-activity" class="text-[15px] font-semibold leading-snug">—</p>
-            <p id="now-mood" class="text-[12px] text-sakura-deep font-medium mt-2 leading-relaxed">—</p>
-            <div id="now-prev-block" class="mt-4 pt-4 border-t border-sakura-soft/60 hidden">
-              <p class="text-[10px] text-mute font-semibold tracking-wider mb-1">刚才</p>
-              <p id="now-prev" class="text-[13px] font-medium text-ink/70">—</p>
+            <p id="now-activity" class="text-[13.5px] font-semibold leading-snug">—</p>
+            <p id="now-mood" class="text-[11.5px] text-sakura-deep font-medium mt-1 leading-relaxed">—</p>
+            <div id="now-prev-block" class="mt-2.5 pt-2.5 border-t border-sakura-soft/60 hidden">
+              <p class="text-[10px] text-mute font-semibold tracking-wider mb-0.5">刚才</p>
+              <p id="now-prev" class="text-[12px] font-medium text-ink/70">—</p>
             </div>
           </div>
         </div>
 
-        <!-- v1.10.0 作息与睡眠 -->
-        <div class="card p-7" id="sleep-card">
-          <div class="flex items-center justify-between mb-3">
-            <div class="flex items-center gap-3">
-              <div class="w-10 h-10 rounded-xl bg-sakura-soft flex items-center justify-center">
-                <i data-lucide="bed" class="w-5 h-5 text-sakura-deep"></i>
-              </div>
-              <h3 class="text-[15px] font-bold">作息与睡眠</h3>
-            </div>
-            <span id="sleep-status-pill" class="text-[11px] font-bold px-2 py-1 rounded-full bg-sakura-soft text-sakura-deep">—</span>
-          </div>
-
-          <p class="text-[12px] text-mute font-medium leading-relaxed mb-3" id="sleep-hint">
-            她默认 00:30 入睡、07:30 起床，睡眠时段你发的消息她不会立刻回（起床后一起补回）。可在下方调整作息时间，或关闭。
-          </p>
-
-          <!-- iOS 风格圆形作息拨盘 -->
-          <div class="flex flex-col items-center mb-2 select-none">
-            <svg id="sleep-dial" width="232" height="232" viewBox="0 0 240 240" style="touch-action:none">
-              <circle cx="120" cy="120" r="92" fill="none" stroke="#F0F0F2" stroke-width="26"/>
-              <path id="dial-arc" fill="none" stroke="#1D1D1F" stroke-width="26" stroke-linecap="round" opacity="0.85"/>
-              <text x="120" y="42"  text-anchor="middle" font-size="13" font-weight="700" fill="#9a9aa2">0</text>
-              <text x="200" y="125" text-anchor="middle" font-size="13" font-weight="700" fill="#9a9aa2">6</text>
-              <text x="120" y="210" text-anchor="middle" font-size="13" font-weight="700" fill="#9a9aa2">12</text>
-              <text x="40"  y="125" text-anchor="middle" font-size="13" font-weight="700" fill="#9a9aa2">18</text>
-              <text id="dial-duration" x="120" y="116" text-anchor="middle" font-size="19" font-weight="800" fill="#1D1D1F">—</text>
-              <text x="120" y="138" text-anchor="middle" font-size="11" font-weight="600" fill="#86868B">睡眠时长</text>
-              <g id="dial-bed"  style="cursor:grab"><circle r="16" fill="#fff" stroke="#C9B8FF" stroke-width="2.5"/><text text-anchor="middle" dy="5" font-size="15">🌙</text></g>
-              <g id="dial-wake" style="cursor:grab"><circle r="16" fill="#fff" stroke="#FF8FB8" stroke-width="2.5"/><text text-anchor="middle" dy="5" font-size="15">☀️</text></g>
-            </svg>
-            <div class="flex gap-10 text-center mt-1">
-              <div><div class="text-[10px] text-mute font-semibold">🌙 就寝</div><div id="dial-bed-time" class="text-[16px] font-bold tracking-tight">00:30</div></div>
-              <div><div class="text-[10px] text-mute font-semibold">☀️ 起床</div><div id="dial-wake-time" class="text-[16px] font-bold tracking-tight">07:30</div></div>
-            </div>
-            <p class="text-[10px] text-mute mt-1.5 text-center">拖动 🌙 ☀️ 调整 · 每天自动小幅波动（睡 -15~+45、起 ±10 分钟）</p>
-          </div>
-          <input type="hidden" id="sleep-bed" value="00:30"/>
-          <input type="hidden" id="sleep-wake" value="07:30"/>
-
-          <label class="flex items-center gap-2 mb-3 text-[12px] font-medium text-ink/80">
-            <input id="sleep-enabled" type="checkbox" checked /> 启用作息（关闭则她不会睡觉）
-          </label>
-
-          <div class="flex gap-2 flex-wrap">
-            <button id="btn-sleep-save" class="flex-1 min-w-[100px] py-2.5 text-[12px] font-bold text-white bg-gradient-to-r from-sakura to-sakura-deep rounded-full shadow-sakura hover:scale-[1.02] transition-all">
-              保存作息
+        <!-- 角色与微信管理（直接可见，无需再滚动展开） -->
+        <div class="card p-4">
+          <p class="text-[11.5px] font-bold text-mute tracking-wider mb-2.5">角色与微信</p>
+          <div class="flex flex-wrap gap-1.5">
+            <a href="/app/bind.html?rebind=true" class="dash-action-pill">
+              <span aria-hidden="true">🔗</span><span>重新绑定微信</span>
+            </a>
+            <button id="btn-reset-crush" type="button" class="dash-action-pill" title="把好感度/关系/情绪拨回「她暗恋你」的默认起步状态">
+              <span aria-hidden="true">🌸</span><span>重置为暗恋初心</span>
             </button>
-            <button id="btn-sleep-call" class="flex-1 min-w-[100px] py-2.5 text-[12px] font-bold text-white bg-gradient-to-r from-rose-400 to-rose-500 rounded-full hover:scale-[1.02] transition-all disabled:opacity-40 disabled:cursor-not-allowed" disabled>
-              📞 打电话叫醒她
+            <button id="btn-delete-companion" type="button" class="dash-action-pill is-danger">
+              <span aria-hidden="true">🗑️</span><span>删除当前角色</span>
             </button>
           </div>
-          <button id="btn-sleep-reset-learn" type="button" class="mt-3 text-[11px] font-medium text-mute hover:text-sakura-deep transition-colors">
-            重置学习期（按你最近作息重新学）
+        </div>
+      </aside>
+
+      <!-- ═══ 右侧 5 分区原生 Tab 工作区（首屏即可见） ═══ -->
+      <section id="dash-workspace" class="min-w-0">
+        <div class="dash-tabs" role="tablist" aria-label="控制台功能分区">
+          <button type="button" role="tab" class="dash-tab active" data-dash-tab="settings" aria-selected="true">
+            <span aria-hidden="true">⚙️</span> 陪伴设置
           </button>
-          <p id="sleep-learn-note" class="mt-2 text-[11px] text-mute"></p>
+          <button type="button" role="tab" class="dash-tab" data-dash-tab="stories" aria-selected="false">
+            <span aria-hidden="true">💞</span> 故事与情绪
+          </button>
+          <button type="button" role="tab" class="dash-tab" data-dash-tab="tools" aria-selected="false">
+            <span aria-hidden="true">🧰</span> 胶囊与备份
+          </button>
+          <button type="button" role="tab" class="dash-tab" data-dash-tab="stickers" aria-selected="false">
+            <span aria-hidden="true">😊</span> 表情包
+          </button>
+          <button type="button" role="tab" class="dash-tab" data-dash-tab="models" aria-selected="false">
+            <span aria-hidden="true">🤖</span> 模型配置
+          </button>
         </div>
 
-        <!-- 沉默陪伴模式（v1.5） -->
-        <div class="card p-7" id="silent-mode-card">
-          <div class="flex items-center justify-between mb-1">
-            <div class="flex items-center gap-3">
-              <div class="w-10 h-10 rounded-xl bg-sakura-soft flex items-center justify-center">
-                <i data-lucide="moon" class="w-5 h-5 text-sakura-deep"></i>
+        <!-- ── Tab 1: 陪伴设置（常用直达 + 2×2 快捷开关 + 3 项精细折叠） ── -->
+        <div class="dash-tab-scroll">
+        <div id="dash-tab-settings" class="dash-tab-panel mt-3.5 space-y-3">
+
+          <!-- 3 项常用子页直达（记忆 / 日记 / 人设；表情包已在顶栏 Tab，不重复） -->
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+            <a id="btn-edit-companion" href="/app/create.html" class="dash-quick-link">
+              <span class="dash-quick-icon" aria-hidden="true">⚙️</span>
+              <span class="min-w-0 flex-1">
+                <span class="dash-quick-title">调整人设</span>
+                <span class="dash-quick-sub">性格 / 称呼 / 背景</span>
+              </span>
+              <span class="dash-quick-arrow" aria-hidden="true">›</span>
+            </a>
+            <a href="/app/memories.html" class="dash-quick-link">
+              <span class="dash-quick-icon" aria-hidden="true">🧠</span>
+              <span class="min-w-0 flex-1">
+                <span class="dash-quick-title">记忆管理</span>
+                <span class="dash-quick-sub">查看 / 置顶 / 编辑</span>
+              </span>
+              <span class="dash-quick-arrow" aria-hidden="true">›</span>
+            </a>
+            <a href="/app/diary.html" class="dash-quick-link">
+              <span class="dash-quick-icon" aria-hidden="true">📖</span>
+              <span class="min-w-0 flex-1">
+                <span class="dash-quick-title">她的日记</span>
+                <span class="dash-quick-sub">每天写下的心里话</span>
+              </span>
+              <span class="dash-quick-arrow" aria-hidden="true">›</span>
+            </a>
+          </div>
+
+          <!-- 2×2 快捷开关网格 -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <!-- 沉默陪伴 -->
+            <div class="dash-switch-tile" id="silent-mode-card">
+              <div class="dash-switch-main">
+                <span class="dash-switch-icon" aria-hidden="true">🕯️</span>
+                <div class="min-w-0 flex-1">
+                  <div class="dash-switch-title">沉默陪伴</div>
+                  <div class="dash-switch-sub">不主动打扰，你找她随时在</div>
+                </div>
+                <label class="toggle shrink-0" title="开关沉默陪伴模式">
+                  <input id="t-silent" type="checkbox" />
+                  <span class="slider"></span>
+                </label>
               </div>
-              <h3 class="text-[15px] font-bold">沉默陪伴模式</h3>
             </div>
-            <label class="toggle">
-              <input id="t-silent" type="checkbox" />
-              <span class="slider"></span>
-            </label>
-          </div>
-          <p class="text-[12px] text-mute font-medium leading-relaxed mt-2">
-            打开后她不会主动发消息，但她还"在"。<br>
-            <span class="text-[11px] text-mute/80">屏幕右下会显示一个粉色呼吸光点；你主动找她她依然会回。适合不想聊只想"在"的时刻。</span>
-          </p>
-        </div>
 
-        <!-- 主动消息 settings -->
-        <div class="card p-7">
-          <div class="flex items-center justify-between mb-1">
-            <div class="flex items-center gap-3">
-              <div class="w-10 h-10 rounded-xl bg-sakura-soft flex items-center justify-center">
-                <i data-lucide="bell-ring" class="w-5 h-5 text-sakura-deep"></i>
+            <!-- 表情包回复 -->
+            <div class="dash-switch-tile">
+              <div class="dash-switch-main">
+                <span class="dash-switch-icon" aria-hidden="true">😊</span>
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-1.5">
+                    <span class="dash-switch-title">表情包回复</span>
+                    <button type="button" data-jump-tab="stickers" class="dash-inline-link">管理 →</button>
+                  </div>
+                  <div class="dash-switch-sub">合适情绪下自动配发本地表情</div>
+                </div>
+                <label class="toggle shrink-0" title="开关表情包回复">
+                  <input id="t-sticker" type="checkbox" />
+                  <span class="slider"></span>
+                </label>
               </div>
-              <h3 class="text-[15px] font-bold">主动找你</h3>
             </div>
-            <label class="toggle">
-              <input id="t-proactive" type="checkbox" />
-              <span class="slider"></span>
-            </label>
-          </div>
-          <p class="text-[12px] text-mute font-medium leading-relaxed mt-2" id="proactive-hint">
-            打开后她会在日常时段主动找你聊天
-          </p>
-          <!-- 每天目标条数（直接拖动滑块） -->
-          <div class="mt-3" id="proactive-freq-row">
-            <div class="flex items-center justify-between mb-1.5">
-              <div class="text-[11px] text-mute font-medium">每天目标条数</div>
-              <div class="text-[13px] font-bold text-sakura-deep" id="proactive-target-val">4</div>
-            </div>
-            <input type="range" min="0" max="30" step="1" value="4" id="proactive-target-slider" class="proactive-slider w-full" />
-            <div class="flex justify-between text-[10px] text-mute mt-1">
-              <span>0 静默</span>
-              <span>30 满档</span>
-            </div>
-          </div>
-          <p class="mt-3 text-[11px] text-mute font-medium" id="proactive-quota"></p>
-        </div>
 
-        <!-- v1.14 依恋风格 -->
-        <div class="card p-7">
-          <div class="flex items-center gap-3 mb-1">
-            <div class="w-10 h-10 rounded-xl bg-sakura-soft flex items-center justify-center">
-              <i data-lucide="heart-handshake" class="w-5 h-5 text-sakura-deep"></i>
-            </div>
-            <h3 class="text-[15px] font-bold">依恋风格</h3>
-          </div>
-          <p class="text-[12px] text-mute font-medium leading-relaxed mt-2 mb-3">
-            决定你们闹别扭和和好时她的样子：受伤多快、别扭多深、和好多慢。
-          </p>
-          <div class="grid grid-cols-3 gap-2" id="attach-options">
-            <button type="button" data-val="secure"   class="attach-opt py-2 text-[12px] font-bold rounded-xl border border-sakura-soft text-mute transition-all">安全型</button>
-            <button type="button" data-val="anxious"  class="attach-opt py-2 text-[12px] font-bold rounded-xl border border-sakura-soft text-mute transition-all">焦虑型</button>
-            <button type="button" data-val="avoidant" class="attach-opt py-2 text-[12px] font-bold rounded-xl border border-sakura-soft text-mute transition-all">回避型</button>
-          </div>
-          <p class="mt-3 text-[11px] text-mute font-medium leading-relaxed" id="attach-desc"></p>
-          <!-- v1.19.3 初恋特质开关 -->
-          <div class="mt-4 pt-4 border-t border-sakura-soft/60 flex items-center justify-between gap-3">
-            <div>
-              <p class="text-[13px] font-bold">你是她的初恋</p>
-              <p class="text-[11px] text-mute font-medium mt-0.5 leading-relaxed">她从没正经谈过恋爱：不懂套路、容易紧张想多、偷偷珍惜每个「第一次」。只笨在恋爱的来回，不笨在在乎你。</p>
-            </div>
-            <label class="toggle shrink-0">
-              <input id="t-first-love" type="checkbox" />
-              <span class="slider"></span>
-            </label>
-          </div>
-        </div>
-
-        <!-- M3 共建留痕：你们的默契 -->
-        <div class="card p-7" id="shaping-card" style="display:none">
-          <div class="flex items-center gap-3 mb-1">
-            <div class="w-10 h-10 rounded-xl bg-sakura-soft flex items-center justify-center">
-              <i data-lucide="sparkles" class="w-5 h-5 text-sakura-deep"></i>
-            </div>
-            <h3 class="text-[15px] font-bold">你们的默契</h3>
-          </div>
-          <p class="text-[12px] text-mute font-medium leading-relaxed mt-2 mb-3">
-            你聊天里教过她的、你们共建的默契——只属于你们俩。
-          </p>
-          <div id="shaping-body" class="space-y-2"></div>
-        </div>
-
-        <!-- 表情包 -->
-        <div class="card p-7">
-          <div class="flex items-center justify-between">
-            <div class="flex items-center gap-3">
-              <div class="w-10 h-10 rounded-xl bg-sakura-soft flex items-center justify-center">
-                <i data-lucide="smile" class="w-5 h-5 text-sakura-deep"></i>
+            <!-- 网页语音 -->
+            <div class="dash-switch-tile">
+              <div class="dash-switch-main">
+                <span class="dash-switch-icon" aria-hidden="true">🎙️</span>
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-1.5 flex-wrap">
+                    <span class="dash-switch-title">网页语音</span>
+                    <button id="btn-voice-preview" type="button" class="dash-inline-link">▶ 试听</button>
+                  </div>
+                  <div class="dash-switch-sub">网页聊天与日记支持 🔊 朗读</div>
+                  <span id="voice-preview-msg" class="block text-[10.5px] text-mute mt-0.5 empty:hidden"></span>
+                </div>
+                <label class="toggle shrink-0" title="开关网页语音">
+                  <input id="t-voice" type="checkbox" />
+                  <span class="slider"></span>
+                </label>
               </div>
-              <h3 class="text-[15px] font-bold">表情包回复</h3>
             </div>
-            <label class="toggle">
-              <input id="t-sticker" type="checkbox" />
-              <span class="slider"></span>
-            </label>
-          </div>
-          <p class="text-[12px] text-mute font-medium mt-3">让她在合适的时刻发表情包</p>
-        </div>
 
-        <!-- 网页语音体验（v1.4.0 Sprint 2.5） -->
-        <div class="card p-7">
-          <div class="flex items-center justify-between">
-            <div class="flex items-center gap-3">
-              <div class="w-10 h-10 rounded-xl bg-sakura-soft flex items-center justify-center">
-                <i data-lucide="mic" class="w-5 h-5 text-sakura-deep"></i>
+            <!-- 长期记忆 -->
+            <div class="dash-switch-tile">
+              <div class="dash-switch-main">
+                <span class="dash-switch-icon" aria-hidden="true">🧠</span>
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-1.5">
+                    <span class="dash-switch-title">长期记忆</span>
+                    <a href="/app/memories.html" class="dash-inline-link">查看 →</a>
+                  </div>
+                  <div class="dash-switch-sub">记住你的习惯、喜好与约定</div>
+                </div>
+                <label class="toggle shrink-0" title="开关长期记忆">
+                  <input id="t-memory" type="checkbox" />
+                  <span class="slider"></span>
+                </label>
               </div>
-              <h3 class="text-[15px] font-bold">网页语音体验</h3>
             </div>
-            <label class="toggle">
-              <input id="t-voice" type="checkbox" />
-              <span class="slider"></span>
-            </label>
           </div>
-          <p class="text-[12px] text-mute font-medium mt-3 leading-relaxed">
-            开启后她在网页聊天的每条回复都能点 🔊 朗读，日记也能整段听。<br>
-            <span class="text-[11px] text-mute/80">注：iLink 协议不支持 bot 在微信里发语音，所以仅网页生效。需先在 setup 配 TTS provider。</span>
-          </p>
-          <div class="mt-3 flex items-center gap-2">
-            <button id="btn-voice-preview" type="button" class="text-[12px] font-semibold text-sakura-deep border border-sakura-soft rounded-full px-3 py-1.5 hover:bg-sakura-soft transition-all">
-              <i data-lucide="play" class="inline w-3 h-3 align-[-1px]"></i> 试听
-            </button>
-            <span id="voice-preview-msg" class="text-[11px] text-mute"></span>
+
+          <!-- 3 项精细参数手风琴（默认折叠） -->
+          <div class="dash-acc-list">
+
+            <!-- 1. 作息与睡眠 -->
+            <div class="dash-acc-item" id="sleep-card" data-acc="sleep">
+              <div class="dash-acc-head" role="button" tabindex="0" aria-expanded="false">
+                <span class="dash-acc-icon" aria-hidden="true">🌙</span>
+                <div class="dash-acc-info">
+                  <div class="dash-acc-title">作息与睡眠</div>
+                  <div class="dash-acc-sub" id="acc-sub-sleep">00:30 – 07:30 · 点击调整圆盘</div>
+                </div>
+                <span id="sleep-status-pill" class="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-sakura-soft text-sakura-deep shrink-0">—</span>
+                <span class="dash-acc-arrow" aria-hidden="true">›</span>
+              </div>
+              <div class="dash-acc-body" hidden>
+                <p class="text-[12px] text-mute font-medium leading-relaxed mb-3" id="sleep-hint">
+                  她默认 00:30 入睡、07:30 起床，睡眠时段你发的消息她不会立刻回（起床后一起补回）。可在下方调整作息时间，或关闭。
+                </p>
+                <div class="flex flex-col items-center mb-2 select-none">
+                  <svg id="sleep-dial" width="232" height="232" viewBox="0 0 240 240" style="touch-action:none">
+                    <circle cx="120" cy="120" r="92" fill="none" stroke="#F0F0F2" stroke-width="26"/>
+                    <path id="dial-arc" fill="none" stroke="#1D1D1F" stroke-width="26" stroke-linecap="round" opacity="0.85"/>
+                    <text x="120" y="42"  text-anchor="middle" font-size="13" font-weight="700" fill="#9a9aa2">0</text>
+                    <text x="200" y="125" text-anchor="middle" font-size="13" font-weight="700" fill="#9a9aa2">6</text>
+                    <text x="120" y="210" text-anchor="middle" font-size="13" font-weight="700" fill="#9a9aa2">12</text>
+                    <text x="40"  y="125" text-anchor="middle" font-size="13" font-weight="700" fill="#9a9aa2">18</text>
+                    <text id="dial-duration" x="120" y="116" text-anchor="middle" font-size="19" font-weight="800" fill="#1D1D1F">—</text>
+                    <text x="120" y="138" text-anchor="middle" font-size="11" font-weight="600" fill="#86868B">睡眠时长</text>
+                    <g id="dial-bed"  style="cursor:grab"><circle r="16" fill="#fff" stroke="#C9B8FF" stroke-width="2.5"/><text text-anchor="middle" dy="5" font-size="15">🌙</text></g>
+                    <g id="dial-wake" style="cursor:grab"><circle r="16" fill="#fff" stroke="#FF8FB8" stroke-width="2.5"/><text text-anchor="middle" dy="5" font-size="15">☀️</text></g>
+                  </svg>
+                  <div class="flex gap-10 text-center mt-1">
+                    <div><div class="text-[10px] text-mute font-semibold">🌙 就寝</div><div id="dial-bed-time" class="text-[16px] font-bold tracking-tight">00:30</div></div>
+                    <div><div class="text-[10px] text-mute font-semibold">☀️ 起床</div><div id="dial-wake-time" class="text-[16px] font-bold tracking-tight">07:30</div></div>
+                  </div>
+                  <p class="text-[10px] text-mute mt-1.5 text-center">拖动 🌙 ☀️ 调整 · 每天自动小幅波动（睡 -15~+45、起 ±10 分钟）</p>
+                </div>
+                <input type="hidden" id="sleep-bed" value="00:30"/>
+                <input type="hidden" id="sleep-wake" value="07:30"/>
+
+                <label class="flex items-center gap-2 mb-3 text-[12px] font-medium text-ink/80">
+                  <input id="sleep-enabled" type="checkbox" checked /> 启用作息（关闭则她不会睡觉）
+                </label>
+
+                <div class="flex gap-2 flex-wrap">
+                  <button type="button" id="btn-sleep-save" class="flex-1 min-w-[120px] py-2.5 text-[12px] font-bold text-white bg-gradient-to-r from-sakura to-sakura-deep rounded-full shadow-sakura hover:scale-[1.01] transition-all">
+                    保存作息
+                  </button>
+                  <button type="button" id="btn-sleep-call" class="flex-1 min-w-[120px] py-2.5 text-[12px] font-bold text-white bg-gradient-to-r from-rose-400 to-rose-500 rounded-full hover:scale-[1.01] transition-all disabled:opacity-40 disabled:cursor-not-allowed" disabled>
+                    📞 打电话叫醒她
+                  </button>
+                </div>
+                <button id="btn-sleep-reset-learn" type="button" class="mt-3 text-[11px] font-medium text-mute hover:text-sakura-deep transition-colors">
+                  重置学习期（按你最近作息重新学）
+                </button>
+                <p id="sleep-learn-note" class="mt-1.5 text-[11px] text-mute"></p>
+              </div>
+            </div>
+
+            <!-- 2. 主动找你 -->
+            <div class="dash-acc-item" data-acc="proactive">
+              <div class="dash-acc-head" role="button" tabindex="0" aria-expanded="false">
+                <span class="dash-acc-icon" aria-hidden="true">🔔</span>
+                <div class="dash-acc-info">
+                  <div class="dash-acc-title">主动找你</div>
+                  <div class="dash-acc-sub" id="acc-sub-proactive">日常时段主动发消息 · 点击调频率</div>
+                </div>
+                <label class="toggle dash-acc-stop" title="开关主动找你">
+                  <input id="t-proactive" type="checkbox" />
+                  <span class="slider"></span>
+                </label>
+                <span class="dash-acc-arrow" aria-hidden="true">›</span>
+              </div>
+              <div class="dash-acc-body" hidden>
+                <p class="text-[12px] text-mute font-medium leading-relaxed" id="proactive-hint">
+                  打开后她会在日常时段主动找你聊天
+                </p>
+                <div class="mt-3" id="proactive-freq-row">
+                  <div class="flex items-center justify-between mb-1.5">
+                    <div class="text-[11px] text-mute font-medium">每天目标条数</div>
+                    <div class="text-[13px] font-bold text-sakura-deep" id="proactive-target-val">4</div>
+                  </div>
+                  <input type="range" min="0" max="30" step="1" value="4" id="proactive-target-slider" class="proactive-slider w-full" />
+                  <div class="flex justify-between text-[10px] text-mute mt-1">
+                    <span>0 静默</span>
+                    <span>30 满档</span>
+                  </div>
+                </div>
+                <p class="mt-3 text-[11px] text-mute font-medium" id="proactive-quota"></p>
+              </div>
+            </div>
+
+            <!-- 3. 依恋风格 & 初恋特质 -->
+            <div class="dash-acc-item" data-acc="attach">
+              <div class="dash-acc-head" role="button" tabindex="0" aria-expanded="false">
+                <span class="dash-acc-icon" aria-hidden="true">🫶</span>
+                <div class="dash-acc-info">
+                  <div class="dash-acc-title">依恋风格 & 初恋特质</div>
+                  <div class="dash-acc-sub" id="acc-sub-attach">决定闹别扭与和好时的相处方式</div>
+                </div>
+                <span class="dash-acc-arrow" aria-hidden="true">›</span>
+              </div>
+              <div class="dash-acc-body" hidden>
+                <p class="text-[12px] text-mute font-medium leading-relaxed mb-3">
+                  决定你们闹别扭和和好时她的样子：受伤多快、别扭多深、和好多慢。
+                </p>
+                <div class="grid grid-cols-3 gap-2" id="attach-options">
+                  <button type="button" data-val="secure"   class="attach-opt py-2 text-[12px] font-bold rounded-xl border border-sakura-soft text-mute transition-all">安全型</button>
+                  <button type="button" data-val="anxious"  class="attach-opt py-2 text-[12px] font-bold rounded-xl border border-sakura-soft text-mute transition-all">焦虑型</button>
+                  <button type="button" data-val="avoidant" class="attach-opt py-2 text-[12px] font-bold rounded-xl border border-sakura-soft text-mute transition-all">回避型</button>
+                </div>
+                <p class="mt-3 text-[11px] text-mute font-medium leading-relaxed" id="attach-desc"></p>
+                <div class="mt-4 pt-4 border-t border-sakura-soft/60 flex items-center justify-between gap-3">
+                  <div>
+                    <p class="text-[13px] font-bold">你是她的初恋</p>
+                    <p class="text-[11px] text-mute font-medium mt-0.5 leading-relaxed">她从没正经谈过恋爱：不懂套路、容易紧张想多、偷偷珍惜每个「第一次」。只笨在恋爱的来回，不笨在在乎你。</p>
+                  </div>
+                  <label class="toggle shrink-0">
+                    <input id="t-first-love" type="checkbox" />
+                    <span class="slider"></span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- 1 行自适应模式说明条 -->
+          <div class="dash-info-strip">
+            <span aria-hidden="true">✨</span>
+            <span><strong>对话模式：完全自适应</strong> — 她会根据时间、心情和场景自动调整说话方式，无需手动切换</span>
           </div>
         </div>
 
-
-        <!-- 时光胶囊（v1.5） -->
-        <div class="card p-7">
-          <div class="flex items-center gap-3 mb-3">
-            <div class="w-10 h-10 rounded-xl bg-sakura-soft flex items-center justify-center">
-              <i data-lucide="clock" class="w-5 h-5 text-sakura-deep"></i>
+        <!-- ── Tab 2: 故事与情绪（我们的故事 / 情绪曲线 / 里程碑 / 默契） ── -->
+        <div id="dash-tab-stories" class="dash-tab-panel hidden mt-3.5 space-y-5">
+          <!-- M3 共建留痕：你们的默契 -->
+          <div class="card p-6" id="shaping-card" style="display:none">
+            <div class="flex items-center gap-3 mb-1">
+              <div class="w-9 h-9 rounded-xl bg-sakura-soft flex items-center justify-center">
+                <i data-lucide="sparkles" class="w-4 h-4 text-sakura-deep"></i>
+              </div>
+              <h3 class="text-[15px] font-bold">你们的默契</h3>
             </div>
-            <h3 class="text-[15px] font-bold">时光胶囊</h3>
+            <p class="text-[12px] text-mute font-medium leading-relaxed mt-2 mb-3">
+              你聊天里教过她的、你们共建的默契——只属于你们俩。
+            </p>
+            <div id="shaping-body" class="space-y-2"></div>
           </div>
-          <p class="text-[12px] text-mute font-medium leading-relaxed">
-            给她写一段话，封存到未来某一天她替你打开。<br>
-            <span class="text-[11px] text-mute/80">解封时她会读一遍你当时写的，附上"现在的我"对此的感想。</span>
-          </p>
-          <div class="mt-3 space-y-2">
-            <input id="capsule-title" type="text" maxlength="60"
-                   placeholder="（可选）标题，如：写给一年后的你"
-                   class="w-full text-[12px] rounded-xl border border-line bg-white/60 px-3 py-2 focus:outline-none focus:border-sakura-deep transition-colors" />
-            <textarea id="capsule-body" rows="3" maxlength="2000"
-                      placeholder="想对未来的她（和未来的你）说点什么？"
-                      class="w-full text-[12px] rounded-xl border border-line bg-white/60 px-3 py-2 focus:outline-none focus:border-sakura-deep transition-colors resize-none"></textarea>
-            <div class="flex items-center gap-2 flex-wrap">
-              <select id="capsule-unlock" class="text-[12px] rounded-xl border border-line bg-white/60 px-3 py-2 focus:outline-none focus:border-sakura-deep">
-                <option value="86400">1 天后</option>
-                <option value="604800">7 天后</option>
-                <option value="2592000" selected>1 个月后</option>
-                <option value="7776000">3 个月后</option>
-                <option value="15552000">半年后</option>
-                <option value="31536000">1 年后</option>
-              </select>
-              <button id="btn-capsule-create" type="button" class="text-[12px] font-semibold text-white bg-gradient-to-r from-sakura to-sakura-deep rounded-full px-4 py-1.5 hover:shadow-sakura transition-all">
-                <i data-lucide="lock" class="inline w-3 h-3 align-[-1px]"></i> 封存
+
+          <!-- 我们的故事 -->
+          <section id="story-section" class="hidden card p-6 sm:p-8 relative overflow-hidden">
+            <div class="absolute -top-16 -left-16 w-48 h-48 rounded-full bg-gradient-to-br from-sakura-soft to-transparent opacity-50 pointer-events-none" aria-hidden="true"></div>
+            <div class="relative">
+              <div class="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 mb-6">
+                <div>
+                  <h2 class="text-[20px] font-bold tracking-tightest">我们的故事</h2>
+                  <p class="text-[13px] text-mute font-medium mt-1" id="story-subtitle">—</p>
+                </div>
+                <button type="button" id="btn-make-card" class="self-start sm:self-auto px-5 py-2 text-[13px] font-semibold rounded-full bg-sakura-soft text-sakura-deep hover:bg-sakura/30 transition-all">
+                  <i data-lucide="image-down" class="inline w-4 h-4 align-[-3px]"></i>
+                  生成 CP 卡片
+                </button>
+              </div>
+              <div id="story-timeline" class="relative">
+                <div class="text-center text-mute text-[13px] py-8">加载中...</div>
+              </div>
+            </div>
+          </section>
+
+          <!-- 情绪趋势 -->
+          <section id="trend-section" class="hidden grid grid-cols-1 gap-5">
+            <div class="card p-6">
+              <div class="flex items-center justify-between mb-4">
+                <h3 class="text-[15px] font-bold">近 7 天情绪趋势</h3>
+                <span id="current-mood-pill" class="px-3 py-1 rounded-full text-[11px] font-semibold bg-sakura-soft text-sakura-deep">—</span>
+              </div>
+              <div id="emotion-chart" class="w-full overflow-x-auto">
+                <canvas id="emotion-canvas" height="140" class="w-full"></canvas>
+              </div>
+              <div class="mt-3 flex flex-wrap gap-2" id="emotion-legend"></div>
+              <p id="emotion-empty" class="hidden text-[12px] text-mute text-center py-6">暂无情绪历史数据，聊几天后再来看看</p>
+              <div class="mt-3 pt-3 border-t border-line">
+                <a id="link-debug-prompt" href="#" class="text-[12px] text-mute hover:text-sakura-deep transition-colors flex items-center gap-1">
+                  <i data-lucide="terminal" class="w-3.5 h-3.5"></i> Prompt 调试面板
+                </a>
+              </div>
+            </div>
+          </section>
+
+          <!-- 关系里程碑 -->
+          <section id="p2-section" class="hidden">
+            <div class="card p-6">
+              <div class="flex items-center gap-2 mb-4">
+                <i data-lucide="trophy" class="w-5 h-5 text-sakura-deep"></i>
+                <h3 class="text-[15px] font-bold">关系里程碑</h3>
+              </div>
+              <div id="achievements-list" class="space-y-2">
+                <p class="text-[12px] text-mute text-center py-4">加载中...</p>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <!-- ── Tab 3: 胶囊与备份（全部默认折叠，点击展开） ── -->
+        <div id="dash-tab-tools" class="dash-tab-panel hidden mt-3.5">
+          <div class="dash-acc-list">
+
+            <!-- 时光胶囊 -->
+            <div class="dash-acc-item" data-acc="capsule">
+              <div class="dash-acc-head" role="button" tabindex="0" aria-expanded="false">
+                <span class="dash-acc-icon" aria-hidden="true">⏳</span>
+                <div class="dash-acc-info">
+                  <div class="dash-acc-title">时光胶囊</div>
+                  <div class="dash-acc-sub">封存一段话，留到未来某天她替你打开</div>
+                </div>
+                <span class="dash-acc-arrow" aria-hidden="true">›</span>
+              </div>
+              <div class="dash-acc-body" hidden>
+                <p class="text-[12px] text-mute font-medium leading-relaxed">
+                  给她写一段话，封存到未来某一天她替你打开。<br>
+                  <span class="text-[11px] text-mute/80">解封时她会读一遍你当时写的，附上"现在的我"对此的感想。</span>
+                </p>
+                <div class="mt-3 space-y-2">
+                  <input id="capsule-title" type="text" maxlength="60"
+                         placeholder="（可选）标题，如：写给一年后的你"
+                         class="w-full text-[12px] rounded-xl border border-line bg-white/60 px-3 py-2 focus:outline-none focus:border-sakura-deep transition-colors" />
+                  <textarea id="capsule-body" rows="3" maxlength="2000"
+                            placeholder="想对未来的她（和未来的你）说点什么？"
+                            class="w-full text-[12px] rounded-xl border border-line bg-white/60 px-3 py-2 focus:outline-none focus:border-sakura-deep transition-colors resize-none"></textarea>
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <select id="capsule-unlock" class="text-[12px] rounded-xl border border-line bg-white/60 px-3 py-2 focus:outline-none focus:border-sakura-deep">
+                      <option value="86400">1 天后</option>
+                      <option value="604800">7 天后</option>
+                      <option value="2592000" selected>1 个月后</option>
+                      <option value="7776000">3 个月后</option>
+                      <option value="15552000">半年后</option>
+                      <option value="31536000">1 年后</option>
+                    </select>
+                    <button id="btn-capsule-create" type="button" class="text-[12px] font-semibold text-white bg-gradient-to-r from-sakura to-sakura-deep rounded-full px-4 py-1.5 hover:shadow-sakura transition-all">
+                      <i data-lucide="lock" class="inline w-3 h-3 align-[-1px]"></i> 封存
+                    </button>
+                    <span id="capsule-msg" class="text-[11px] text-mute"></span>
+                  </div>
+                </div>
+                <div class="mt-4 border-t border-line pt-3">
+                  <div class="flex items-center justify-between mb-2">
+                    <span class="text-[12px] font-semibold text-ink">我的胶囊</span>
+                    <button id="btn-capsule-refresh" type="button" class="text-[11px] text-sakura-deep hover:underline">刷新</button>
+                  </div>
+                  <div id="capsule-list" class="space-y-2 text-[12px]"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 离线留言胶囊 -->
+            <div class="dash-acc-item" data-acc="letter">
+              <div class="dash-acc-head" role="button" tabindex="0" aria-expanded="false">
+                <span class="dash-acc-icon" aria-hidden="true">✉️</span>
+                <div class="dash-acc-info">
+                  <div class="dash-acc-title">她写一封离线留言</div>
+                  <div class="dash-acc-sub">带签名下载成 .txt 永久保存本地</div>
+                </div>
+                <span class="dash-acc-arrow" aria-hidden="true">›</span>
+              </div>
+              <div class="dash-acc-body" hidden>
+                <p class="text-[12px] text-mute font-medium leading-relaxed">
+                  让她按当前的心情和关系阶段写一段话，下载成 .txt 保存本地。
+                  <br><span class="text-[11px] text-mute/80">无论将来发生什么，用记事本就能打开看；带 HMAC 签名可来 <a href="/app/verify-letter.html" target="_blank" class="text-sakura-deep hover:underline">验真页面</a> 验证未被篡改。</span>
+                </p>
+                <div class="mt-3">
+                  <input id="letter-hint" type="text" maxlength="100"
+                         placeholder="（可选）想让她提到的事，比如：我们的第一次见面"
+                         class="w-full text-[12px] rounded-xl border border-line bg-white/60 px-3 py-2 focus:outline-none focus:border-sakura-deep transition-colors" />
+                </div>
+                <div class="mt-3 flex items-center gap-2">
+                  <button id="btn-letter-generate" type="button" class="text-[12px] font-semibold text-white bg-gradient-to-r from-sakura to-sakura-deep rounded-full px-4 py-1.5 hover:shadow-sakura transition-all">
+                    <i data-lucide="feather" class="inline w-3 h-3 align-[-1px]"></i> 生成并下载
+                  </button>
+                  <span id="letter-msg" class="text-[11px] text-mute"></span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 角色备份 -->
+            <div class="dash-acc-item" data-acc="backup">
+              <div class="dash-acc-head" role="button" tabindex="0" aria-expanded="false">
+                <span class="dash-acc-icon" aria-hidden="true">💾</span>
+                <div class="dash-acc-info">
+                  <div class="dash-acc-title">角色备份（导出 / 导入 JSON）</div>
+                  <div class="dash-acc-sub">迁移或备份当前角色人设设定</div>
+                </div>
+                <span class="dash-acc-arrow" aria-hidden="true">›</span>
+              </div>
+              <div class="dash-acc-body" hidden>
+                <p class="text-[12px] text-mute mb-4 leading-relaxed">将角色人设导出为 JSON 文件，可迁移或分享。导入时只恢复人设设定，不包含账号信息。</p>
+                <div class="flex flex-col sm:flex-row gap-2">
+                  <button type="button" id="btn-export-persona" class="flex-1 py-2.5 text-[13px] font-semibold rounded-xl bg-sakura-soft text-sakura-deep hover:bg-sakura/30 transition-all">
+                    <i data-lucide="download" class="inline w-4 h-4 align-[-3px]"></i>
+                    导出角色 JSON
+                  </button>
+                  <label class="flex-1 py-2.5 text-[13px] font-semibold rounded-xl border border-line hover:border-sakura-deep hover:bg-sakura-soft/20 text-mute hover:text-sakura-deep transition-all text-center cursor-pointer">
+                    <i data-lucide="upload" class="inline w-4 h-4 align-[-3px]"></i>
+                    导入角色 JSON
+                    <input id="input-import-persona" type="file" accept=".json" class="sr-only" />
+                  </label>
+                </div>
+                <p id="import-status" class="text-[11px] text-center text-mute mt-2 hidden"></p>
+              </div>
+            </div>
+
+            <!-- 使用小贴士 -->
+            <div class="dash-acc-item" data-acc="tips">
+              <div class="dash-acc-head" role="button" tabindex="0" aria-expanded="false">
+                <span class="dash-acc-icon" aria-hidden="true">💡</span>
+                <div class="dash-acc-info">
+                  <div class="dash-acc-title">使用小贴士</div>
+                  <div class="dash-acc-sub">如何自然提升关系阶段与互动深度</div>
+                </div>
+                <span class="dash-acc-arrow" aria-hidden="true">›</span>
+              </div>
+              <div class="dash-acc-body" hidden>
+                <ul class="space-y-2.5 text-[13px] text-mute font-medium leading-relaxed">
+                  <li class="flex gap-2"><i data-lucide="check-circle-2" class="w-4 h-4 mt-0.5 text-sakura-deep flex-shrink-0"></i>多和她聊聊日常，好感度会慢慢上升</li>
+                  <li class="flex gap-2"><i data-lucide="check-circle-2" class="w-4 h-4 mt-0.5 text-sakura-deep flex-shrink-0"></i>她会自动记住你的习惯和喜好</li>
+                  <li class="flex gap-2"><i data-lucide="check-circle-2" class="w-4 h-4 mt-0.5 text-sakura-deep flex-shrink-0"></i>关系阶段升级会解锁新的互动深度</li>
+                </ul>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- ── Tab 4: 表情包（原地内嵌完整工坊，不跳转页面） ── -->
+        <div id="dash-tab-stickers" class="dash-tab-panel hidden mt-3.5">
+          <div id="dash-sticker-root"></div>
+        </div>
+
+        <!-- ── Tab 5: 模型配置（原地展示一竖列手风琴，与陪伴设置统一） ── -->
+        <div id="dash-tab-models" class="dash-tab-panel hidden mt-3.5">
+          <div class="ms-layout ms-inline" id="ms-layout">
+            <div class="ms-nav" id="ms-cap-list" aria-label="模型能力列表">
+              <button type="button" class="ms-nav-item" data-cap="chat" aria-expanded="false">
+                <span class="ms-nav-icon" aria-hidden="true">💬</span>
+                <span class="ms-nav-body">
+                  <span class="ms-nav-title">对话模型 <em class="ms-req-tag">必配</em></span>
+                  <span class="ms-nav-sub" id="ms-nav-sub-chat">检测中…</span>
+                </span>
+                <span class="ms-nav-dot" id="ms-nav-dot-chat" aria-hidden="true"></span>
+                <span class="ms-nav-arrow" aria-hidden="true">›</span>
               </button>
-              <span id="capsule-msg" class="text-[11px] text-mute"></span>
-            </div>
-          </div>
-          <div class="mt-4 border-t border-line pt-3">
-            <div class="flex items-center justify-between mb-2">
-              <span class="text-[12px] font-semibold text-ink">我的胶囊</span>
-              <button id="btn-capsule-refresh" type="button" class="text-[11px] text-sakura-deep hover:underline">刷新</button>
-            </div>
-            <div id="capsule-list" class="space-y-2 text-[12px]"></div>
-          </div>
-        </div>
 
-        <!-- 离线留言胶囊（v1.5） -->
-        <div class="card p-7">
-          <div class="flex items-center gap-3 mb-3">
-            <div class="w-10 h-10 rounded-xl bg-sakura-soft flex items-center justify-center">
-              <i data-lucide="mail" class="w-5 h-5 text-sakura-deep"></i>
-            </div>
-            <h3 class="text-[15px] font-bold">她写一封离线留言</h3>
-          </div>
-          <p class="text-[12px] text-mute font-medium leading-relaxed">
-            让她按当前的心情和关系阶段写一段话，下载成 .txt 保存本地。
-            <br><span class="text-[11px] text-mute/80">无论将来发生什么，用记事本就能打开看；带 HMAC 签名可来 <a href="/app/verify-letter.html" target="_blank" class="text-sakura-deep hover:underline">验真页面</a> 验证未被篡改。</span>
-          </p>
-          <div class="mt-3">
-            <input id="letter-hint" type="text" maxlength="100"
-                   placeholder="（可选）想让她提到的事，比如：我们的第一次见面"
-                   class="w-full text-[12px] rounded-xl border border-line bg-white/60 px-3 py-2 focus:outline-none focus:border-sakura-deep transition-colors" />
-          </div>
-          <div class="mt-3 flex items-center gap-2">
-            <button id="btn-letter-generate" type="button" class="text-[12px] font-semibold text-white bg-gradient-to-r from-sakura to-sakura-deep rounded-full px-4 py-1.5 hover:shadow-sakura transition-all">
-              <i data-lucide="feather" class="inline w-3 h-3 align-[-1px]"></i> 生成并下载
-            </button>
-            <span id="letter-msg" class="text-[11px] text-mute"></span>
-          </div>
-        </div>
+              <button type="button" class="ms-nav-item" data-cap="vision" aria-expanded="false">
+                <span class="ms-nav-icon" aria-hidden="true">🖼️</span>
+                <span class="ms-nav-body">
+                  <span class="ms-nav-title">图片理解</span>
+                  <span class="ms-nav-sub" id="ms-nav-sub-vision">未启用</span>
+                </span>
+                <span class="ms-nav-dot" id="ms-nav-dot-vision" aria-hidden="true"></span>
+                <span class="ms-nav-arrow" aria-hidden="true">›</span>
+              </button>
 
-        <!-- 长期记忆 -->
-        <div class="card p-7">
-          <div class="flex items-center justify-between">
-            <div class="flex items-center gap-3">
-              <div class="w-10 h-10 rounded-xl bg-sakura-soft flex items-center justify-center">
-                <i data-lucide="brain" class="w-5 h-5 text-sakura-deep"></i>
-              </div>
-              <h3 class="text-[15px] font-bold">长期记忆</h3>
-            </div>
-            <label class="toggle">
-              <input id="t-memory" type="checkbox" />
-              <span class="slider"></span>
-            </label>
-          </div>
-          <p class="text-[12px] text-mute font-medium mt-3">关闭后她不会记住你说过的事情。</p>
-          <a href="/app/memories.html" class="mt-3 flex items-center justify-between w-full px-3 py-2 bg-sakura-soft/40 hover:bg-sakura-soft rounded-xl transition-all group">
-            <span class="text-[12px] font-semibold text-sakura-deep">
-              <i data-lucide="list" class="inline w-3.5 h-3.5 align-[-2px]"></i>
-              管理她的所有记忆（人生 / 我们之间 / 偏好）
-            </span>
-            <i data-lucide="chevron-right" class="w-4 h-4 text-sakura-deep group-hover:translate-x-0.5 transition-transform"></i>
-          </a>
-        </div>
+              <button type="button" class="ms-nav-item" data-cap="asr" aria-expanded="false">
+                <span class="ms-nav-icon" aria-hidden="true">🎙️</span>
+                <span class="ms-nav-body">
+                  <span class="ms-nav-title">语音识别</span>
+                  <span class="ms-nav-sub" id="ms-nav-sub-asr">未启用</span>
+                </span>
+                <span class="ms-nav-dot" id="ms-nav-dot-asr" aria-hidden="true"></span>
+                <span class="ms-nav-arrow" aria-hidden="true">›</span>
+              </button>
 
-        <!-- 聊天模式：完全自适应，无需用户调整 -->
-        <div class="card p-7 bg-gradient-to-br from-white to-sakura-soft/30">
-          <div class="flex items-center justify-between gap-3">
-            <div class="flex items-center gap-3">
-              <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-sakura to-sakura-deep flex items-center justify-center shadow-sakura">
-                <i data-lucide="sparkles" class="w-5 h-5 text-white"></i>
-              </div>
-              <div>
-                <h3 class="text-[15px] font-bold">聊天模式</h3>
-                <p class="text-[12px] text-sakura-deep font-semibold mt-0.5">完全自适应</p>
+              <button type="button" class="ms-nav-item" data-cap="tts" aria-expanded="false">
+                <span class="ms-nav-icon" aria-hidden="true">🔊</span>
+                <span class="ms-nav-body">
+                  <span class="ms-nav-title">语音合成</span>
+                  <span class="ms-nav-sub" id="ms-nav-sub-tts">未启用</span>
+                </span>
+                <span class="ms-nav-dot" id="ms-nav-dot-tts" aria-hidden="true"></span>
+                <span class="ms-nav-arrow" aria-hidden="true">›</span>
+              </button>
+
+              <button type="button" class="ms-nav-item" data-cap="image" aria-expanded="false">
+                <span class="ms-nav-icon" aria-hidden="true">🎨</span>
+                <span class="ms-nav-body">
+                  <span class="ms-nav-title">图片生成</span>
+                  <span class="ms-nav-sub" id="ms-nav-sub-image">未配置</span>
+                </span>
+                <span class="ms-nav-dot" id="ms-nav-dot-image" aria-hidden="true"></span>
+                <span class="ms-nav-arrow" aria-hidden="true">›</span>
+              </button>
+
+              <button type="button" class="ms-nav-item" data-cap="embedding" aria-expanded="false">
+                <span class="ms-nav-icon" aria-hidden="true">🧭</span>
+                <span class="ms-nav-body">
+                  <span class="ms-nav-title">语义向量</span>
+                  <span class="ms-nav-sub" id="ms-nav-sub-embedding">未配置</span>
+                </span>
+                <span class="ms-nav-dot" id="ms-nav-dot-embedding" aria-hidden="true"></span>
+                <span class="ms-nav-arrow" aria-hidden="true">›</span>
+              </button>
+
+              <button type="button" class="ms-nav-item" data-cap="search" aria-expanded="false">
+                <span class="ms-nav-icon" aria-hidden="true">🌐</span>
+                <span class="ms-nav-body">
+                  <span class="ms-nav-title">联网搜索</span>
+                  <span class="ms-nav-sub" id="ms-nav-sub-search">未启用</span>
+                </span>
+                <span class="ms-nav-dot" id="ms-nav-dot-search" aria-hidden="true"></span>
+                <span class="ms-nav-arrow" aria-hidden="true">›</span>
+              </button>
+
+              <div class="pt-3 mt-1 flex flex-wrap items-center justify-between gap-2 px-1">
+                <p class="text-[12px] text-mute">保存后立即生效，不用重启服务。Key 仅存在本地 SQLite。</p>
+                <a href="/app/setup.html" class="text-[12px] font-semibold text-sakura-deep hover:underline whitespace-nowrap">
+                  打开完整配置向导 →
+                </a>
               </div>
             </div>
+
+            <section class="ms-detail" id="ms-detail" aria-label="能力配置详情" hidden>
+              <div class="ms-detail-head">
+                <div class="min-w-0">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <h3 id="ms-detail-title" class="text-[15px] font-bold">对话模型</h3>
+                    <span id="ms-detail-badge" class="ms-status-chip ms-status-off">未配置</span>
+                  </div>
+                  <p id="ms-detail-desc" class="text-[12px] text-mute mt-1 leading-relaxed"></p>
+                </div>
+                <button type="button" id="ms-detail-close" class="ms-detail-close" aria-label="收起详情" title="收起详情">×</button>
+              </div>
+
+              <div id="ms-detail-body" class="ms-detail-body">
+                <div id="ms-pane-chat" class="ms-pane hidden">
+                  <div class="mb-3">
+                    <label class="ms-label" for="ms-chat-provider">Provider</label>
+                    <select id="ms-chat-provider" class="ms-input ms-select">
+                      <option value="">请选择…</option>
+                    </select>
+                  </div>
+                  <div class="mb-3 hidden" id="ms-chat-model-row">
+                    <label class="ms-label" for="ms-chat-model-select">Model</label>
+                    <select id="ms-chat-model-select" class="ms-input ms-select mb-2">
+                      <option value="__default__">使用默认</option>
+                    </select>
+                    <input id="ms-chat-model-custom" class="ms-input font-mono hidden" type="text" placeholder="自定义模型 ID" autocomplete="off" />
+                  </div>
+                  <div class="mb-3 hidden" id="ms-chat-custom-row">
+                    <label class="ms-label" for="ms-chat-baseurl">Base URL</label>
+                    <input id="ms-chat-baseurl" class="ms-input font-mono mb-2" type="text" placeholder="https://openrouter.ai/api/v1" autocomplete="off" spellcheck="false" />
+                    <label class="ms-label" for="ms-chat-custom-model">Model</label>
+                    <input id="ms-chat-custom-model" class="ms-input font-mono" type="text" placeholder="deepseek/deepseek-chat" autocomplete="off" spellcheck="false" />
+                  </div>
+                  <div class="mb-4">
+                    <label class="ms-label" for="ms-chat-key">API Key（已有可留空）</label>
+                    <input id="ms-chat-key" class="ms-input font-mono" type="password" placeholder="粘贴新 Key 来替换" autocomplete="off" />
+                  </div>
+                  <div class="flex gap-2 flex-wrap">
+                    <button type="button" class="ms-btn-primary" id="ms-chat-save">保存配置</button>
+                    <button type="button" class="ms-btn-outline" id="ms-chat-test">🔌 测试连通性</button>
+                  </div>
+                  <p id="ms-chat-msg" class="mt-3 ms-msg-info" role="status" aria-live="polite"></p>
+                </div>
+
+                <div id="ms-pane-opt" class="ms-pane hidden">
+                  <div class="mb-3">
+                    <label class="ms-label" for="ms-opt-provider">Provider</label>
+                    <select id="ms-opt-provider" class="ms-input ms-select"></select>
+                  </div>
+                  <div class="mb-3 hidden" id="ms-opt-base-row">
+                    <label class="ms-label" id="ms-opt-base-label" for="ms-opt-base">Base URL</label>
+                    <input id="ms-opt-base" class="ms-input font-mono" type="url" placeholder="https://relay.example/v1" autocomplete="off" spellcheck="false" />
+                    <p id="ms-opt-base-hint" class="text-[11px] text-mute mt-1"></p>
+                  </div>
+                  <div class="mb-3 hidden" id="ms-opt-model-row">
+                    <label class="ms-label" id="ms-opt-model-label" for="ms-opt-model">Model（选填）</label>
+                    <input id="ms-opt-model" class="ms-input font-mono" type="text" placeholder="留空使用默认模型" autocomplete="off" spellcheck="false" />
+                    <p id="ms-opt-model-hint" class="text-[11px] text-mute mt-1"></p>
+                  </div>
+                  <div class="mb-3 hidden" id="ms-opt-voice-row">
+                    <label class="ms-label" id="ms-opt-voice-label" for="ms-opt-voice">Voice ID（选填）</label>
+                    <input id="ms-opt-voice" class="ms-input font-mono" type="text" placeholder="留空使用默认音色" autocomplete="off" spellcheck="false" />
+                    <p id="ms-opt-voice-hint" class="text-[11px] text-mute mt-1"></p>
+                  </div>
+                  <div class="mb-3 hidden" id="ms-opt-azure-row">
+                    <label class="ms-label" for="ms-opt-azure-region">Azure Region</label>
+                    <input id="ms-opt-azure-region" class="ms-input font-mono" type="text" placeholder="如 eastasia / westus" autocomplete="off" spellcheck="false" />
+                  </div>
+                  <div class="mb-3 hidden" id="ms-opt-doubao-row">
+                    <label class="ms-label" for="ms-opt-doubao-appid">豆包 AppID</label>
+                    <input id="ms-opt-doubao-appid" class="ms-input font-mono mb-2" type="text" placeholder="火山引擎控制台 · 应用 ID" autocomplete="off" spellcheck="false" />
+                    <label class="ms-label" for="ms-opt-doubao-cluster">Cluster</label>
+                    <input id="ms-opt-doubao-cluster" class="ms-input font-mono" type="text" placeholder="volcano_tts / volcengine_input_common" autocomplete="off" spellcheck="false" />
+                  </div>
+                  <div class="mb-4" id="ms-opt-key-row">
+                    <label class="ms-label" id="ms-opt-key-label" for="ms-opt-key">API Key（选填，留空保留已保存）</label>
+                    <input id="ms-opt-key" class="ms-input font-mono" type="password" placeholder="粘贴 API Key" autocomplete="off" />
+                  </div>
+                  <div class="flex gap-2 flex-wrap">
+                    <button type="button" class="ms-btn-primary" id="ms-opt-save">保存配置</button>
+                    <button type="button" class="ms-btn-outline" id="ms-opt-test">🔌 测试连通性</button>
+                    <button type="button" class="ms-btn-ghost" id="ms-opt-clear">恢复默认 / 清除</button>
+                  </div>
+                  <p id="ms-opt-msg" class="mt-3 ms-msg-info" role="status" aria-live="polite"></p>
+                </div>
+              </div>
+            </section>
           </div>
-          <p class="text-[12px] text-mute font-medium mt-3 leading-relaxed">
-            她会根据时间、心情和当前在做的事自动调整说话方式：早安会简短温暖、睡前会轻柔陪伴、心情低落时会专注倾听。
-          </p>
         </div>
-
-        <!-- Tips -->
-        <div class="card p-7">
-          <div class="w-12 h-12 rounded-2xl bg-sakura-soft flex items-center justify-center mb-4">
-            <i data-lucide="lightbulb" class="w-6 h-6 text-sakura-deep"></i>
-          </div>
-          <h3 class="text-[16px] font-bold mb-2">小贴士</h3>
-          <ul class="space-y-3 text-[13px] text-mute font-medium leading-relaxed">
-            <li class="flex gap-2"><i data-lucide="check-circle-2" class="w-4 h-4 mt-0.5 text-sakura-deep flex-shrink-0"></i>多和她聊聊日常，好感度会慢慢上升</li>
-            <li class="flex gap-2"><i data-lucide="check-circle-2" class="w-4 h-4 mt-0.5 text-sakura-deep flex-shrink-0"></i>她会自动记住你的习惯和喜好</li>
-            <li class="flex gap-2"><i data-lucide="check-circle-2" class="w-4 h-4 mt-0.5 text-sakura-deep flex-shrink-0"></i>关系阶段升级会解锁新的互动深度</li>
-          </ul>
-        </div>
-      </div>
-    </div>
-
-    <!-- ─── 我们的故事 ─────────────────────────────────────────────────── -->
-    <section id="story-section" class="hidden mt-6 card p-8 relative overflow-hidden">
-      <div class="absolute -top-16 -left-16 w-48 h-48 rounded-full bg-gradient-to-br from-sakura-soft to-transparent opacity-50 pointer-events-none" aria-hidden="true"></div>
-      <div class="relative">
-      <div class="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 mb-6">
-        <div>
-          <h2 class="text-[22px] font-bold tracking-tightest">我们的故事</h2>
-          <p class="text-[13px] text-mute font-medium mt-1" id="story-subtitle">—</p>
-        </div>
-        <button id="btn-make-card" class="self-start sm:self-auto px-5 py-2.5 text-[13px] font-semibold rounded-full bg-sakura-soft text-sakura-deep hover:bg-sakura/30 transition-all">
-          <i data-lucide="image-down" class="inline w-4 h-4 align-[-3px]"></i>
-          生成 CP 卡片
-        </button>
-      </div>
-      <div id="story-timeline" class="relative">
-        <div class="text-center text-mute text-[13px] py-8">加载中...</div>
-      </div>
-      </div><!-- /.relative wrapper -->
-    </section>
-
-    <!-- ─── 情绪趋势 & AI 用量 ───────────────────────────────────────────── -->
-    <section id="trend-section" class="hidden mt-6 grid grid-cols-1 gap-5">
-
-      <!-- 情绪曲线 -->
-      <div class="card p-6">
-        <div class="flex items-center justify-between mb-4">
-          <h3 class="text-[15px] font-bold">近 7 天情绪趋势</h3>
-          <span id="current-mood-pill" class="px-3 py-1 rounded-full text-[11px] font-semibold bg-sakura-soft text-sakura-deep">—</span>
-        </div>
-        <div id="emotion-chart" class="w-full overflow-x-auto">
-          <canvas id="emotion-canvas" height="140" class="w-full"></canvas>
-        </div>
-        <div class="mt-3 flex flex-wrap gap-2" id="emotion-legend"></div>
-        <p id="emotion-empty" class="hidden text-[12px] text-mute text-center py-6">暂无情绪历史数据，聊几天后再来看看</p>
-        <!-- 开发者工具入口 -->
-        <div class="mt-3 pt-3 border-t border-line">
-          <a id="link-debug-prompt" href="#" class="text-[12px] text-mute hover:text-sakura-deep transition-colors flex items-center gap-1">
-            <i data-lucide="terminal" class="w-3.5 h-3.5"></i> Prompt 调试面板
-          </a>
-        </div>
-      </div>
-
-
-    </section>
-
-    <!-- ─── 关系里程碑 & 角色备份 ───────────────────────────────────────────── -->
-    <section id="p2-section" class="hidden mt-6 grid grid-cols-1 md:grid-cols-2 gap-5">
-
-      <!-- 关系里程碑 -->
-      <div class="card p-6">
-        <div class="flex items-center gap-2 mb-4">
-          <i data-lucide="trophy" class="w-5 h-5 text-sakura-deep"></i>
-          <h3 class="text-[15px] font-bold">关系里程碑</h3>
-        </div>
-        <div id="achievements-list" class="space-y-2">
-          <p class="text-[12px] text-mute text-center py-4">加载中...</p>
-        </div>
-      </div>
-
-      <!-- 角色备份 -->
-      <div class="card p-6">
-        <div class="flex items-center gap-2 mb-4">
-          <i data-lucide="archive" class="w-5 h-5 text-sakura-deep"></i>
-          <h3 class="text-[15px] font-bold">角色备份</h3>
-        </div>
-        <p class="text-[12px] text-mute mb-4 leading-relaxed">将角色人设导出为 JSON 文件，可迁移或分享。导入时只恢复人设设定，不包含账号信息。</p>
-        <div class="flex flex-col gap-2">
-          <button id="btn-export-persona" class="w-full py-2.5 text-[13px] font-semibold rounded-xl bg-sakura-soft text-sakura-deep hover:bg-sakura/30 transition-all">
-            <i data-lucide="download" class="inline w-4 h-4 align-[-3px]"></i>
-            导出角色 JSON
-          </button>
-          <label class="w-full py-2.5 text-[13px] font-semibold rounded-xl border border-line hover:border-sakura-deep hover:bg-sakura-soft/20 text-mute hover:text-sakura-deep transition-all text-center cursor-pointer">
-            <i data-lucide="upload" class="inline w-4 h-4 align-[-3px]"></i>
-            导入角色 JSON
-            <input id="input-import-persona" type="file" accept=".json" class="sr-only" />
-          </label>
-          <p id="import-status" class="text-[11px] text-center text-mute hidden"></p>
-        </div>
-      </div>
-
-    </section>
-  </main>
-
-  <!-- ─── 模型设置抽屉（一竖列能力菜单 + 点击弹出右侧配置详情） ───────── -->
-  <div id="model-mask" class="model-mask" aria-hidden="true"></div>
-  <aside id="model-drawer" class="model-drawer" role="dialog" aria-modal="true" aria-hidden="true" aria-label="模型设置">
-    <div class="sticky top-0 bg-white border-b border-line z-10 px-5 py-4 flex items-center justify-between">
-      <div class="flex items-center gap-2">
-        <h2 class="text-[16px] font-bold">⚙ 模型设置</h2>
-        <span class="text-[11px] text-mute hidden sm:inline">点击任一能力展开配置与测试</span>
-      </div>
-      <button type="button" id="ms-close" class="text-mute hover:text-ink text-2xl leading-none p-1" aria-label="关闭模型设置">×</button>
-    </div>
-
-    <div class="ms-layout" id="ms-layout">
-      <!-- 一竖列能力菜单 -->
-      <nav class="ms-nav" id="ms-cap-list" aria-label="模型能力列表">
-        <button type="button" class="ms-nav-item" data-cap="chat" aria-expanded="false">
-          <span class="ms-nav-icon" aria-hidden="true">💬</span>
-          <span class="ms-nav-body">
-            <span class="ms-nav-title">对话模型 <em class="ms-req-tag">必配</em></span>
-            <span class="ms-nav-sub" id="ms-nav-sub-chat">检测中…</span>
-          </span>
-          <span class="ms-nav-dot" id="ms-nav-dot-chat" aria-hidden="true"></span>
-          <span class="ms-nav-arrow" aria-hidden="true">›</span>
-        </button>
-
-        <button type="button" class="ms-nav-item" data-cap="vision" aria-expanded="false">
-          <span class="ms-nav-icon" aria-hidden="true">🖼️</span>
-          <span class="ms-nav-body">
-            <span class="ms-nav-title">图片理解</span>
-            <span class="ms-nav-sub" id="ms-nav-sub-vision">未启用</span>
-          </span>
-          <span class="ms-nav-dot" id="ms-nav-dot-vision" aria-hidden="true"></span>
-          <span class="ms-nav-arrow" aria-hidden="true">›</span>
-        </button>
-
-        <button type="button" class="ms-nav-item" data-cap="asr" aria-expanded="false">
-          <span class="ms-nav-icon" aria-hidden="true">🎙️</span>
-          <span class="ms-nav-body">
-            <span class="ms-nav-title">语音识别</span>
-            <span class="ms-nav-sub" id="ms-nav-sub-asr">未启用</span>
-          </span>
-          <span class="ms-nav-dot" id="ms-nav-dot-asr" aria-hidden="true"></span>
-          <span class="ms-nav-arrow" aria-hidden="true">›</span>
-        </button>
-
-        <button type="button" class="ms-nav-item" data-cap="tts" aria-expanded="false">
-          <span class="ms-nav-icon" aria-hidden="true">🔊</span>
-          <span class="ms-nav-body">
-            <span class="ms-nav-title">语音合成</span>
-            <span class="ms-nav-sub" id="ms-nav-sub-tts">未启用</span>
-          </span>
-          <span class="ms-nav-dot" id="ms-nav-dot-tts" aria-hidden="true"></span>
-          <span class="ms-nav-arrow" aria-hidden="true">›</span>
-        </button>
-
-        <button type="button" class="ms-nav-item" data-cap="image" aria-expanded="false">
-          <span class="ms-nav-icon" aria-hidden="true">🎨</span>
-          <span class="ms-nav-body">
-            <span class="ms-nav-title">图片生成</span>
-            <span class="ms-nav-sub" id="ms-nav-sub-image">未配置</span>
-          </span>
-          <span class="ms-nav-dot" id="ms-nav-dot-image" aria-hidden="true"></span>
-          <span class="ms-nav-arrow" aria-hidden="true">›</span>
-        </button>
-
-        <button type="button" class="ms-nav-item" data-cap="embedding" aria-expanded="false">
-          <span class="ms-nav-icon" aria-hidden="true">🧭</span>
-          <span class="ms-nav-body">
-            <span class="ms-nav-title">语义向量</span>
-            <span class="ms-nav-sub" id="ms-nav-sub-embedding">未配置</span>
-          </span>
-          <span class="ms-nav-dot" id="ms-nav-dot-embedding" aria-hidden="true"></span>
-          <span class="ms-nav-arrow" aria-hidden="true">›</span>
-        </button>
-
-        <button type="button" class="ms-nav-item" data-cap="search" aria-expanded="false">
-          <span class="ms-nav-icon" aria-hidden="true">🌐</span>
-          <span class="ms-nav-body">
-            <span class="ms-nav-title">联网搜索</span>
-            <span class="ms-nav-sub" id="ms-nav-sub-search">未启用</span>
-          </span>
-          <span class="ms-nav-dot" id="ms-nav-dot-search" aria-hidden="true"></span>
-          <span class="ms-nav-arrow" aria-hidden="true">›</span>
-        </button>
-
-        <div class="pt-3 mt-2 border-t border-line/70 space-y-2 px-1">
-          <p class="text-[11px] text-mute leading-relaxed">保存后立即生效，不用重启服务。Key 仅存在本地 SQLite。</p>
-          <a href="/app/setup.html" class="block text-[12px] font-semibold text-sakura-deep hover:underline">
-            打开完整配置向导 →
-          </a>
-        </div>
-      </nav>
-
-      <!-- 右侧（移动端下方）弹出配置详情页 -->
-      <section class="ms-detail" id="ms-detail" aria-label="能力配置详情" hidden>
-        <div class="ms-detail-head">
-          <div class="min-w-0">
-            <div class="flex items-center gap-2 flex-wrap">
-              <h3 id="ms-detail-title" class="text-[15px] font-bold">对话模型</h3>
-              <span id="ms-detail-badge" class="ms-status-chip ms-status-off">未配置</span>
-            </div>
-            <p id="ms-detail-desc" class="text-[12px] text-mute mt-1 leading-relaxed"></p>
-          </div>
-          <button type="button" id="ms-detail-close" class="ms-detail-close" aria-label="收起详情" title="收起详情">×</button>
-        </div>
-
-        <!-- 动态详情表单（按选中的能力渲染/切换） -->
-        <div id="ms-detail-body" class="ms-detail-body">
-          <!-- Chat 表单 -->
-          <div id="ms-pane-chat" class="ms-pane hidden">
-            <div class="mb-3">
-              <label class="ms-label" for="ms-chat-provider">Provider</label>
-              <select id="ms-chat-provider" class="ms-input ms-select">
-                <option value="">请选择…</option>
-              </select>
-            </div>
-            <div class="mb-3 hidden" id="ms-chat-model-row">
-              <label class="ms-label" for="ms-chat-model-select">Model</label>
-              <select id="ms-chat-model-select" class="ms-input ms-select mb-2">
-                <option value="__default__">使用默认</option>
-              </select>
-              <input id="ms-chat-model-custom" class="ms-input font-mono hidden" type="text" placeholder="自定义模型 ID" autocomplete="off" />
-            </div>
-            <div class="mb-3 hidden" id="ms-chat-custom-row">
-              <label class="ms-label" for="ms-chat-baseurl">Base URL</label>
-              <input id="ms-chat-baseurl" class="ms-input font-mono mb-2" type="text" placeholder="https://openrouter.ai/api/v1" autocomplete="off" spellcheck="false" />
-              <label class="ms-label" for="ms-chat-custom-model">Model</label>
-              <input id="ms-chat-custom-model" class="ms-input font-mono" type="text" placeholder="deepseek/deepseek-chat" autocomplete="off" spellcheck="false" />
-            </div>
-            <div class="mb-4">
-              <label class="ms-label" for="ms-chat-key">API Key（已有可留空）</label>
-              <input id="ms-chat-key" class="ms-input font-mono" type="password" placeholder="粘贴新 Key 来替换" autocomplete="off" />
-            </div>
-            <div class="flex gap-2 flex-wrap">
-              <button type="button" class="ms-btn-primary" id="ms-chat-save">保存配置</button>
-              <button type="button" class="ms-btn-outline" id="ms-chat-test">🔌 测试连通性</button>
-            </div>
-            <p id="ms-chat-msg" class="mt-3 ms-msg-info" role="status" aria-live="polite"></p>
-          </div>
-
-          <!-- 可选能力通用表单（vision / asr / tts / image / embedding / search） -->
-          <div id="ms-pane-opt" class="ms-pane hidden">
-            <div class="mb-3">
-              <label class="ms-label" for="ms-opt-provider">Provider</label>
-              <select id="ms-opt-provider" class="ms-input ms-select"></select>
-            </div>
-            <div class="mb-3 hidden" id="ms-opt-base-row">
-              <label class="ms-label" id="ms-opt-base-label" for="ms-opt-base">Base URL</label>
-              <input id="ms-opt-base" class="ms-input font-mono" type="url" placeholder="https://relay.example/v1" autocomplete="off" spellcheck="false" />
-              <p id="ms-opt-base-hint" class="text-[11px] text-mute mt-1"></p>
-            </div>
-            <div class="mb-3 hidden" id="ms-opt-model-row">
-              <label class="ms-label" id="ms-opt-model-label" for="ms-opt-model">Model（选填）</label>
-              <input id="ms-opt-model" class="ms-input font-mono" type="text" placeholder="留空使用默认模型" autocomplete="off" spellcheck="false" />
-              <p id="ms-opt-model-hint" class="text-[11px] text-mute mt-1"></p>
-            </div>
-            <div class="mb-3 hidden" id="ms-opt-voice-row">
-              <label class="ms-label" id="ms-opt-voice-label" for="ms-opt-voice">Voice ID（选填）</label>
-              <input id="ms-opt-voice" class="ms-input font-mono" type="text" placeholder="留空使用默认音色" autocomplete="off" spellcheck="false" />
-              <p id="ms-opt-voice-hint" class="text-[11px] text-mute mt-1"></p>
-            </div>
-            <div class="mb-3 hidden" id="ms-opt-azure-row">
-              <label class="ms-label" for="ms-opt-azure-region">Azure Region</label>
-              <input id="ms-opt-azure-region" class="ms-input font-mono" type="text" placeholder="如 eastasia / westus" autocomplete="off" spellcheck="false" />
-            </div>
-            <div class="mb-3 hidden" id="ms-opt-doubao-row">
-              <label class="ms-label" for="ms-opt-doubao-appid">豆包 AppID</label>
-              <input id="ms-opt-doubao-appid" class="ms-input font-mono mb-2" type="text" placeholder="火山引擎控制台 · 应用 ID" autocomplete="off" spellcheck="false" />
-              <label class="ms-label" for="ms-opt-doubao-cluster">Cluster</label>
-              <input id="ms-opt-doubao-cluster" class="ms-input font-mono" type="text" placeholder="volcano_tts / volcengine_input_common" autocomplete="off" spellcheck="false" />
-            </div>
-            <div class="mb-4" id="ms-opt-key-row">
-              <label class="ms-label" id="ms-opt-key-label" for="ms-opt-key">API Key（选填，留空保留已保存）</label>
-              <input id="ms-opt-key" class="ms-input font-mono" type="password" placeholder="粘贴 API Key" autocomplete="off" />
-            </div>
-            <div class="flex gap-2 flex-wrap">
-              <button type="button" class="ms-btn-primary" id="ms-opt-save">保存配置</button>
-              <button type="button" class="ms-btn-outline" id="ms-opt-test">🔌 测试连通性</button>
-              <button type="button" class="ms-btn-ghost" id="ms-opt-clear">恢复默认 / 清除</button>
-            </div>
-            <p id="ms-opt-msg" class="mt-3 ms-msg-info" role="status" aria-live="polite"></p>
-          </div>
         </div>
       </section>
+
     </div>
-  </aside>
+  </main>
 
   <!-- 头像更换弹窗 -->
   <!-- v1.10.43: 重生形象 — 4 张候选 + 选 1 锁定 -->
@@ -997,7 +1029,8 @@
 
   <div id="silent-orb" role="button" tabindex="0" aria-label="退出沉默陪伴模式" title="沉默陪伴模式开启中 · 点击退出"></div>
   <script src="/vendor/lucide.min.js" defer></script>
-  <script src="/app/dashboard.js" defer></script>
-  <script src="/app/dashboard-model-drawer.js" defer></script>
+  <script src="/app/dashboard.js?v=35" defer></script>
+  <script src="/app/dashboard-model-drawer.js?v=35" defer></script>
+  <script src="/app/stickers.js?v=35" defer></script>
 </body>
 </html>

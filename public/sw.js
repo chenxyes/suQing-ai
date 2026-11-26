@@ -20,10 +20,16 @@
  * stored in the service worker cache.
  */
 
-const CACHE_NAME = 'xiyu-static-v24-accordion';
+const CACHE_NAME = 'xiyu-static-v35-slim-sidebar';
 
-const ASSET_EXTENSIONS = ['.css', '.js', '.mjs', '.png', '.webp', '.jpg', '.jpeg',
+const ASSET_EXTENSIONS = ['.png', '.webp', '.jpg', '.jpeg',
   '.gif', '.svg', '.ico', '.woff', '.woff2', '.ttf', '.webmanifest'];
+
+function isAppCodeAsset(url) {
+  const { pathname } = new URL(url);
+  if (pathname.startsWith('/api/')) return false;
+  return pathname.endsWith('.css') || pathname.endsWith('.js') || pathname.endsWith('.mjs');
+}
 
 function isApiRoute(url) {
   return new URL(url).pathname.startsWith('/api/');
@@ -66,9 +72,9 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // HTML / navigations: network-first, fall back to cache only if offline.
-  // This ensures a fresh deploy is always picked up on next page load.
-  if (isHtmlNav(request)) {
+  // HTML / navigations & unhashed CSS/JS: network-first, fall back to cache only if offline.
+  // This ensures a fresh deploy is always picked up on next page load without stale SW CSS/JS.
+  if (isHtmlNav(request) || isAppCodeAsset(request.url)) {
     event.respondWith((async () => {
       try {
         const fresh = await fetch(request);
