@@ -20,7 +20,7 @@ import {
 const _plugins = new Map();
 
 export function registerPlugin(plugin) {
-  if (!plugin || !plugin.id || !['feed', 'resolver'].includes(plugin.kind)) {
+  if (!plugin || !plugin.id || !['feed', 'resolver', 'publisher'].includes(plugin.kind)) {
     throw new Error(`Invalid plugin definition: ${plugin?.id || 'unknown'}`);
   }
   _plugins.set(plugin.id, plugin);
@@ -42,6 +42,14 @@ export function getCompanionPluginsStatus(companionId) {
   );
   return listPlugins().map(p => {
     const rec = saved.get(p.id);
+    const safeConfig = {};
+    for (const [k, v] of Object.entries(rec?.config || {})) {
+      if (/(token|secret|key|password)/i.test(k)) {
+        safeConfig[`${k}_set`] = Boolean(v);
+      } else {
+        safeConfig[k] = v;
+      }
+    }
     return {
       id: p.id,
       name: p.name,
@@ -50,7 +58,7 @@ export function getCompanionPluginsStatus(companionId) {
       default_enabled: Boolean(p.defaultEnabled),
       enabled: rec ? Boolean(rec.enabled) : Boolean(p.defaultEnabled),
       cooldown_hours: p.cooldownHours ?? null,
-      config: rec?.config || {},
+      config: safeConfig,
       updated_at: rec?.updated_at || null,
     };
   });

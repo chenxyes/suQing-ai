@@ -14,10 +14,19 @@ import webTrendsPlugin from './feeds/web_trends.mjs';
 import bilibiliHotPlugin from './feeds/bilibili_hot.mjs';
 import linkPreviewPlugin from './resolvers/link_preview.mjs';
 
+const douyinSidecarPluginMeta = {
+  id: 'publisher.douyin_sidecar',
+  name: '抖音 Sidecar 发布与评论桥接',
+  kind: 'publisher',
+  description: '路线 1 外部发布器桥接（支持 HTTP Sidecar 与 social-auto-upload CLI），支持她自主发抖音与巡检回复评论。',
+  defaultEnabled: false,
+};
+
 const BUILTINS = [
   webTrendsPlugin,
   bilibiliHotPlugin,
   linkPreviewPlugin,
+  douyinSidecarPluginMeta,
 ];
 
 export function ensureBuiltinPluginsRegistered() {

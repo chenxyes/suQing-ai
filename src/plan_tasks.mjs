@@ -55,6 +55,7 @@ import {
 } from './sleep.mjs';
 import { dispatchUrgentGoodnight, dispatchUrgentMorning } from './proactive.mjs';
 import { runAutonomousSurfTick } from './plugins/surf_engine.mjs';
+import { runAutonomousDouyinTick } from './plugins/publishers/douyin_autonomy.mjs';
 
 const TZ = 'Asia/Shanghai';
 const TICK_MS = 60_000;
@@ -140,6 +141,11 @@ async function tick(now = new Date()) {
   // Phase 2 不定时自主冲浪检视（随机窗口到期才触发，fail-open，不阻塞主 tick）
   runAutonomousSurfTick(now).catch(e => {
     log('warn', `[Surf] tick failed: ${e.message}`);
+  });
+
+  // Phase 4 路线 1：自主发抖音 & 自动巡检回复评论（仅对显式开启 publisher.douyin_sidecar 的角色生效）
+  runAutonomousDouyinTick(now).catch(e => {
+    log('warn', `[DouyinAutonomy] tick failed: ${e.message}`);
   });
 }
 

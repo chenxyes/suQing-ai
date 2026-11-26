@@ -95,6 +95,18 @@ import {
   markDraftPublishedWithBackflow,
   recordSocialReplyBackflow,
 } from './plugins/publishers/douyin_studio.mjs';
+import {
+  getDouyinSidecarConfig,
+  saveDouyinSidecarConfig,
+  sanitizeSidecarConfigForClient,
+  checkSidecarHealth,
+} from './plugins/publishers/sidecar_bridge.mjs';
+import {
+  publishExistingDraftViaSidecar,
+  runAutonomousDouyinPostForCompanion,
+  runAutonomousCommentPatrolForCompanion,
+  sendPendingCommentReply,
+} from './plugins/publishers/douyin_autonomy.mjs';
 import { isPublicStudioAllowed } from './public_persona.mjs';
 import { getActiveImageProvider } from './providers/image.mjs';
 import { getActiveVisionProvider, REGISTRY as VISION_REGISTRY } from './providers/vision.mjs';
@@ -177,7 +189,7 @@ import {
   deleteCompanionForAccount,
   getMemoriesV2, patchMemory, softDeleteMemory, archiveMemory, isCompanionOwnedByAccount,
   listCompanionFeedItems, getSurfState,
-  listSocialDrafts, getSocialDraftById, updateSocialDraft, listSocialReplyLogs,
+  listSocialDrafts, getSocialDraftById, updateSocialDraft, listSocialReplyLogs, getSocialAutonomyState,
   listPreferences, upsertPreference, deletePreference,  // v1.8.0 #3
   listShaping,  // 共建留痕（你们的默契）
   upsertEmotionState,
@@ -4240,6 +4252,125 @@ router.post('/companions/:id/social/replies/:logId/backflow', requireAuth, (req,
   } catch (e) {
     if (e.code === 'NOT_FOUND') return err(res, e.message, 404);
     return err(res, e.message || '回流失败', 500);
+  }
+});
+
+// ─── 路线 1：抖音 Sidecar 自主发稿 & 评论自动巡检回复 API ────────────────────
+
+// GET /api/companions/:id/social/autonomy
+router.get('/companions/:id/social/autonomy', requireAuth, (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+  const gate = isPublicStudioAllowed(c);
+  const sidecar = sanitizeSidecarConfigForClient(getDouyinSidecarConfig(id));
+  return ok(res, {
+    studio_allowed: gate.allowed,
+    studio_lock_reason: gate.message || null,
+    sidecar,
+    state: getSocialAutonomyState(id),
+    comment_logs: listSocialReplyLogs(id, 25),
+  });
+});
+
+// PUT /api/companions/:id/social/autonomy
+router.put('/companions/:id/social/autonomy', requireAuth, (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+  const gate = isPublicStudioAllowed(c);
+  if (!gate.allowed) return err(res, gate.message || '当前人设不允许开启公域自动运行', 403);
+  try {
+    const saved = saveDouyinSidecarConfig(id, {
+      enabled: req.body?.enabled,
+      config: req.body?.config && typeof req.body.config === 'object' ? req.body.config : req.body,
+    });
+    return ok(res, {
+      sidecar: sanitizeSidecarConfigForClient(saved),
+      state: getSocialAutonomyState(id),
+    });
+  } catch (e) {
+    return err(res, e.message || '保存 Sidecar 配置失败', 400);
+  }
+});
+
+// POST /api/companions/:id/social/sidecar/health
+router.post('/companions/:id/social/sidecar/health', requireAuth, async (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+  const sidecar = getDouyinSidecarConfig(id);
+  const health = await checkSidecarHealth(sidecar.config);
+  return ok(res, health);
+});
+
+// POST /api/companions/:id/social/drafts/:draftId/publish-sidecar
+router.post('/companions/:id/social/drafts/:draftId/publish-sidecar',
+  requireAuth,
+  rateLimit({ scope: 'social-sidecar-pub', maxPerWindow: 6, windowMs: 60_000, message: '推送过于频繁，请稍后再试' }),
+  async (req, res) => {
+    const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+    const draftId = intId(req.params.draftId); if (!draftId) return err(res, 'draftId 无效');
+    const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+    try {
+      const draftOnly = req.body?.draft_only;
+      const result = await publishExistingDraftViaSidecar(c, draftId, { draftOnly });
+      return ok(res, result);
+    } catch (e) {
+      if (e.code === 'FORBIDDEN') return err(res, e.message, 403);
+      if (e.code === 'NOT_FOUND') return err(res, e.message, 404);
+      if (e.code === 'NOT_CONFIGURED' || e.code === 'NO_MEDIA') return err(res, e.message, 400);
+      return err(res, e.message || 'Sidecar 推送失败', 502);
+    }
+  },
+);
+
+// POST /api/companions/:id/social/autonomy/run-post — 立即试跑一次「自主构思并发布」
+router.post('/companions/:id/social/autonomy/run-post',
+  requireAuth,
+  rateLimit({ scope: 'social-auto-post', maxPerWindow: 4, windowMs: 60_000, message: '自主发稿试跑过于频繁' }),
+  async (req, res) => {
+    const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+    const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+    try {
+      const result = await runAutonomousDouyinPostForCompanion(c, { force: true });
+      return ok(res, result);
+    } catch (e) {
+      if (e.code === 'FORBIDDEN') return err(res, e.message, 403);
+      return err(res, e.message || '自主发稿试跑失败', 502);
+    }
+  },
+);
+
+// POST /api/companions/:id/social/autonomy/run-comments — 立即巡检并回复一次未回复评论
+router.post('/companions/:id/social/autonomy/run-comments',
+  requireAuth,
+  rateLimit({ scope: 'social-auto-comments', maxPerWindow: 6, windowMs: 60_000, message: '评论巡检过于频繁' }),
+  async (req, res) => {
+    const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+    const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+    try {
+      const limit = Number(req.body?.limit) || 6;
+      const result = await runAutonomousCommentPatrolForCompanion(c, { force: true, limit });
+      return ok(res, result);
+    } catch (e) {
+      if (e.code === 'FORBIDDEN') return err(res, e.message, 403);
+      return err(res, e.message || '评论巡检失败', 502);
+    }
+  },
+);
+
+// POST /api/companions/:id/social/comments/:logId/send — 发送待批评论回复
+router.post('/companions/:id/social/comments/:logId/send', requireAuth, async (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const logId = intId(req.params.logId); if (!logId) return err(res, 'logId 无效');
+  const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+  try {
+    const replyText = typeof req.body?.reply_text === 'string' ? req.body.reply_text : '';
+    const result = await sendPendingCommentReply(c, logId, { replyText });
+    return ok(res, result);
+  } catch (e) {
+    if (e.code === 'FORBIDDEN') return err(res, e.message, 403);
+    if (e.code === 'NOT_FOUND') return err(res, e.message, 404);
+    if (e.code === 'BAD_INPUT' || e.code === 'UNSUPPORTED') return err(res, e.message, 400);
+    return err(res, e.message || '发送评论回复失败', 502);
   }
 });
 
