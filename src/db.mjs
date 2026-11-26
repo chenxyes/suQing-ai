@@ -5873,6 +5873,39 @@ function migrateSocialStudio() {
     );
     CREATE INDEX IF NOT EXISTS idx_social_reply_logs_companion
       ON companion_social_reply_logs(companion_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS companion_social_autonomy_state (
+      companion_id          INTEGER PRIMARY KEY REFERENCES companions(id) ON DELETE CASCADE,
+      next_post_check_at    INTEGER,
+      last_post_at          INTEGER,
+      post_count_today      INTEGER NOT NULL DEFAULT 0,
+      post_count_date       TEXT,
+      last_post_note        TEXT,
+      next_comment_check_at INTEGER,
+      last_comment_check_at INTEGER,
+      reply_count_today     INTEGER NOT NULL DEFAULT 0,
+      reply_count_date      TEXT,
+      last_comment_note     TEXT,
+      sidecar_alert         TEXT,
+      updated_at            DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  const draftCols = db.prepare('PRAGMA table_info(companion_social_drafts)').all().map(c => c.name);
+  if (!draftCols.includes('external_item_id')) db.exec('ALTER TABLE companion_social_drafts ADD COLUMN external_item_id TEXT');
+  if (!draftCols.includes('publish_mode')) db.exec('ALTER TABLE companion_social_drafts ADD COLUMN publish_mode TEXT');
+  if (!draftCols.includes('publish_error')) db.exec('ALTER TABLE companion_social_drafts ADD COLUMN publish_error TEXT');
+
+  const replyCols = db.prepare('PRAGMA table_info(companion_social_reply_logs)').all().map(c => c.name);
+  if (!replyCols.includes('external_comment_id')) db.exec('ALTER TABLE companion_social_reply_logs ADD COLUMN external_comment_id TEXT');
+  if (!replyCols.includes('external_item_id')) db.exec('ALTER TABLE companion_social_reply_logs ADD COLUMN external_item_id TEXT');
+  if (!replyCols.includes('author_name')) db.exec('ALTER TABLE companion_social_reply_logs ADD COLUMN author_name TEXT');
+  if (!replyCols.includes('reply_status')) db.exec("ALTER TABLE companion_social_reply_logs ADD COLUMN reply_status TEXT NOT NULL DEFAULT 'draft'");
+  if (!replyCols.includes('sent_reply_text')) db.exec('ALTER TABLE companion_social_reply_logs ADD COLUMN sent_reply_text TEXT');
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_social_reply_ext_comment
+      ON companion_social_reply_logs(companion_id, external_comment_id);
   `);
 }
 
@@ -5940,6 +5973,9 @@ export function updateSocialDraft(id, patch = {}) {
     status: v => (['draft', 'ready', 'published', 'discarded'].includes(v) ? v : 'draft'),
     published_at: v => (v ? String(v) : null),
     backflow_done: v => (v ? 1 : 0),
+    external_item_id: v => (v ? String(v).slice(0, 120) : null),
+    publish_mode: v => (v ? String(v).slice(0, 40) : null),
+    publish_error: v => (v ? String(v).slice(0, 300) : null),
   };
   const sets = [];
   const vals = [];
@@ -5999,4 +6035,90 @@ export function markSocialReplyBackflow(id, chosenReply = null) {
     WHERE id = ?
   `).run(chosenReply ? String(chosenReply).slice(0, 300) : null, id);
   return info.changes > 0;
+}
+
+export function getSocialReplyLogById(id) {
+  const row = getDb().prepare('SELECT * FROM companion_social_reply_logs WHERE id = ?').get(id);
+  if (!row) return null;
+  let suggestions = [];
+  try { suggestions = JSON.parse(row.suggestions_json || '[]') || []; } catch {}
+  return { ...row, suggestions, backflow_done: Boolean(row.backflow_done) };
+}
+
+export function hasSocialReplyLogForComment(companionId, externalCommentId) {
+  if (!externalCommentId) return false;
+  const row = getDb().prepare(`
+    SELECT id FROM companion_social_reply_logs
+    WHERE companion_id = ? AND external_comment_id = ?
+    LIMIT 1
+  `).get(companionId, String(externalCommentId));
+  return Boolean(row);
+}
+
+export function updateSocialReplyLog(id, patch = {}) {
+  const allowed = {
+    external_comment_id: v => (v ? String(v).slice(0, 120) : null),
+    external_item_id: v => (v ? String(v).slice(0, 120) : null),
+    author_name: v => (v ? String(v).slice(0, 60) : null),
+    chosen_reply: v => (v ? String(v).slice(0, 300) : null),
+    sent_reply_text: v => (v ? String(v).slice(0, 300) : null),
+    reply_status: v => (['draft', 'pending', 'sent', 'ignored', 'failed'].includes(v) ? v : 'draft'),
+    backflow_done: v => (v ? 1 : 0),
+  };
+  const sets = [];
+  const vals = [];
+  for (const [k, fn] of Object.entries(allowed)) {
+    if (Object.prototype.hasOwnProperty.call(patch, k)) {
+      sets.push(`${k} = ?`);
+      vals.push(fn(patch[k]));
+    }
+  }
+  if (!sets.length) return getSocialReplyLogById(id);
+  vals.push(id);
+  getDb().prepare(`UPDATE companion_social_reply_logs SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+  return getSocialReplyLogById(id);
+}
+
+export function getSocialAutonomyState(companionId) {
+  return getDb().prepare('SELECT * FROM companion_social_autonomy_state WHERE companion_id = ?').get(companionId) || null;
+}
+
+export function upsertSocialAutonomyState(companionId, fields = {}) {
+  const cur = getSocialAutonomyState(companionId) || {};
+  const pick = (k, def = null) => (Object.prototype.hasOwnProperty.call(fields, k) ? fields[k] : (cur[k] ?? def));
+  const trim = (v, n) => (v == null ? null : String(v).slice(0, n));
+  getDb().prepare(`
+    INSERT INTO companion_social_autonomy_state (
+      companion_id, next_post_check_at, last_post_at, post_count_today, post_count_date, last_post_note,
+      next_comment_check_at, last_comment_check_at, reply_count_today, reply_count_date, last_comment_note,
+      sidecar_alert, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(companion_id) DO UPDATE SET
+      next_post_check_at = excluded.next_post_check_at,
+      last_post_at = excluded.last_post_at,
+      post_count_today = excluded.post_count_today,
+      post_count_date = excluded.post_count_date,
+      last_post_note = excluded.last_post_note,
+      next_comment_check_at = excluded.next_comment_check_at,
+      last_comment_check_at = excluded.last_comment_check_at,
+      reply_count_today = excluded.reply_count_today,
+      reply_count_date = excluded.reply_count_date,
+      last_comment_note = excluded.last_comment_note,
+      sidecar_alert = excluded.sidecar_alert,
+      updated_at = CURRENT_TIMESTAMP
+  `).run(
+    companionId,
+    pick('next_post_check_at'),
+    pick('last_post_at'),
+    pick('post_count_today', 0),
+    pick('post_count_date'),
+    trim(pick('last_post_note'), 240),
+    pick('next_comment_check_at'),
+    pick('last_comment_check_at'),
+    pick('reply_count_today', 0),
+    pick('reply_count_date'),
+    trim(pick('last_comment_note'), 240),
+    trim(pick('sidecar_alert'), 240),
+  );
+  return getSocialAutonomyState(companionId);
 }

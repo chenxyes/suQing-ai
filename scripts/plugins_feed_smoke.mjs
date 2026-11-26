@@ -59,9 +59,9 @@ try {
     hobbies: ['橘猫', '推理小说'],
   });
 
-  // 1. 内置 3 个插件注册与按角色启停持久化
+  // 1. 内置 4 个插件注册与按角色启停持久化
   const ids = listPlugins().map(p => p.id).sort();
-  assert.deepEqual(ids, ['feed.bilibili_hot', 'feed.web_trends', 'resolver.link_preview']);
+  assert.deepEqual(ids, ['feed.bilibili_hot', 'feed.web_trends', 'publisher.douyin_sidecar', 'resolver.link_preview']);
   assert.equal(isPluginEnabledForCompanion(comp.id, 'feed.bilibili_hot'), false);
   setCompanionPluginConfig(comp.id, 'feed.bilibili_hot', { enabled: true, config: { tag: '搞笑' } });
   assert.equal(isPluginEnabledForCompanion(comp.id, 'feed.bilibili_hot'), true);
