@@ -116,14 +116,20 @@ export function pickSticker(tag) {
 const STICKER_RE = /[\[【]STICKER:\s*([\w一-龥]+)\s*[\]】]/gi;
 
 export function parseStickerMarkers(reply) {
-  if (typeof reply !== 'string' || !reply) return { text: reply || '', stickers: [] };
+  if (typeof reply !== 'string' || !reply) return { text: reply || '', stickers: [], missingTags: [] };
   const stickers = [];
+  const missingTags = [];
   const text = reply.replace(STICKER_RE, (_, tag) => {
-    const picked = pickSticker(tag);
-    if (picked) stickers.push({ tag, picked });
+    const cleanTag = String(tag || '').trim().toLowerCase();
+    const picked = pickSticker(cleanTag);
+    if (picked) {
+      stickers.push({ tag: cleanTag, picked });
+    } else if (cleanTag && !missingTags.includes(cleanTag)) {
+      missingTags.push(cleanTag);
+    }
     return '';
   }).replace(/\s+/g, ' ').trim();
-  return { text, stickers };
+  return { text, stickers, missingTags };
 }
 
 /**

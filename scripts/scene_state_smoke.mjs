@@ -1,7 +1,7 @@
 /**
  * scene_state_smoke —— #324 失忆修红验（current_scene 事件驱动持久 + open_loop 约定注入 + TTL；零 LLM）。
  *
- * 根因：current_scene 字段存在且已无条件注入(§6「你现在在：X」)却从不自动更新→stale"在家"反客为主，
+ * 根因：current_scene 字段存在却从不自动更新→stale"在家"反客为主，
  * 密聊下真场景滑出 16 行窗口后 LLM 凭空编场景。修法搭车 extractAndSaveMemories 的 LLM pass 自动更新。
  */
 process.env.DB_PATH = '/tmp/scene_state_smoke.db';
@@ -37,10 +37,10 @@ ok(comp().current_scene === '日常', '①抽取失败→回落"日常"（fail-o
 // ── ② §6 注入：current_scene 进 prompt（本 bug 的注入点）─────────────────────────
 patchCompanion(1, { current_scene: '图书馆' });
 let p = buildSystemPrompt(comp(), { promptMode: 'reply' });
-ok(/你现在在：图书馆/.test(p), '②current_scene=图书馆→prompt 注入"你现在在：图书馆"');
+ok(/最近场景记录[^\n]*图书馆/.test(p), '②current_scene=图书馆→prompt 注入带时刻的图书馆记录');
 patchCompanion(1, { current_scene: '日常' });
 p = buildSystemPrompt(comp(), { promptMode: 'reply' });
-ok(/你现在在家/.test(p) && !/你现在在：/.test(p), '②"日常"→退回"你现在在家随意聊"（中性默认）');
+ok(!/最近场景记录|你现在在家/.test(p), '②中性默认值没有地点证据');
 
 // ── ②B open_loops 注入 + appointment 置顶 ────────────────────────────────────────
 saveOpenLoop({ companionId: 1, title: '他周五考试', loopKind: 'user_said', emotionalWeight: 60 });
@@ -55,6 +55,11 @@ ok(!/约了一起吃晚饭/.test(buildSystemPrompt(comp(), { promptMode: 'reply'
 // ── ③ TTL 次日清场 ──────────────────────────────────────────────────────────────
 patchCompanion(1, { current_scene: '图书馆' });
 db.prepare("INSERT INTO companions (id,user_id,bot_id,name,current_scene) VALUES (2,1,'b','x','在家')").run();
+const sceneBefore = comp().scene_recorded_at;
+patchCompanion(1, { current_mood: '平静' });
+ok(comp().scene_recorded_at === sceneBefore, '无关更新保留场景记录时间');
+applySceneUpdate(1, '早读教室', { observedAt: '2025-01-01 00:00:00' });
+ok(comp().current_scene === '图书馆', '迟到的旧回合不能覆盖新场景');
 const changed = resetScenesForNewDay();
 ok(comp().current_scene === '日常', '③次日清场：图书馆→日常');
 ok(getCompanionById(2).current_scene === '在家', '③清场不动"在家"（本就中性）');
@@ -64,7 +69,7 @@ ok(changed >= 1, '③返回清场条数');
 patchCompanion(1, { current_scene: '图书馆' });
 const farTurns = Array.from({ length: 16 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: '兔子狐狸的故事' + i }));
 p = buildSystemPrompt(comp(), { promptMode: 'reply', recentTurns: farTurns });
-ok(/你现在在：图书馆/.test(p), '#324回归：场景滑出 16 行窗口后 current_scene 仍注入图书馆（不再编"麻辣香锅"）');
+ok(/最近场景记录[^\n]*图书馆/.test(p), '#324回归：场景滑出 16 行窗口后 current_scene 仍注入图书馆（不再编"麻辣香锅"）');
 
 for (const suf of ['', '-wal', '-shm']) { try { unlinkSync(process.env.DB_PATH + suf); } catch {} }
 console.log(`scene_state_smoke: ${pass} passed, ${fail} failed`);

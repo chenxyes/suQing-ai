@@ -5,23 +5,17 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5" />
   <meta name="color-scheme" content="light dark" />
-  <meta name="theme-color" content="#FFB6D9" />
+  <meta name="theme-color" content="#FFB6D9" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0F0F12" media="(prefers-color-scheme: dark)" />
+  <meta name="robots" content="noindex, nofollow" />
+  <meta name="description" content="在浏览器中直接与溪语 AI 伴侣对话、测试人设与语音。" />
   <title>聊天测试 · 溪语 AI</title>
-  <link rel="icon" href="/logo.png?v=2" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
 
-  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/app/tailwind.css" />
   <link rel="stylesheet" href="/app/glass.css" />
-  <script>
-    tailwind.config = { theme: { extend: {
-      colors: {
-        sakura: '#FFB6D9', 'sakura-soft': '#FFE8F2', 'sakura-deep': '#FF8FB8',
-        ink: '#1D1D1F', mute: '#86868B', line: '#F0F0F2', cloud: '#FAFAFA',
-      },
-      fontFamily: {
-        sans: ['"PingFang SC"','"HarmonyOS Sans SC"','"Microsoft YaHei"','system-ui','-apple-system','sans-serif'],
-      },
-    }}};
-  </script>
   <style>
     body { background: linear-gradient(180deg, #FFF7FB 0%, #FFFFFF 100%); }
     .card { background: #fff; border: 1px solid #F0F0F2; border-radius: 18px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
@@ -37,11 +31,12 @@
   <script src="/app/i18n.js" defer></script>
 </head>
 <body class="font-sans text-ink min-h-screen">
+  <a href="#msgs" class="skip-link">跳到对话内容</a>
 
   <!-- Top bar -->
   <header class="sticky top-0 z-10 bg-white/85 backdrop-blur border-b border-line">
     <div class="max-w-3xl mx-auto px-4 py-3 flex items-center gap-3">
-      <a href="/app/dashboard.html" class="text-mute hover:text-ink text-[20px] leading-none">‹</a>
+      <a href="/app/dashboard.html" aria-label="返回控制台" class="text-mute hover:text-ink text-[20px] leading-none px-1 py-0.5 rounded-lg">‹</a>
       <img id="c-avatar" src="/default-avatar.webp" alt="" class="w-10 h-10 rounded-full" />
       <div class="flex-1 min-w-0">
         <p id="c-name" class="text-[15px] font-bold truncate">—</p>
@@ -58,21 +53,21 @@
   <!-- Banner: 解释这是浏览器测试，不是微信 -->
   <div class="max-w-3xl mx-auto px-4 pt-4">
     <div class="card p-3 text-[12px] text-mute flex items-start gap-2">
-      <span class="text-sakura-deep">🧪</span>
+      <span class="text-sakura-deep" aria-hidden="true">🧪</span>
       <span><b>⚠️ 你正在与 AI 对话</b>——「她」由人工智能生成、非真人。这是浏览器内 playground，跑的是和微信入站消息**完全相同**的 AI 管线（人设、记忆、心情、好感度都生效），只是不发到微信。</span>
     </div>
   </div>
 
   <!-- Messages -->
-  <main id="msgs" class="max-w-3xl mx-auto px-4 py-5 space-y-3 pb-32"></main>
+  <main id="msgs" aria-live="polite" class="max-w-3xl mx-auto px-4 py-5 space-y-3 pb-36"></main>
 
   <!-- Input -->
   <footer class="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur border-t border-line z-10">
     <form id="chat-form" class="max-w-3xl mx-auto px-4 py-3 flex items-end gap-2">
-      <textarea id="chat-input" rows="1" placeholder="说点什么…(Enter 发送 / Shift+Enter 换行)"
+      <textarea id="chat-input" rows="1" aria-label="输入消息" placeholder="说点什么…(Enter 发送 / Shift+Enter 换行)"
         class="flex-1 resize-none bg-cloud border border-line rounded-2xl px-4 py-2.5 text-[14px] focus:outline-none focus:border-sakura placeholder:text-mute"
         maxlength="2000"></textarea>
-      <button type="button" id="mic-btn" title="按住说话（识别为文字发送）"
+      <button type="button" id="mic-btn" title="按住说话（识别为文字发送）" aria-label="按住说话（识别为文字发送）"
         class="flex-shrink-0 w-10 h-10 grid place-items-center text-sakura-deep border border-sakura-soft rounded-full hover:bg-sakura-soft transition-all">
         🎙️
       </button>

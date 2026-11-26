@@ -5,20 +5,11 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5" />
   <title>个人抖音工作台 · 溪语AI</title>
-  <link rel="icon" href="/logo.png?v=2" />
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      theme: { extend: {
-        colors: { sakura:'#FFB6D9','sakura-soft':'#FFE8F2','sakura-deep':'#FF8FB8',
-          ink:'#1D1D1F', mute:'#86868B', line:'#F0F0F2', cloud:'#FAFAFA' },
-        fontFamily: { sans: ['-apple-system','BlinkMacSystemFont','"PingFang SC"','"Hiragino Sans GB"','"Microsoft YaHei"','sans-serif'] },
-      }},
-    };
-  </script>
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="stylesheet" href="/app/tailwind.css?v=35" />
+  <link rel="stylesheet" href="/app/glass.css?v=35" />
   <style>
     html { -webkit-font-smoothing: antialiased; }
-    body { background: #FAFAFA; }
     .card { background:#fff; border-radius:18px; box-shadow:0 4px 20px rgba(0,0,0,0.05); border:1px solid #F0F0F2; }
     .btn-primary { background: linear-gradient(135deg, #FFB6D9 0%, #FF8FB8 100%); color:#fff; border-radius:999px; font-weight:600; transition:all .15s; }
     .btn-primary:hover:not(:disabled) { opacity:.92; }
@@ -27,7 +18,7 @@
   </style>
   <script src="/app/theme.js" defer></script>
 </head>
-<body class="min-h-screen font-sans text-ink">
+<body class="min-h-screen bg-cloud font-sans text-ink antialiased">
 
 <div class="max-w-4xl mx-auto px-4 py-8 space-y-6">
   <header class="flex items-center justify-between gap-3 flex-wrap">

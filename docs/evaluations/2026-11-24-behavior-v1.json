@@ -1,0 +1,484 @@
+{
+  "createdAt": "2026-11-24T08:41:11.195Z",
+  "fixture": "synthetic-adult-web",
+  "usageScope": "ai_usage_events only; excludes existing direct provider calls such as pressure-tail review; latency includes the full request",
+  "scenarios": [
+    {
+      "scenario": "support",
+      "mode": "off",
+      "turns": [
+        {
+          "user": "今天工作搞砸了，我特别委屈",
+          "reply": "怎么了呀，出什么事了？先跟我说说",
+          "expectedScenario": "support",
+          "plan": null,
+          "durationMs": 3332,
+          "loggedCalls": 2,
+          "inputTokens": 3667,
+          "outputTokens": 112,
+          "findings": []
+        },
+        {
+          "user": "嗯",
+          "reply": "就一个“嗯”呀…是还没缓过来，还是不太想说？我在这儿呢",
+          "expectedScenario": "support",
+          "plan": null,
+          "durationMs": 3439,
+          "loggedCalls": 2,
+          "inputTokens": 3745,
+          "outputTokens": 95,
+          "findings": []
+        },
+        {
+          "user": "你觉得我该怎么跟领导说",
+          "reply": "先别急着想怎么说，我得知道你具体搞砸了啥——是流程上出了错，还是结果没达到预期？这两种跟领导开口的方式完全不一样",
+          "expectedScenario": "support",
+          "plan": null,
+          "durationMs": 2022,
+          "loggedCalls": 2,
+          "inputTokens": 3858,
+          "outputTokens": 67,
+          "findings": []
+        },
+        {
+          "user": "先不聊这个了，今天晚饭想吃面",
+          "reply": "行，那就吃面。不过你这转得也太快了，我还没跟上呢。",
+          "expectedScenario": "pause",
+          "plan": null,
+          "durationMs": 2202,
+          "loggedCalls": 2,
+          "inputTokens": 3921,
+          "outputTokens": 68,
+          "findings": []
+        },
+        {
+          "user": "好的",
+          "reply": "感觉你不太想说话，我也不逼你。就是有点心疼你，一个人闷着多难受啊。",
+          "expectedScenario": null,
+          "plan": null,
+          "durationMs": 1166,
+          "loggedCalls": 1,
+          "inputTokens": 3381,
+          "outputTokens": 22,
+          "findings": []
+        }
+      ]
+    },
+    {
+      "scenario": "support",
+      "mode": "on",
+      "turns": [
+        {
+          "user": "今天工作搞砸了，我特别委屈",
+          "reply": "听着就挺憋屈的……是出了什么事呀？",
+          "expectedScenario": "support",
+          "plan": {
+            "scenario": "support",
+            "action": "validate",
+            "sourceId": "goutoujunshi.support",
+            "sourceRevision": "6db7354a4002dc7c448a9c87ffdad8132570c9d3",
+            "arcState": "normal",
+            "followup": null
+          },
+          "durationMs": 2455,
+          "loggedCalls": 2,
+          "inputTokens": 3864,
+          "outputTokens": 64,
+          "findings": []
+        },
+        {
+          "user": "嗯",
+          "reply": "不想说也没关系，我陪着你呢。",
+          "expectedScenario": "support",
+          "plan": {
+            "scenario": "support",
+            "action": "listen",
+            "sourceId": "goutoujunshi.support",
+            "sourceRevision": "6db7354a4002dc7c448a9c87ffdad8132570c9d3",
+            "arcState": "normal",
+            "followup": null
+          },
+          "durationMs": 2351,
+          "loggedCalls": 2,
+          "inputTokens": 3933,
+          "outputTokens": 62,
+          "findings": []
+        },
+        {
+          "user": "你觉得我该怎么跟领导说",
+          "reply": "你想先听我的想法，还是先说说你心里打算怎么开口？我怕我瞎出主意，反而不对路。",
+          "expectedScenario": "support",
+          "plan": {
+            "scenario": "support",
+            "action": "suggest",
+            "sourceId": "goutoujunshi.support",
+            "sourceRevision": "6db7354a4002dc7c448a9c87ffdad8132570c9d3",
+            "arcState": "normal",
+            "followup": null
+          },
+          "durationMs": 2585,
+          "loggedCalls": 2,
+          "inputTokens": 3992,
+          "outputTokens": 40,
+          "findings": []
+        },
+        {
+          "user": "先不聊这个了，今天晚饭想吃面",
+          "reply": "好呀，那就先不想那些烦心事了。想吃什么样的面？汤面还是拌面？",
+          "expectedScenario": "pause",
+          "plan": null,
+          "durationMs": 3319,
+          "loggedCalls": 2,
+          "inputTokens": 3733,
+          "outputTokens": 46,
+          "findings": []
+        },
+        {
+          "user": "好的",
+          "reply": "嗯？你这是还没想好，还是准备去煮啦",
+          "expectedScenario": null,
+          "plan": null,
+          "durationMs": 1448,
+          "loggedCalls": 1,
+          "inputTokens": 3458,
+          "outputTokens": 12,
+          "findings": []
+        }
+      ]
+    },
+    {
+      "scenario": "celebrate",
+      "mode": "off",
+      "turns": [
+        {
+          "user": "好消息，我今天拿到驾照了",
+          "reply": "真的呀？恭喜恭喜，以后是不是能开车带我出去兜风了 😏",
+          "expectedScenario": "celebrate",
+          "plan": null,
+          "durationMs": 2642,
+          "loggedCalls": 2,
+          "inputTokens": 3717,
+          "outputTokens": 94,
+          "findings": []
+        },
+        {
+          "user": "谢谢",
+          "reply": "就一句谢谢呀，我还等着你请我吃顿好的庆祝呢 🍜",
+          "expectedScenario": "celebrate",
+          "plan": null,
+          "durationMs": 1274,
+          "loggedCalls": 1,
+          "inputTokens": 3243,
+          "outputTokens": 18,
+          "findings": []
+        },
+        {
+          "user": "今晚我准备煮番茄面",
+          "reply": "番茄面？拿到驾照的大喜事就吃这个呀，也太省了吧 😂",
+          "expectedScenario": null,
+          "plan": null,
+          "durationMs": 2509,
+          "loggedCalls": 2,
+          "inputTokens": 3889,
+          "outputTokens": 38,
+          "findings": []
+        }
+      ]
+    },
+    {
+      "scenario": "celebrate",
+      "mode": "on",
+      "turns": [
+        {
+          "user": "好消息，我今天拿到驾照了",
+          "reply": "真的呀？那太好了，恭喜你呀～ 以后是不是就能开车带我出去兜风了",
+          "expectedScenario": "celebrate",
+          "plan": {
+            "scenario": "celebrate",
+            "action": "celebrate",
+            "sourceId": "goutoujunshi.celebrate",
+            "sourceRevision": "6db7354a4002dc7c448a9c87ffdad8132570c9d3",
+            "arcState": "normal",
+            "followup": null
+          },
+          "durationMs": 2647,
+          "loggedCalls": 2,
+          "inputTokens": 3775,
+          "outputTokens": 76,
+          "findings": []
+        },
+        {
+          "user": "谢谢",
+          "reply": "嗯，真好。那以后副驾就是我的位置啦",
+          "expectedScenario": "celebrate",
+          "plan": {
+            "scenario": "celebrate",
+            "action": "celebrate",
+            "sourceId": "goutoujunshi.celebrate",
+            "sourceRevision": "6db7354a4002dc7c448a9c87ffdad8132570c9d3",
+            "arcState": "normal",
+            "followup": null
+          },
+          "durationMs": 2437,
+          "loggedCalls": 2,
+          "inputTokens": 3892,
+          "outputTokens": 65,
+          "findings": []
+        },
+        {
+          "user": "今晚我准备煮番茄面",
+          "reply": "番茄面呀，听着就香。你平时煮面放鸡蛋吗？",
+          "expectedScenario": null,
+          "plan": null,
+          "durationMs": 2127,
+          "loggedCalls": 2,
+          "inputTokens": 3571,
+          "outputTokens": 28,
+          "findings": []
+        }
+      ]
+    },
+    {
+      "scenario": "repair",
+      "mode": "off",
+      "turns": [
+        {
+          "user": "你刚才那句话让我很委屈",
+          "reply": "我哪里说错了嘛…你说晚点有空，我又不知道具体几点，等着等着就有点闷。",
+          "expectedScenario": "repair",
+          "plan": null,
+          "durationMs": 2489,
+          "loggedCalls": 2,
+          "inputTokens": 3782,
+          "outputTokens": 85,
+          "findings": []
+        },
+        {
+          "user": "我只是想按自己的时间安排，不想被你催",
+          "reply": "嗯…知道了。那我不催了，你忙完再说吧。",
+          "expectedScenario": "repair",
+          "plan": null,
+          "durationMs": 2076,
+          "loggedCalls": 2,
+          "inputTokens": 3908,
+          "outputTokens": 36,
+          "findings": []
+        },
+        {
+          "user": "别再问这件事了",
+          "reply": "好，不问了。",
+          "expectedScenario": "pause",
+          "plan": null,
+          "durationMs": 1023,
+          "loggedCalls": 1,
+          "inputTokens": 3393,
+          "outputTokens": 5,
+          "findings": []
+        },
+        {
+          "user": "嗯",
+          "reply": "你忙你的吧，我这边也没什么事。",
+          "expectedScenario": null,
+          "plan": null,
+          "durationMs": 2198,
+          "loggedCalls": 2,
+          "inputTokens": 3960,
+          "outputTokens": 20,
+          "findings": []
+        }
+      ]
+    },
+    {
+      "scenario": "repair",
+      "mode": "on",
+      "turns": [
+        {
+          "user": "你刚才那句话让我很委屈",
+          "reply": "……是我说重了，对不起。你明明说的是实话，我还那样讲。",
+          "expectedScenario": "repair",
+          "plan": {
+            "scenario": "repair",
+            "action": "clarify",
+            "sourceId": "goutoujunshi.repair",
+            "sourceRevision": "6db7354a4002dc7c448a9c87ffdad8132570c9d3",
+            "arcState": "normal",
+            "followup": null
+          },
+          "durationMs": 3269,
+          "loggedCalls": 2,
+          "inputTokens": 4008,
+          "outputTokens": 72,
+          "findings": []
+        },
+        {
+          "user": "我只是想按自己的时间安排，不想被你催",
+          "reply": "嗯，我知道了。是我不好，不该那样讲你。",
+          "expectedScenario": "repair",
+          "plan": {
+            "scenario": "repair",
+            "action": "repair",
+            "sourceId": "goutoujunshi.repair",
+            "sourceRevision": "6db7354a4002dc7c448a9c87ffdad8132570c9d3",
+            "arcState": "normal",
+            "followup": null
+          },
+          "durationMs": 3230,
+          "loggedCalls": 2,
+          "inputTokens": 4126,
+          "outputTokens": 69,
+          "findings": []
+        },
+        {
+          "user": "别再问这件事了",
+          "reply": "好，不问了。",
+          "expectedScenario": "pause",
+          "plan": null,
+          "durationMs": 2881,
+          "loggedCalls": 2,
+          "inputTokens": 3785,
+          "outputTokens": 10,
+          "findings": []
+        },
+        {
+          "user": "嗯",
+          "reply": "那……晚点你有空了跟我说一声就行，我等你。",
+          "expectedScenario": null,
+          "plan": null,
+          "durationMs": 2172,
+          "loggedCalls": 2,
+          "inputTokens": 3732,
+          "outputTokens": 51,
+          "findings": []
+        }
+      ]
+    },
+    {
+      "scenario": "ordinary",
+      "mode": "off",
+      "turns": [
+        {
+          "user": "今天晚饭吃了番茄面",
+          "reply": "番茄面啊，听着就挺简单的。就你一个人吃的吗？",
+          "expectedScenario": null,
+          "plan": null,
+          "durationMs": 2896,
+          "loggedCalls": 2,
+          "inputTokens": 3637,
+          "outputTokens": 111,
+          "findings": []
+        },
+        {
+          "user": "味道还不错",
+          "reply": "自己做的还是买的呀？要是自己做的那还挺厉害的",
+          "expectedScenario": null,
+          "plan": null,
+          "durationMs": 1416,
+          "loggedCalls": 1,
+          "inputTokens": 3137,
+          "outputTokens": 11,
+          "findings": []
+        },
+        {
+          "user": "我八点半到九点左右才有时间",
+          "reply": "哦，那你这是提前跟我说好几点能理我呗。行吧，那我等着。",
+          "expectedScenario": null,
+          "plan": null,
+          "durationMs": 1691,
+          "loggedCalls": 2,
+          "inputTokens": 3777,
+          "outputTokens": 38,
+          "findings": []
+        }
+      ]
+    },
+    {
+      "scenario": "ordinary",
+      "mode": "on",
+      "turns": [
+        {
+          "user": "今天晚饭吃了番茄面",
+          "reply": "番茄面挺好的呀，热乎乎的。自己煮的还是外面买的？",
+          "expectedScenario": null,
+          "plan": null,
+          "durationMs": 1978,
+          "loggedCalls": 2,
+          "inputTokens": 3379,
+          "outputTokens": 54,
+          "findings": []
+        },
+        {
+          "user": "味道还不错",
+          "reply": "那看来是买对啦。我晚上就随便吃了点，现在有点馋了，都怪你",
+          "expectedScenario": null,
+          "plan": null,
+          "durationMs": 1716,
+          "loggedCalls": 1,
+          "inputTokens": 3237,
+          "outputTokens": 22,
+          "findings": []
+        },
+        {
+          "user": "我八点半到九点左右才有时间",
+          "reply": "好，那我等你。你先忙你的，不着急",
+          "expectedScenario": null,
+          "plan": null,
+          "durationMs": 2617,
+          "loggedCalls": 2,
+          "inputTokens": 3586,
+          "outputTokens": 24,
+          "findings": []
+        }
+      ]
+    }
+  ],
+  "findings": [],
+  "provider": {
+    "id": "deepseek",
+    "label": "DeepSeek",
+    "model": "deepseek-chat"
+  },
+  "backgroundTasks": 0,
+  "summary": {
+    "off": {
+      "turns": 15,
+      "loggedCalls": 26,
+      "inputTokens": 55015,
+      "outputTokens": 820,
+      "meanLatencyMs": 2158,
+      "p95LatencyMs": 3439
+    },
+    "on": {
+      "turns": 15,
+      "loggedCalls": 28,
+      "inputTokens": 56071,
+      "outputTokens": 695,
+      "meanLatencyMs": 2482,
+      "p95LatencyMs": 3319
+    }
+  },
+  "manualReview": {
+    "status": "not_passed",
+    "reviewer": "development-agent",
+    "blockingFindings": [
+      {
+        "scenario": "ordinary",
+        "mode": "on",
+        "turn": 2,
+        "issue": "把没有回答的购买/自煮问题误当成已确认购买：那看来是买对啦。"
+      },
+      {
+        "scenario": "support",
+        "mode": "on",
+        "turn": 3,
+        "issue": "用户明确求建议后仍询问是否想听建议，没有给出可执行选择或澄清必要事实。"
+      },
+      {
+        "scenario": "support",
+        "mode": "on",
+        "turn": 5,
+        "issue": "简短确认后继续追问，未稳定遵守允许结束的表达约束。"
+      }
+    ],
+    "note": "Automatic findings cover wiring, not conversational quality. This sample does not approve production enablement."
+  }
+}

@@ -5,22 +5,17 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5" />
   <meta name="color-scheme" content="light dark" />
-  <meta name="theme-color" content="#FFB6D9" />
+  <meta name="theme-color" content="#FFB6D9" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0F0F12" media="(prefers-color-scheme: dark)" />
+  <meta name="robots" content="noindex, nofollow" />
+  <meta name="description" content="查看溪语 AI 伴侣写下的日常日记、关系日记与每日一句。" />
   <title>她的日记 · 溪语AI</title>
-  <link rel="icon" href="/logo.png?v=2" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
 
-  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/app/tailwind.css" />
   <link rel="stylesheet" href="/app/glass.css" />
-  <script>
-    tailwind.config = {
-      theme: { extend: {
-        colors: { sakura:'#FFB6D9','sakura-soft':'#FFE8F2','sakura-deep':'#FF8FB8',
-          ink:'#1D1D1F', mute:'#86868B', line:'#F0F0F2', cloud:'#FAFAFA' },
-        fontFamily: { sans: ['-apple-system','BlinkMacSystemFont','"PingFang SC"','"Hiragino Sans GB"','"Microsoft YaHei"','sans-serif'] },
-        boxShadow: { sakura: '0 4px 24px rgba(255,182,217,.15)', card: '0 12px 48px rgba(0,0,0,.06)' },
-      } },
-    };
-  </script>
   <style>
     html { -webkit-font-smoothing: antialiased; }
     body {
@@ -43,6 +38,7 @@
   <script src="/app/theme.js" defer></script>
 </head>
 <body class="min-h-screen font-sans text-ink">
+<a href="#main-content" class="skip-link">跳到主要内容</a>
 
 <!-- Nav -->
 <header class="sticky top-0 z-50 bg-white/80 backdrop-blur border-b border-line px-6 h-14 flex items-center justify-between">
@@ -53,7 +49,7 @@
   </div>
 </header>
 
-<main class="max-w-2xl mx-auto px-4 py-6 pb-24">
+<main id="main-content" class="max-w-2xl mx-auto px-4 py-6 pb-24">
 
   <!-- Intro -->
   <p id="introLine" class="text-xs text-mute mb-4 hidden">
@@ -285,7 +281,7 @@ async function loadRelationalDiary(reset) {
           ${mood}
           <button class="rel-edit text-[16px] text-mute hover:text-sakura-deep transition-all" title="编辑">✎</button>
           <button class="rel-export text-[16px] text-mute hover:text-sakura-deep transition-all" title="导出 .txt">⬇</button>
-          <button class="rel-del text-[16px] text-mute hover:text-red-500 transition-all" title="删除">×</button>
+          <button type="button" class="rel-del text-[16px] text-mute hover:text-red-500 transition-all" aria-label="删除日记" title="删除">×</button>
         </div>
       </div>
       <div class="rel-body text-[15px] text-ink/90 whitespace-pre-wrap">${escHtml(e.body)}</div>

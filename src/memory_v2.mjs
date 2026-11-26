@@ -7,8 +7,11 @@
  */
 
 import { log } from './logger.mjs';
-import { patchMemory, touchMemory, getDb } from './db.mjs';
-import { embedText } from './ai.mjs';
+import { getRecallableMemories, getMemoryRecallBarrier } from './db.mjs';
+import { isMemoryRecallable } from './memory_admission.mjs';
+import { embedTextWithDescriptor } from './ai.mjs';
+import { memoryDecayScore } from './memory_retrieval.mjs';
+import { validMemoryVector, storedMemoryVector, sameEmbeddingSpace, memoryCosine } from './memory_vectors.mjs';
 
 // ─── Allowed enumerations ──────────────────────────────────────────────────────
 
@@ -53,8 +56,6 @@ export { isSensitiveMemoryContent, sanitizeMemoryContent } from './privacy_filte
 
 // ─── Decay score ──────────────────────────────────────────────────────────────
 
-const MS_PER_DAY = 86_400_000;
-
 /**
  * Compute a decay score in [0, 1] for a memory row.
  * locked=1 or pinned=1 → always 1.0
@@ -63,21 +64,7 @@ const MS_PER_DAY = 86_400_000;
  * others → half-life 45 days
  */
 export function computeMemoryDecay(memory, now = new Date()) {
-  if (memory.locked || memory.pinned) return 1.0;
-  if (memory.memory_status && memory.memory_status !== 'active') return 0;
-
-  const createdAt = memory.created_at ? new Date(String(memory.created_at).replace(' ', 'T')) : now;
-  const lastUsed  = memory.last_used_at ? new Date(String(memory.last_used_at).replace(' ', 'T')) : createdAt;
-  const refDate   = lastUsed > createdAt ? lastUsed : createdAt;
-  const ageDays   = Math.max(0, (now - refDate) / MS_PER_DAY);
-
-  const weight = typeof memory.memory_weight === 'number' ? memory.memory_weight : 3;
-  let halfLifeDays;
-  if (weight >= 4)     halfLifeDays = 90;
-  else if (weight <= 1) halfLifeDays = 14;
-  else                  halfLifeDays = 45;
-
-  return Math.exp(-ageDays * Math.LN2 / halfLifeDays);
+  return memoryDecayScore(memory, now);
 }
 
 // ─── Recall ranking ───────────────────────────────────────────────────────────
@@ -90,11 +77,7 @@ export function rankMemoriesForRecall(memories, context = '') {
   const ctx = (context || '').toLowerCase();
 
   return memories
-    .filter(m => {
-      if (m.memory_status && m.memory_status !== 'active') return false;
-      if (m.do_not_mention) return false;
-      return true;
-    })
+    .filter(isMemoryRecallable)
     .map(m => {
       const decay   = computeMemoryDecay(m);
       const weight  = normalizeMemoryWeight(m.memory_weight ?? 3) / 5;
@@ -119,19 +102,31 @@ export function rankMemoriesForRecall(memories, context = '') {
 
 /**
  * Simple deduplication: returns a subset where content is not "too similar".
- * For same companion_id + same memory_layer, strings sharing > 70% of tokens
- * count as duplicate. Keeps the higher-weight one.
+ * Only identical content with the same explicit subject and scope can collapse.
+ * Unknown legacy ownership is never inferred from textual similarity.
  */
 export function dedupeMemories(memories) {
   const keep = [];
-  for (const m of memories) {
+  for (const m of memories.filter(isMemoryRecallable)) {
     const isDup = keep.some(k => {
+      if (k.companion_id !== m.companion_id || k.user_id !== m.user_id) return false;
       if (k.memory_layer !== m.memory_layer) return false;
-      return tokenSimilarity(k.content || '', m.content || '') > 0.7;
+      if (!sameKnownSubject(k, m)) return false;
+      return Boolean(k.content) && k.content === m.content;
     });
     if (!isDup) keep.push(m);
   }
   return keep;
+}
+
+function knownSubject(memory) {
+  const subject = memory.memory_subject ?? memory.subject;
+  return ['user', 'companion', 'shared'].includes(subject) ? subject : null;
+}
+
+function sameKnownSubject(a, b) {
+  const subject = knownSubject(a);
+  return subject !== null && subject === knownSubject(b);
 }
 
 function tokenSimilarity(a, b) {
@@ -160,7 +155,9 @@ export function shouldWriteBackDecay(memory, newDecay) {
  * Processes up to batchSize active, non-locked, non-pinned memories at a time.
  */
 export function applyMemoryDecayBatch(db, options = {}) {
-  const batchSize = options.batchSize ?? 200;
+  const batchSize = Math.min(1000, Math.max(1, Math.trunc(Number(options.batchSize) || 200)));
+  const afterId = options.afterId ?? 0;
+  const upperId = options.upperId ?? Number.MAX_SAFE_INTEGER;
   const now = options.now ?? new Date();
 
   const rows = db.prepare(`
@@ -168,11 +165,14 @@ export function applyMemoryDecayBatch(db, options = {}) {
            last_used_at, created_at, decay_score
     FROM companion_memories
     WHERE memory_status = 'active'
+      AND id > ? AND id <= ?
+      AND COALESCE(do_not_mention, 0) = 0
+      AND COALESCE(recall_blocked, 0) = 0
       AND (locked IS NULL OR locked = 0)
       AND (pinned IS NULL OR pinned = 0)
-    ORDER BY last_used_at ASC
+    ORDER BY id ASC
     LIMIT ?
-  `).all(batchSize);
+  `).all(afterId, upperId, batchSize);
 
   const update = db.prepare(`
     UPDATE companion_memories SET decay_score = ?, updated_at = ? WHERE id = ?
@@ -193,43 +193,17 @@ export function applyMemoryDecayBatch(db, options = {}) {
   try {
     const written = runBatch(rows);
     log('info', `[MemoryDecay] 批次衰减写回 checked=${rows.length} written=${written}`);
-    return { checked: rows.length, written };
+    const nextCursor = rows.at(-1)?.id ?? afterId;
+    return { checked: rows.length, written, nextCursor, done: rows.length < batchSize || nextCursor >= upperId };
   } catch (e) {
     log('error', `[MemoryDecay] 批次写回失败: ${e.message}`);
-    return { checked: 0, written: 0 };
+    throw e;
   }
 }
 
 // ─── Semantic dedup ───────────────────────────────────────────────────────────
 
 const EMBEDDING_SIM_THRESHOLD = Number(process.env.MEMORY_EMBEDDING_SIM_THRESHOLD) || 0.86;
-
-/**
- * Cosine similarity between two float arrays.
- */
-function cosineSim(a, b) {
-  if (!a || !b || a.length !== b.length) return 0;
-  let dot = 0, na = 0, nb = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    na  += a[i] * a[i];
-    nb  += b[i] * b[i];
-  }
-  const denom = Math.sqrt(na) * Math.sqrt(nb);
-  return denom === 0 ? 0 : dot / denom;
-}
-
-function parseEmbeddingBlob(buf) {
-  if (!buf) return null;
-  try {
-    if (Buffer.isBuffer(buf)) {
-      return Array.from(new Float32Array(buf.buffer, buf.byteOffset, buf.length / 4));
-    }
-    if (typeof buf === 'string') return JSON.parse(buf);
-    if (Array.isArray(buf)) return buf;
-  } catch { /* ignore */ }
-  return null;
-}
 
 /**
  * Find an existing memory whose embedding is cosine-similar to the given content.
@@ -239,35 +213,32 @@ function parseEmbeddingBlob(buf) {
 export async function findSimilarMemoryByEmbedding(companionId, content, options = {}) {
   const layer = options.layer;
   const threshold = options.threshold ?? EMBEDDING_SIM_THRESHOLD;
-  const db = options.db ?? getDb();
+  const subject = knownSubject(options);
 
-  if (!content || !companionId) return null;
+  if (!content || !companionId || !subject) return null;
+  const revision = options.expectedRecallRevision ?? getMemoryRecallBarrier(companionId, options.userId).revision;
 
   let queryEmb = null;
   try {
-    queryEmb = await embedText(content);
+    queryEmb = await embedTextWithDescriptor(content);
   } catch { /* embedding unavailable → use token fallback */ }
+  if (getMemoryRecallBarrier(companionId, options.userId).revision !== revision) return null;
 
-  const whereLayer = layer ? `AND memory_layer = ?` : '';
-  const params = [companionId, ...(layer ? [layer] : [])];
-  const candidates = db.prepare(`
-    SELECT id, companion_id, memory_layer, memory_weight, content, embedding, memory_status
-    FROM companion_memories
-    WHERE companion_id = ?
-      AND memory_status = 'active'
-      ${whereLayer}
-    ORDER BY created_at DESC
-    LIMIT 500
-  `).all(...params);
+  const candidates = getRecallableMemories(companionId, options.userId)
+    .filter(row => knownSubject(row) === subject)
+    .filter(row => !layer || row.memory_layer === layer)
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+    .slice(0, 500);
 
   if (candidates.length === 0) return null;
 
-  if (queryEmb) {
+  if (validMemoryVector(queryEmb, content)) {
     let bestSim = -1, bestRow = null;
     for (const row of candidates) {
-      const rowEmb = parseEmbeddingBlob(row.embedding);
-      if (!rowEmb) continue;
-      const sim = cosineSim(queryEmb, rowEmb);
+      const rowEmb = storedMemoryVector(row);
+      if (!rowEmb || !sameEmbeddingSpace(queryEmb.descriptor, rowEmb.descriptor)) continue;
+      const sim = memoryCosine(queryEmb.vector, rowEmb.vector);
+      if (sim == null) continue;
       if (sim > bestSim) { bestSim = sim; bestRow = row; }
     }
     if (bestSim >= threshold) return bestRow;
@@ -281,58 +252,28 @@ export async function findSimilarMemoryByEmbedding(companionId, content, options
 }
 
 /**
- * Add a new memory or merge into an existing similar one.
- * If a similar memory is found: bump its weight and update content note.
- * If not: insert the new memory row.
+ * Compatibility helper: prepare a candidate without modifying an existing fact.
+ * Grounded DB admission owns canonical exact dedup and evidence validation.
  */
 export async function addOrMergeMemory(companionId, memoryInput, options = {}) {
-  const db = options.db ?? getDb();
+  const expectedRecallRevision = options.expectedRecallRevision
+    ?? getMemoryRecallBarrier(companionId, options.userId).revision;
   const layer = normalizeMemoryLayer(memoryInput.memory_layer || memoryInput.memoryType || 'event');
   const content = memoryInput.content;
 
   if (!content) return { action: 'skip', reason: 'empty_content' };
 
-  const similar = await findSimilarMemoryByEmbedding(companionId, content, { layer, db });
-
-  if (similar) {
-    const newWeight = Math.min(5, (similar.memory_weight ?? 3) + 1);
-    try {
-      patchMemory(similar.id, companionId, { memory_weight: newWeight });
-      touchMemory(similar.id, companionId);
-      log('info', `[MemoryDedup] companion=${companionId} merged into id=${similar.id} layer=${layer}`);
-    } catch (e) {
-      log('warn', `[MemoryDedup] merge 失败 id=${similar.id}: ${e.message}`);
-    }
-    return { action: 'merged', existingId: similar.id };
+  if (getMemoryRecallBarrier(companionId, options.userId).revision !== expectedRecallRevision) {
+    return { action: 'skip', reason: 'recall_revision_changed' };
   }
 
   return { action: 'insert', memory: { ...memoryInput, memory_layer: layer } };
 }
 
 /**
- * Given a list of newly extracted memories and existing memories for a companion,
- * filter out near-duplicates. If duplicate found, bumps weight of existing instead.
+ * Preserve candidates for grounded admission. Pre-validation fuzzy filtering can
+ * swallow a different subject's fact or strengthen unsupported legacy content.
  */
-export function filterNewMemoriesAgainstExisting(newMemories, existingMemories, db, companionId) {
-  const toInsert = [];
-  for (const nm of newMemories) {
-    const dup = existingMemories.find(em => {
-      if (em.memory_status === 'deleted') return false;
-      if (em.memory_layer !== normalizeMemoryLayer(nm.memoryType || nm.memory_layer || 'event')) return false;
-      return tokenSimilarity(em.content || '', nm.content || '') > 0.65;
-    });
-    if (dup) {
-      // Bump weight and use_count of existing rather than inserting
-      try {
-        const newWeight = Math.min(5, (dup.memory_weight ?? 3) + 1);
-        patchMemory(dup.id, companionId, { memory_weight: newWeight });
-        touchMemory(dup.id, companionId);
-      } catch (e) {
-        log('warn', `[MemoryV2] 更新重复记忆权重失败: ${e.message}`);
-      }
-    } else {
-      toInsert.push(nm);
-    }
-  }
-  return toInsert;
+export function filterNewMemoriesAgainstExisting(newMemories) {
+  return [...newMemories];
 }
