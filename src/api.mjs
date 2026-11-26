@@ -83,6 +83,9 @@ import { deactivateSafeMode } from './minor_guard.mjs';
 import { generatePersonaFacts, generateAvatarCandidates, embedText } from './ai.mjs';
 import { getActiveChatProvider, getActiveAuxChatProvider, REGISTRY as CHAT_REGISTRY } from './providers/chat.mjs';
 import { getReasoningTraces, isReasoningCaptureEnabled } from './reasoning_debug.mjs';
+import './plugins/builtins.mjs';
+import { getCompanionPluginsStatus, setCompanionPluginConfig } from './plugins/registry.mjs';
+import { runManualSurfForCompanion } from './plugins/surf_engine.mjs';
 import { getActiveImageProvider } from './providers/image.mjs';
 import { getActiveVisionProvider, REGISTRY as VISION_REGISTRY } from './providers/vision.mjs';
 import { getActiveAsrProvider, REGISTRY as ASR_REGISTRY } from './providers/asr.mjs';
@@ -163,6 +166,7 @@ import {
   findCurrentCompanionForAccount, ensureCompanionBot,
   deleteCompanionForAccount,
   getMemoriesV2, patchMemory, softDeleteMemory, archiveMemory, isCompanionOwnedByAccount,
+  listCompanionFeedItems, getSurfState,
   listPreferences, upsertPreference, deletePreference,  // v1.8.0 #3
   listShaping,  // 共建留痕（你们的默契）
   upsertEmotionState,
@@ -3801,6 +3805,78 @@ router.get('/companions/:id/reasoning-debug', requireAuth, (req, res) => {
     warning: '仅内存调试可见，绝不发送给用户或写入对话历史。',
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 2: 轻量插件管理 & 不定时自主冲浪见闻
+// ─────────────────────────────────────────────────────────────────────────────
+
+// GET /api/companions/:id/plugins
+router.get('/companions/:id/plugins', requireAuth, (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+  return ok(res, {
+    plugins: getCompanionPluginsStatus(id),
+    surf_state: getSurfState(id),
+  });
+});
+
+// PUT /api/companions/:id/plugins/:pluginId
+router.put('/companions/:id/plugins/:pluginId', requireAuth, (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+  const pluginId = String(req.params.pluginId || '').trim();
+  if (!pluginId) return err(res, 'pluginId 不能为空');
+  const { enabled, config } = req.body || {};
+  if (enabled !== undefined && typeof enabled !== 'boolean') {
+    return err(res, 'enabled 必须为布尔值');
+  }
+  if (config !== undefined && (typeof config !== 'object' || config === null || Array.isArray(config))) {
+    return err(res, 'config 必须为对象');
+  }
+  try {
+    const saved = setCompanionPluginConfig(id, pluginId, { enabled, config });
+    return ok(res, saved);
+  } catch (e) {
+    if (e.code === 'NOT_FOUND') return err(res, e.message, 404);
+    log('error', `[API] update plugin 失败 companion=${id} plugin=${pluginId}: ${e.message}`);
+    return err(res, '保存插件配置失败', 500);
+  }
+});
+
+// GET /api/companions/:id/feeds
+router.get('/companions/:id/feeds', requireAuth, (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+  const status = typeof req.query.status === 'string' && req.query.status.trim() ? req.query.status.trim() : null;
+  const limit = Math.max(1, Math.min(50, Number(req.query.limit) || 20));
+  const includeExpired = req.query.include_expired === '1' || req.query.include_expired === 'true';
+  return ok(res, {
+    items: listCompanionFeedItems(id, { status, limit, includeExpired }),
+    surf_state: getSurfState(id),
+  });
+});
+
+// POST /api/companions/:id/feeds/refresh — 手动试跑一次指定或首个已启用的 Feed 插件
+router.post('/companions/:id/feeds/refresh',
+  requireAuth,
+  rateLimit({ scope: 'feeds-refresh', maxPerWindow: 6, windowMs: 60_000, message: '刷新过于频繁，请稍后再试' }),
+  async (req, res) => {
+    const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+    const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+    const pluginId = typeof req.body?.plugin_id === 'string' && req.body.plugin_id.trim()
+      ? req.body.plugin_id.trim()
+      : null;
+    const query = typeof req.body?.query === 'string' ? req.body.query.trim().slice(0, 60) : '';
+    try {
+      const result = await runManualSurfForCompanion(c, { pluginId, query });
+      return ok(res, result);
+    } catch (e) {
+      if (e.code === 'NOT_FOUND') return err(res, e.message, 404);
+      log('warn', `[API] feeds/refresh 失败 companion=${id}: ${e.message}`);
+      return err(res, `冲浪刷新失败：${e.message}`, 502);
+    }
+  },
+);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 用户 AI 用量（自查）

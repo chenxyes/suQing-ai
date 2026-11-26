@@ -439,6 +439,40 @@ export async function chatComplete({
       reqBody.temperature = temperature;
       reqBody.top_p = top_p;
     }
+    const useStream = /^(1|true|yes|on)$/i.test(readSetting('CHAT_STREAM').trim());
+    if (useStream) {
+      const stream = await client.chat.completions.create(
+        { ...reqBody, stream: true },
+        { signal: controller.signal },
+      );
+      let textAcc = '';
+      let reasoningAcc = '';
+      let finishReason = null;
+      let refusal = false;
+      let usage = { prompt_tokens: 0, completion_tokens: 0 };
+      for await (const chunk of stream) {
+        const choice = chunk?.choices?.[0];
+        const delta = choice?.delta;
+        if (typeof delta?.content === 'string') textAcc += delta.content;
+        if (typeof delta?.reasoning_content === 'string') reasoningAcc += delta.reasoning_content;
+        else if (typeof delta?.reasoning === 'string') reasoningAcc += delta.reasoning;
+        if (delta?.refusal) refusal = true;
+        if (choice?.finish_reason) finishReason = choice.finish_reason;
+        if (chunk?.usage) {
+          usage = {
+            prompt_tokens: chunk.usage.prompt_tokens || 0,
+            completion_tokens: chunk.usage.completion_tokens || 0,
+          };
+        }
+      }
+      return { ...normalizeChatResponse({
+        text: textAcc,
+        reasoning: reasoningAcc || null,
+        finishReason,
+        refusal,
+        usage,
+      }), ...snapshot };
+    }
     const resp = await client.chat.completions.create(
       reqBody,
       { signal: controller.signal },

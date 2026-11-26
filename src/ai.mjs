@@ -25,6 +25,8 @@ import { visionRecognize } from './providers/vision.mjs';
 import { asrRecognize } from './providers/asr.mjs';
 import { embedText as _embedText } from './providers/embedding.mjs';
 import { shouldSearch, webSearch, formatSearchContext } from './web_search.mjs';
+import './plugins/builtins.mjs';
+import { resolveMessageContext } from './plugins/registry.mjs';
 
 // ─── v1.9.0 #2: Provider retry wrapper（单 provider 内退避，不做跨 provider fallback） ──
 // 三类瞬时故障 → 重试：超时 / 429 / 5xx / 网络错
@@ -318,24 +320,34 @@ export async function generateReply(personaPrompt, history, userMessage, params 
   }
   messages.push({ role: 'user', content: userMessage });
 
-  // ─── 可选：联网搜索（对用户透明） ───────────────────────────────────────
-  // 仅当用户消息看起来是「时效相关 + 询问语气」时才搜，否则零开销跳过。
-  // 搜失败 / 未配置 search provider 时静默继续，不影响主对话。
+  // ─── 可选：联网搜索 + Phase 2 HTTPS 链接解析插件（仅 primary，对用户透明） ──
+  // 搜失败 / 插件超时 / 未配置时静默继续，绝不阻断主对话。
   let effectiveSystem = personaPrompt;
-  try {
-    const judge = shouldSearch(userMessage);
-    if (judge.search) {
-      const sr = await webSearch(userMessage, { maxResults: 5, timeoutMs: 6000 });
-      if (sr.ok && sr.results.length > 0) {
-        const ctxBlock = formatSearchContext(userMessage, sr.results);
-        if (ctxBlock) {
-          effectiveSystem = `${personaPrompt}\n\n${ctxBlock}`;
-          log('debug', `[ai] web_search injected hits=${sr.results.length} provider=${sr.provider}`);
+  if (role === 'primary') {
+    try {
+      const judge = shouldSearch(userMessage);
+      if (judge.search) {
+        const sr = await webSearch(userMessage, { maxResults: 5, timeoutMs: 6000 });
+        if (sr.ok && sr.results.length > 0) {
+          const ctxBlock = formatSearchContext(userMessage, sr.results);
+          if (ctxBlock) {
+            effectiveSystem = `${effectiveSystem}\n\n${ctxBlock}`;
+            log('debug', `[ai] web_search injected hits=${sr.results.length} provider=${sr.provider}`);
+          }
         }
       }
+    } catch (e) {
+      log('warn', `[ai] web_search 调用异常: ${e.message}`);
     }
-  } catch (e) {
-    log('warn', `[ai] web_search 调用异常: ${e.message}`);
+    try {
+      const resolvedBlock = await resolveMessageContext({ companionId, userText: userMessage });
+      if (resolvedBlock) {
+        effectiveSystem = `${effectiveSystem}\n\n${resolvedBlock}`;
+        log('debug', `[ai] plugin resolver context injected companion=${companionId || '-'}`);
+      }
+    } catch (e) {
+      log('warn', `[ai] plugin resolver 异常: ${e.message}`);
+    }
   }
 
   log('debug', `[ai] chat messages=${messages.length} temp=${temperature}`);
