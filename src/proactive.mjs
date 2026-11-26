@@ -1632,7 +1632,6 @@ function getDateParts(date) {
     weekday: 'long',
     hour: 'numeric',
     hourCycle: 'h23',
-    hour12: false,
   }).formatToParts(date).filter(p => p.type !== 'literal').map(p => [p.type, p.value]));
 
   const month = Number(parts.month);
@@ -1644,7 +1643,7 @@ function getDateParts(date) {
     month2: String(month).padStart(2, '0'),
     day2: String(day).padStart(2, '0'),
     weekday: parts.weekday,
-    hour: Number(parts.hour),
+    hour: Number(parts.hour) % 24,
   };
 }
 
@@ -1659,9 +1658,8 @@ function currentMinute(date) {
     hour: 'numeric',
     minute: 'numeric',
     hourCycle: 'h23',
-    hour12: false,
   }).formatToParts(date).filter(p => p.type !== 'literal').map(p => [p.type, p.value]));
-  return Number(parts.hour) * 60 + Number(parts.minute);
+  return (Number(parts.hour) % 24) * 60 + Number(parts.minute);
 }
 
 function minuteToHHMM(minute) {
