@@ -159,27 +159,41 @@ if (fs.existsSync(setupHtmlPath)) {
 }
 
 // 读取 app_settings（如果 DB 存在）
-let dbProviderName = '';
+const dbSettings = {};
 let dbProviderKey  = '';
 try {
   const { default: Database } = await import('better-sqlite3');
   const db2 = new Database(dbPath);
-  const row1 = db2.prepare("SELECT value FROM app_settings WHERE key = 'CHAT_PROVIDER'").get();
-  if (row1?.value) {
-    dbProviderName = row1.value;
+  const rows = db2.prepare('SELECT key, value, secret FROM app_settings').all();
+  for (const r of rows) {
+    if (r?.key && r.value !== null && r.value !== undefined && r.value !== '') {
+      dbSettings[r.key] = { value: String(r.value), secret: Number(r.secret || 0) };
+    }
+  }
+  const dbProviderName = dbSettings.CHAT_PROVIDER?.value || '';
+  if (dbProviderName) {
     const KEY_MAP_DB = {
       deepseek: 'DEEPSEEK_API_KEY', openai: 'OPENAI_API_KEY', anthropic: 'ANTHROPIC_API_KEY',
       xai: 'XAI_API_KEY', zhipu: 'ZHIPU_API_KEY', doubao: 'DOUBAO_API_KEY',
       qwen: 'QWEN_API_KEY', kimi: 'KIMI_API_KEY', wenxin: 'WENXIN_API_KEY',
+      minimax: 'MINIMAX_API_KEY', stepfun: 'STEPFUN_API_KEY',
+      'openai-compatible': 'OPENAI_COMPATIBLE_API_KEY', ollama: 'OLLAMA_API_KEY',
     };
-    const keyName = KEY_MAP_DB[dbProviderName];
-    if (keyName) {
-      const row2 = db2.prepare('SELECT value FROM app_settings WHERE key = ? AND secret = 1').get(keyName);
-      if (row2?.value) dbProviderKey = keyName;
+    const keyName = KEY_MAP_DB[dbProviderName.toLowerCase()];
+    if (keyName && dbSettings[keyName]?.value) {
+      dbProviderKey = keyName;
     }
   }
   db2.close();
 } catch {}
+
+function effectiveSetting(key) {
+  const dbVal = dbSettings[key]?.value || '';
+  const envVal = env[key] || '';
+  if (dbVal) return { value: dbVal, source: 'app_settings', shadowed: Boolean(envVal && envVal !== dbVal), envVal };
+  if (envVal) return { value: envVal, source: 'env', shadowed: false, envVal };
+  return { value: '', source: 'default', shadowed: false, envVal: '' };
+}
 
 const setupWizardUrl = `http://localhost:${port}/app/setup.html`;
 info(`Setup 向导 URL: ${setupWizardUrl}`);
@@ -199,23 +213,42 @@ const KEY_MAP = {
   wenxin:   'WENXIN_API_KEY',
   xai:      'XAI_API_KEY',
   gemini:   'GEMINI_API_KEY',
+  minimax:  'MINIMAX_API_KEY',
+  stepfun:  'STEPFUN_API_KEY',
+  'openai-compatible': 'OPENAI_COMPATIBLE_API_KEY',
+  ollama:   'OLLAMA_API_KEY',
 };
 
-// provider: env > app_settings
-const provider = env.CHAT_PROVIDER || dbProviderName || '';
-const providerSource = env.CHAT_PROVIDER ? 'env' : dbProviderName ? 'app_settings' : 'missing';
+// 与 src/providers/chat.mjs 保持一致：app_settings 优先于 env
+const chatProvEff = effectiveSetting('CHAT_PROVIDER');
+const chatModelEff = effectiveSetting('CHAT_MODEL');
+const provider = chatProvEff.value || '';
+const providerSource = chatProvEff.source;
 
 if (!provider) {
-  warn(`CHAT_PROVIDER 未配置 — 请在 .env 或 ${setupWizardUrl} 配置`);
+  warn(`CHAT_PROVIDER 未配置（将回退默认 deepseek）— 请在 .env 或 ${setupWizardUrl} 配置`);
   warnings++;
 } else {
-  ok(`CHAT_PROVIDER = ${provider}  (来源: ${providerSource})`);
+  ok(`CHAT_PROVIDER = ${provider}  (实际生效来源: ${providerSource})`);
+  if (chatProvEff.shadowed) {
+    warn(`app_settings.CHAT_PROVIDER="${chatProvEff.value}" 覆盖了 .env 中的 "${chatProvEff.envVal}"`);
+    warnings++;
+  }
+  if (chatModelEff.value) {
+    ok(`CHAT_MODEL = ${chatModelEff.value}  (实际生效来源: ${chatModelEff.source})`);
+    if (chatModelEff.shadowed) {
+      warn(`app_settings.CHAT_MODEL="${chatModelEff.value}" 覆盖了 .env 中的 "${chatModelEff.envVal}" — 排查模型时请以设置页为准`);
+      warnings++;
+    }
+  }
 
   const keyName = KEY_MAP[provider.toLowerCase()];
   if (keyName) {
+    const dbVal  = dbSettings[keyName]?.value || dbProviderKey === keyName ? '(已配置)' : '';
     const envVal = env[keyName] || '';
-    const dbVal  = dbProviderKey === keyName ? '(已配置)' : '';
-    if (envVal && envVal.length >= 8 && !envVal.startsWith('your_')) {
+    if (dbSettings[keyName]?.value) {
+      ok(`${keyName} 已配置 (来源: app_settings，内容已隐藏)`);
+    } else if (envVal && envVal.length >= 8 && !envVal.startsWith('your_')) {
       ok(`${keyName} 已配置 (${envVal.length} 字符，来源: env，内容已隐藏)`);
     } else if (dbVal) {
       ok(`${keyName} 已配置 (来源: app_settings，内容已隐藏)`);
@@ -227,6 +260,26 @@ if (!provider) {
     info(`未知 provider "${provider}"，跳过 key 检查`);
   }
 }
+
+// ─── 活人感配置总览（Phase 1）────────────────────────────────────────────────
+head('活人感配置（Phase 1）');
+const auxProvEff = effectiveSetting('CHAT_AUX_PROVIDER');
+const auxModelEff = effectiveSetting('CHAT_AUX_MODEL');
+if (auxProvEff.value || auxModelEff.value) {
+  ok(`辅助模型 (aux): ${auxProvEff.value || provider || 'deepseek'} / ${auxModelEff.value || '(默认)'}`);
+} else {
+  info('辅助模型 (aux): 未单独指定，默认复用主模型（若主模型切推理模型，建议设 CHAT_AUX_MODEL=deepseek-chat）');
+}
+const reasoningCapEff = effectiveSetting('CHAT_REASONING_CAPTURE');
+info(`后台思考流调试捕获 (CHAT_REASONING_CAPTURE): ${reasoningCapEff.value || 'false'}`);
+info(`Inner OS 模式 (INNER_OS_MODE): ${env.INNER_OS_MODE || 'always'}`);
+const visionProvEff = effectiveSetting('VISION_PROVIDER');
+const visionModelEff = effectiveSetting('VISION_MODEL');
+info(`视神经 (VISION): ${visionProvEff.value || 'zhipu'}${visionModelEff.value ? ` / ${visionModelEff.value}` : ''} (来源: ${visionProvEff.source})`);
+const embedProvEff = effectiveSetting('EMBEDDING_PROVIDER');
+info(`向量记忆 (EMBEDDING): ${embedProvEff.value || 'gemini'} (来源: ${embedProvEff.source})`);
+const searchProvEff = effectiveSetting('SEARCH_PROVIDER');
+info(`联网搜索 (SEARCH): ${searchProvEff.value || '(未配置)'}`);
 
 // ─── iLink / WeChat ─────────────────────────────────────────────────────────
 head('iLink / 微信');

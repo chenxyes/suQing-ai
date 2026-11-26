@@ -80,9 +80,35 @@ export const REGISTRY = {
     label: 'MiniMax abab vision',
     kind: 'openai-compat',
   },
+  deepseek: {
+    baseURL: 'https://api.deepseek.com',
+    defaultModel: 'deepseek-flash',
+    apiKeyEnv: 'DEEPSEEK_API_KEY',    // 与 Chat 复用
+    label: 'DeepSeek 多模态 (deepseek-flash)',
+    kind: 'openai-compat',
+  },
 };
 
-const PROMPT = '请详细描述这张图片：主体、场景、颜色、氛围、情绪等。用中文，控制在 100 字以内。';
+export const VISION_MODES = ['chat', 'social_screenshot'];
+
+const VISION_PROMPTS = {
+  chat: [
+    '请用中文简洁转述这张图，帮助对方自然接话（不超过 220 字）：',
+    '1. 画面主体与场景氛围（如日常照片、风景、食物、自拍等）；',
+    '2. 如果图里有清晰文字、字幕、弹幕、聊天记录或表情包配字，务必摘录关键原话；',
+    '3. 如果有明显的笑点、槽点、反差或情绪氛围，一并点出。',
+    '直接用 2-4 句自然描述，不要分点报告体，绝不编造看不清的字。',
+  ].join('\n'),
+  social_screenshot: [
+    '忠实提取这张社交软件截图中的内容：区分发帖内容、评论区留言或私信对话，',
+    '按顺序列出关键用户名（可简写）和原话，并标注明显情绪态度（夸赞/提问/玩梗/阴阳怪气）。',
+    '控制在 400 字以内，绝不编造图中不存在的文字。',
+  ].join(''),
+};
+
+export function buildVisionPrompt(mode = 'chat') {
+  return VISION_PROMPTS[mode] || VISION_PROMPTS.chat;
+}
 
 // ─── 动态读取：env 优先，其次 app_settings ─────────────────────────────────
 function readSetting(key) { return readProviderSetting(key); }
@@ -98,7 +124,7 @@ function getModelFor(entry) {
 }
 
 // 通用 OpenAI-Compatible vision call —— 国内大模型几乎都遵循这套格式
-async function openaiCompatVision({ baseURL, apiKey, model, dataUrl, signal }) {
+async function openaiCompatVision({ baseURL, apiKey, model, dataUrl, prompt, signal }) {
   const resp = await fetch(`${baseURL}/chat/completions`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
@@ -109,7 +135,7 @@ async function openaiCompatVision({ baseURL, apiKey, model, dataUrl, signal }) {
           role: 'user',
           content: [
             { type: 'image_url', image_url: { url: dataUrl } },
-            { type: 'text', text: PROMPT },
+            { type: 'text', text: prompt || buildVisionPrompt('chat') },
           ],
         },
       ],
@@ -122,7 +148,7 @@ async function openaiCompatVision({ baseURL, apiKey, model, dataUrl, signal }) {
   return (data.choices?.[0]?.message?.content || '').trim();
 }
 
-async function anthropicVision({ apiKey, model, base64, mimeType, signal }) {
+async function anthropicVision({ apiKey, model, base64, mimeType, prompt, signal }) {
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -132,13 +158,13 @@ async function anthropicVision({ apiKey, model, base64, mimeType, signal }) {
     },
     body: JSON.stringify({
       model,
-      max_tokens: 300,
+      max_tokens: 450,
       messages: [
         {
           role: 'user',
           content: [
             { type: 'image', source: { type: 'base64', media_type: mimeType, data: base64 } },
-            { type: 'text', text: PROMPT },
+            { type: 'text', text: prompt || buildVisionPrompt('chat') },
           ],
         },
       ],
@@ -156,7 +182,7 @@ function isQuotaLikeError(err) {
   return /429|rate.?limit|quota|insufficient|exceed|too.?many.?request|余额不足|超限|配额|限额|账户余额|资源已耗尽/.test(msg);
 }
 
-async function callVisionWithProvider(name, base64, dataUrl, mimeType, imageSize) {
+async function callVisionWithProvider(name, base64, dataUrl, mimeType, imageSize, prompt) {
   const entry = REGISTRY[name];
   if (!entry) throw new Error(`未知 vision provider: ${name}`);
   const apiKey = getApiKeyForEntry(entry);
@@ -165,12 +191,12 @@ async function callVisionWithProvider(name, base64, dataUrl, mimeType, imageSize
   if (!model) throw new Error(`${entry.label || name} 未指定模型`);
   log('debug', `[vision] provider=${name} model=${model} size=${imageSize}`);
   if (entry.kind === 'anthropic-native') {
-    return await anthropicVision({ apiKey, model, base64, mimeType });
+    return await anthropicVision({ apiKey, model, base64, mimeType, prompt });
   }
-  return await openaiCompatVision({ baseURL: entry.baseURL, apiKey, model, dataUrl });
+  return await openaiCompatVision({ baseURL: entry.baseURL, apiKey, model, dataUrl, prompt });
 }
 
-export async function visionRecognize(imageBuffer, mimeType = 'image/jpeg') {
+export async function visionRecognize(imageBuffer, mimeType = 'image/jpeg', opts = {}) {
   const name = getActiveProviderName();
   if (!REGISTRY[name]) {
     log('error', `[vision] 未知 VISION_PROVIDER=${name}`);
@@ -178,10 +204,13 @@ export async function visionRecognize(imageBuffer, mimeType = 'image/jpeg') {
   }
   const base64 = imageBuffer.toString('base64');
   const dataUrl = `data:${mimeType};base64,${base64}`;
+  const prompt = typeof opts?.prompt === 'string' && opts.prompt.trim()
+    ? opts.prompt.trim()
+    : buildVisionPrompt(opts?.mode);
 
   try {
-    if (name === 'custom') return await customVision(imageBuffer, mimeType);
-    return await callVisionWithProvider(name, base64, dataUrl, mimeType, imageBuffer.length);
+    if (name === 'custom') return await customVision(imageBuffer, mimeType, { prompt });
+    return await callVisionWithProvider(name, base64, dataUrl, mimeType, imageBuffer.length, prompt);
   } catch (err) {
     // v1.10.26: 限额类错误 → 自动 fallback 到 VISION_FALLBACK_PROVIDER（默认 minimax）
     const fallbackName = (process.env.VISION_FALLBACK_PROVIDER || 'minimax').toLowerCase();
@@ -189,7 +218,7 @@ export async function visionRecognize(imageBuffer, mimeType = 'image/jpeg') {
     if (isQuota && fallbackName && fallbackName !== name && REGISTRY[fallbackName]) {
       log('warn', `[vision] 主 provider=${name} 触发限额/配额错误 (${String(err.message).slice(0, 120)}) → fallback ${fallbackName}`);
       try {
-        const result = await callVisionWithProvider(fallbackName, base64, dataUrl, mimeType, imageBuffer.length);
+        const result = await callVisionWithProvider(fallbackName, base64, dataUrl, mimeType, imageBuffer.length, prompt);
         log('info', `[vision] fallback ${fallbackName} 成功`);
         return result;
       } catch (err2) {

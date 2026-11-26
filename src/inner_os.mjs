@@ -173,8 +173,8 @@ export async function generateInnerMonologue({
       sys,
       recent,
       userText,
-      { temperature: 0.85, max_tokens: MAX_INNER_TOKENS, top_p: 0.9 },
-      { accountId: context?.accountId || null },
+      { temperature: 0.85, max_tokens: MAX_INNER_TOKENS, top_p: 0.9, role: 'aux' },
+      { accountId: context?.accountId || null, companionId: companion?.id ?? null },
     );
     if (!inner || isChatFallback(inner)) return null;
     // 先从原始输出剥结构化 JSON（清理/截断之前，防 slice 吃掉末行）

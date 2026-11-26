@@ -68,6 +68,18 @@
       </div>
     </div>
 
+    <!-- 后台思考流（Phase 1，仅调试可见） -->
+    <div class="card p-4 mb-4">
+      <div class="flex items-center justify-between mb-2">
+        <div>
+          <span class="text-xs text-mute">后台思考流（reasoning_content · 绝不输出到聊天框）</span>
+          <span id="reasoningModelMeta" class="ml-2 text-xs text-mute"></span>
+        </div>
+        <button onclick="loadReasoning()" class="text-xs text-sakura-deep hover:underline">刷新思考流</button>
+      </div>
+      <div id="reasoningBox" class="text-xs text-mute bg-gray-50 rounded-lg p-3 space-y-3">加载中…</div>
+    </div>
+
     <!-- 完整 Prompt -->
     <div class="card p-4">
       <div class="flex items-center justify-between mb-2">
@@ -141,10 +153,60 @@ async function loadPrompt() {
     document.getElementById('companionLabel').textContent = `Companion #${cid}`;
 
     if (!_activeSectionKey) selectTab(Object.keys(SECTION_LABELS)[0]);
+    loadReasoning();
   } catch (e) {
     showMsg('网络错误：' + e.message);
   } finally {
     document.getElementById('btnRefresh').textContent = '刷新';
+  }
+}
+
+async function loadReasoning() {
+  const cid = getCompanionId();
+  const token = getToken();
+  const box = document.getElementById('reasoningBox');
+  const meta = document.getElementById('reasoningModelMeta');
+  if (!cid || !token || !box) return;
+  try {
+    const resp = await fetch(`/api/companions/${cid}/reasoning-debug?limit=10`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    const json = await resp.json();
+    if (!resp.ok || !json.ok) {
+      box.textContent = json.error || `请求失败 (${resp.status})`;
+      return;
+    }
+    const d = json.data || {};
+    const p = d.primary || {};
+    const a = d.aux || {};
+    if (meta) {
+      meta.textContent = `主: ${p.id || '-'}/${p.model || '-'} · 辅: ${a.inherited ? '继承主模型' : `${a.id || '-'}/${a.model || '-'}`}`;
+    }
+    if (!d.capture_enabled) {
+      box.textContent = '未开启后台思考流捕获。如需查看推理模型的原生思考过程，请设置 CHAT_REASONING_CAPTURE=true（仅内存调试，不进聊天框）。';
+      return;
+    }
+    const traces = Array.isArray(d.traces) ? d.traces : [];
+    if (!traces.length) {
+      box.textContent = '已开启捕获，但当前进程尚未收到包含 reasoning_content 的回复（普通非思考模型无此字段）。';
+      return;
+    }
+    box.innerHTML = '';
+    for (const item of traces) {
+      const wrap = document.createElement('div');
+      wrap.className = 'border border-line rounded-lg bg-white p-3';
+      const head = document.createElement('div');
+      head.className = 'text-xs text-mute mb-1';
+      head.textContent = `${item.ts || ''} · [${item.role || 'primary'}] ${item.provider || ''}/${item.model || ''}${item.reply_preview ? ` · 对外回复: ${item.reply_preview}` : ''}`;
+      const pre = document.createElement('pre');
+      pre.className = 'text-xs font-mono text-ink';
+      pre.textContent = item.reasoning || '';
+      wrap.appendChild(head);
+      wrap.appendChild(pre);
+      box.appendChild(wrap);
+    }
+  } catch (e) {
+    box.textContent = '加载思考流失败：' + e.message;
   }
 }
 

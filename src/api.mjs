@@ -81,7 +81,8 @@ import { buildSystemPrompt } from './companion.mjs';
 import { buildImageReactionText, computeRelationshipStage, extractImageMemories } from './memory.mjs';
 import { deactivateSafeMode } from './minor_guard.mjs';
 import { generatePersonaFacts, generateAvatarCandidates, embedText } from './ai.mjs';
-import { getActiveChatProvider, REGISTRY as CHAT_REGISTRY } from './providers/chat.mjs';
+import { getActiveChatProvider, getActiveAuxChatProvider, REGISTRY as CHAT_REGISTRY } from './providers/chat.mjs';
+import { getReasoningTraces, isReasoningCaptureEnabled } from './reasoning_debug.mjs';
 import { getActiveImageProvider } from './providers/image.mjs';
 import { getActiveVisionProvider, REGISTRY as VISION_REGISTRY } from './providers/vision.mjs';
 import { getActiveAsrProvider, REGISTRY as ASR_REGISTRY } from './providers/asr.mjs';
@@ -139,7 +140,7 @@ import { sendVerificationEmail } from './email.mjs';
 //   verifyNotifySignature, queryTrade,
 // } from './billing.mjs';
 import {
-  getCompanionById, getCompanion, ensureCompanion, createCompanion, updateCompanion, patchCompanion,
+  getCompanionById, getCompanion, ensureCompanion, createCompanion, createCompanionForAccount, updateCompanion, patchCompanion,
   saveMemory, saveMemories, recallMemories,
   saveImageReaction,
   getConversationContext, clearConversationContext,
@@ -2196,10 +2197,16 @@ router.get('/setup/provider-status', softAuth, (req, res) => {
     searchProviders[id] = info;
   }
 
+  const auxActive = getActiveAuxChatProvider();
   return ok(res, {
     chat_provider: active.id,
     chat_model: active.model || '',
     chat_model_override: isAuthed ? (currentChatModel || null) : null,
+    chat_source: isAuthed ? active.source : undefined,
+    chat_model_source: isAuthed ? active.model_source : undefined,
+    chat_shadowed_env: isAuthed ? active.shadowed_env : undefined,
+    chat_aux: isAuthed ? auxActive : undefined,
+    reasoning_capture: isAuthed ? isReasoningCaptureEnabled() : undefined,
     providers,
     vision: buildOptionalSection(VISION_REGISTRY, 'VISION_PROVIDER', 'VISION_MODEL', visionActive),
     asr:    buildOptionalSection(ASR_REGISTRY,    'ASR_PROVIDER',    'ASR_MODEL',    asrActive),
@@ -2378,7 +2385,10 @@ router.post('/setup/provider-config',
     }
 
     // ── Chat（默认）──────────────────────────────────────────────────────
-    const { chat_provider, api_key, clear_key = false, base_url, model } = req.body || {};
+    const {
+      chat_provider, api_key, clear_key = false, base_url, model,
+      aux_provider, aux_model, clear_aux = false, reasoning_capture,
+    } = req.body || {};
     if (!chat_provider || typeof chat_provider !== 'string') return err(res, 'chat_provider 不能为空');
     const name = chat_provider.toLowerCase().trim();
     if (!CHAT_REGISTRY[name]) {
@@ -2430,12 +2440,48 @@ router.post('/setup/provider-config',
         deleteAppSetting('CHAT_MODEL');
       }
     }
+    let auxSaved = false;
+    if (clear_aux === true) {
+      deleteAppSetting('CHAT_AUX_PROVIDER');
+      deleteAppSetting('CHAT_AUX_MODEL');
+      auxSaved = true;
+    } else {
+      if (typeof aux_provider === 'string') {
+        const trimmedAuxProv = aux_provider.toLowerCase().trim();
+        if (trimmedAuxProv) {
+          if (!CHAT_REGISTRY[trimmedAuxProv]) {
+            return err(res, `未知 aux_provider: ${trimmedAuxProv}，可选：${Object.keys(CHAT_REGISTRY).join(', ')}`);
+          }
+          setAppSetting('CHAT_AUX_PROVIDER', trimmedAuxProv, { secret: 0 });
+          auxSaved = true;
+        } else {
+          deleteAppSetting('CHAT_AUX_PROVIDER');
+          auxSaved = true;
+        }
+      }
+      if (typeof aux_model === 'string') {
+        const trimmedAuxModel = aux_model.trim();
+        if (trimmedAuxModel) {
+          if (/[\x00-\x1f\x7f]/.test(trimmedAuxModel)) return err(res, 'aux_model 不能包含控制字符');
+          setAppSetting('CHAT_AUX_MODEL', trimmedAuxModel, { secret: 0 });
+          auxSaved = true;
+        } else {
+          deleteAppSetting('CHAT_AUX_MODEL');
+          auxSaved = true;
+        }
+      }
+    }
+    if (typeof reasoning_capture === 'boolean') {
+      setAppSetting('CHAT_REASONING_CAPTURE', reasoning_capture ? 'true' : 'false', { secret: 0 });
+    }
     return ok(res, {
       chat_provider: name,
       label: entry.label,
       key_saved: trimmedKey.length >= 8,
       base_url_saved: baseUrlSaved,
       model_saved: modelSaved,
+      aux_saved: auxSaved,
+      reasoning_capture: isReasoningCaptureEnabled(),
     });
   },
 );
@@ -2776,9 +2822,52 @@ function applyCompanionAgeGuard(data, existingCompanion = null) {
 }
 
 // POST /api/companions
+// 支持两种创建方式：
+//   1. 带 wechat_user_id：微信绑定路径（兼容既有客户端）
+//   2. 不带 wechat_user_id：纯 Web 创建路径（绑定微信改为可选，直接进网页聊天）
 router.post('/companions', requireAuth, (req, res) => {
   const { wechat_user_id, bot_id, ...data } = req.body || {};
-  if (!wechat_user_id) return err(res, '缺少 wechat_user_id');
+
+  let guarded;
+  try {
+    guarded = applyCompanionAgeGuard(data);
+  } catch (e) {
+    return err(res, e.message, e.code === 'AGE_TOO_LOW' ? 400 : 400);
+  }
+
+  // 分支 A：纯 Web 创建（不传 wechat_user_id 时走当前登录账号）
+  if (!wechat_user_id) {
+    const accountId = req.authUser?.id;
+    if (!accountId) return err(res, '缺少登录账号', 401);
+    const activeBinding = getWechatAccountByAccountId(accountId);
+    const hasWechat = Boolean(activeBinding?.wechat_user_id && activeBinding?.bot_id && activeBinding.is_active !== 0);
+    if ((guarded.nsfw_level ?? 0) >= 1) log('warn', `[API] nsfw_level=${guarded.nsfw_level} account=${accountId}`);
+    try {
+      let c;
+      if (hasWechat) {
+        c = createCompanion(activeBinding.wechat_user_id, bot_id || activeBinding.bot_id, normalizeCompanionConfig(guarded));
+        getDb().prepare(`
+          UPDATE wechat_accounts
+          SET companion_id = ?, updated_at = CURRENT_TIMESTAMP
+          WHERE wechat_user_id = ? AND bot_id = ? AND is_active = 1
+        `).run(c.id, activeBinding.wechat_user_id, bot_id || activeBinding.bot_id);
+      } else {
+        c = createCompanionForAccount(accountId, normalizeCompanionConfig(guarded), {
+          botId: bot_id || `web_${accountId}`,
+        });
+      }
+      log('info', `[API] 创建 web companion id=${c.id} account=${accountId}`);
+      asyncGeneratePersonaFacts(c);
+      import('./backfill_history.mjs').then(m => m.maybeAutoBackfill(c, { reason: 'create' })).catch(() => {});
+      return ok(res, c, 201);
+    } catch (e) {
+      if (e.code === 'EXISTS') return err(res, e.message, 409, { existing_id: e.id });
+      log('error', `[API] createCompanionForAccount: ${e.message}`);
+      return err(res, '服务器内部错误', 500);
+    }
+  }
+
+  // 分支 B：显式 wechat_user_id 路径
   // multi-tenant：bot_id 优先从入参取，否则从该 wechat 用户的活绑定里查
   let botId = bot_id || '';
   if (!botId) {
@@ -2792,12 +2881,6 @@ router.post('/companions', requireAuth, (req, res) => {
   if (!botId) return err(res, '缺少 bot_id');
   // v1.3.4: 开源版无 companion 数量上限。自托管想加上限可在此处加 hard cap。
 
-  let guarded;
-  try {
-    guarded = applyCompanionAgeGuard(data);
-  } catch (e) {
-    return err(res, e.message, e.code === 'AGE_TOO_LOW' ? 400 : 400);
-  }
   if ((guarded.nsfw_level ?? 0) >= 1) log('warn', `[API] nsfw_level=${guarded.nsfw_level} user=${wechat_user_id}`);
   try {
     const c = createCompanion(wechat_user_id, botId, normalizeCompanionConfig(guarded));
@@ -3702,6 +3785,21 @@ router.get('/companions/:id/prompt-debug', requireAuth, (req, res) => {
     log('error', `[API] prompt-debug 失败 companion=${id}: ${e.message}`);
     return err(res, 'prompt-debug 生成失败', 500);
   }
+});
+
+// GET /api/companions/:id/reasoning-debug — 仅调试可见的后台思考流（内存环形缓冲，不落盘不进会话框）
+router.get('/companions/:id/reasoning-debug', requireAuth, (req, res) => {
+  noStore(res);
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+  const limit = Math.max(1, Math.min(20, Number(req.query.limit) || 10));
+  return ok(res, {
+    capture_enabled: isReasoningCaptureEnabled(),
+    primary: getActiveChatProvider(),
+    aux: getActiveAuxChatProvider(),
+    traces: getReasoningTraces(id, limit),
+    warning: '仅内存调试可见，绝不发送给用户或写入对话历史。',
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

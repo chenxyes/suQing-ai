@@ -162,7 +162,9 @@
       "例如：看动漫, 喝奶茶, 听周杰伦, 拍照": "e.g. anime, milk tea, J-pop, photography",
       "自由描述你们之间发生过的事情...": "Describe what happened between you...",
       "她还有什么独特之处？比如：偶尔会因为你不主动联系而假装生气...": "What else makes her unique? e.g. she sometimes pretends to be upset when you don't reach out...",
-      "保存并绑定微信": "Save & bind WeChat",
+      "保存并绑定微信": "Save & bind WeChat (optional)",
+      "保存并开始网页聊天": "Save & start web chat",
+      "保存并绑定微信（可选）": "Save & bind WeChat (optional)",
       "保存修改": "Save changes",
       "调整她的人设": "Adjust her persona",
       "保存中...": "Saving...",
@@ -423,12 +425,15 @@
       </section>
 
       <!-- Buttons -->
-      <div class="mt-10 pt-7 border-t border-line flex items-center justify-between gap-3">
+      <div class="mt-10 pt-7 border-t border-line flex items-center justify-between gap-3 flex-wrap">
         <button id="btn-back" class="px-6 py-3 text-[14px] font-semibold text-ink rounded-full border border-line hover:border-mute transition-all hidden">
           <i data-lucide="chevron-left" class="inline w-4 h-4 align-[-3px]"></i>
           上一步
         </button>
         <div class="flex-1"></div>
+        <button id="btn-bind-wechat" type="button" class="px-5 py-3 text-[14px] font-semibold text-sakura-deep rounded-full border border-sakura hover:bg-sakura-soft/50 transition-all hidden">
+          保存并绑定微信（可选）
+        </button>
         <button id="btn-next" class="btn-primary px-7 py-3 text-[14px] font-semibold text-white rounded-full shadow-sakura transition-all">
           下一步
           <i data-lucide="chevron-right" class="inline w-4 h-4 align-[-3px]"></i>
@@ -584,6 +589,7 @@
     const dots = document.querySelectorAll('.step-dot');
     const stepNum = document.getElementById('step-num');
     const btnBack = document.getElementById('btn-back');
+    const btnBindWechat = document.getElementById('btn-bind-wechat');
     const btnNext = document.getElementById('btn-next');
 
     function showStep(n) {
@@ -594,21 +600,27 @@
       });
       stepNum.textContent = n;
       btnBack.classList.toggle('hidden', n === 1);
+      if (btnBindWechat) btnBindWechat.classList.toggle('hidden', isEditMode || n !== totalSteps);
       btnNext.innerHTML = n === totalSteps
         ? (isEditMode
             ? '保存修改 <i data-lucide="check" class="inline w-4 h-4 align-[-3px]"></i>'
-            : '保存并绑定微信 <i data-lucide="check" class="inline w-4 h-4 align-[-3px]"></i>')
+            : '保存并开始网页聊天 <i data-lucide="check" class="inline w-4 h-4 align-[-3px]"></i>')
         : '下一步 <i data-lucide="chevron-right" class="inline w-4 h-4 align-[-3px]"></i>';
       lucide.createIcons({ attrs: { 'stroke-width': 1.8 } });
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
     btnBack.addEventListener('click', () => { if (stepIdx > 1) showStep(--stepIdx); });
+    if (btnBindWechat) {
+      btnBindWechat.addEventListener('click', async () => {
+        await submitAll({ bindWechat: true });
+      });
+    }
     btnNext.addEventListener('click', async () => {
       if (stepIdx < totalSteps) {
         showStep(++stepIdx);
       } else {
-        await submitAll();
+        await submitAll({ bindWechat: false });
       }
     });
 
@@ -649,7 +661,7 @@
          'bg-sakura-soft text-sakura-deep');
     }
 
-    async function submitAll() {
+    async function submitAll({ bindWechat = false } = {}) {
       const config = collectAllInputs();
 
       if (isEditMode) {
@@ -684,16 +696,48 @@
         return;
       }
 
-      // Save to localStorage as pending companion (will POST after wechat bind)
-      localStorage.setItem('xiyu_pending_companion', JSON.stringify(config));
-
+      // 直接为当前 Web 账号创建角色，无需先绑定微信；绑定微信改为可选步骤
       btnNext.disabled = true;
-      btnNext.innerHTML = '<i data-lucide="loader-2" class="inline w-4 h-4 spinner align-[-3px]"></i> 保存中...';
+      if (btnBindWechat) btnBindWechat.disabled = true;
+      btnNext.innerHTML = '<i data-lucide="loader-2" class="inline w-4 h-4 spinner align-[-3px]"></i> 创建角色中...';
       lucide.createIcons({ attrs: { 'stroke-width': 1.8 } });
 
-      showMsg('配置已保存，即将进入微信绑定...', 'success');
+      try {
+        let res = await fetch('/api/companions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(config),
+        });
+        let payload = await res.json().catch(() => ({}));
+        if (res.status === 409 && payload.existing_id) {
+          res = await fetch('/api/companions/' + encodeURIComponent(payload.existing_id), {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(config),
+          });
+          payload = await res.json().catch(() => ({}));
+        }
+        if (!res.ok || !payload.ok || !payload.data?.id) {
+          throw new Error(payload.error || payload.message || '创建角色失败');
+        }
 
-      setTimeout(() => { location.href = '/app/bind.html'; }, 600);
+        localStorage.setItem('xiyu_companion_id', String(payload.data.id));
+        localStorage.setItem('xiyu_companion_summary', JSON.stringify(payload.data));
+        localStorage.removeItem('xiyu_pending_companion');
+
+        if (bindWechat) {
+          showMsg('角色已创建，即将进入微信绑定（可随时跳过）...', 'success');
+          setTimeout(() => { location.href = '/app/bind.html'; }, 500);
+        } else {
+          showMsg('角色已创建，即将进入网页聊天...', 'success');
+          setTimeout(() => { location.href = '/app/playground.html'; }, 500);
+        }
+      } catch (e) {
+        btnNext.disabled = false;
+        if (btnBindWechat) btnBindWechat.disabled = false;
+        showStep(stepIdx);
+        showMsg(e.message || '创建失败，请稍后再试', 'error');
+      }
     }
 
     function populateForm(config) {

@@ -29,7 +29,7 @@ export const REGISTRY = {
     apiKeyEnv: 'DEEPSEEK_API_KEY',
     label: 'DeepSeek',
     link: 'https://platform.deepseek.com/api_keys',
-    models: ['deepseek-chat', 'deepseek-reasoner'],
+    models: ['deepseek-chat', 'deepseek-reasoner', 'deepseek-flash'],
     recommended: true,
   },
   openai: {
@@ -160,13 +160,25 @@ export const REGISTRY = {
 
 // ─── 动态读取：app_settings 优先，其次 env ─────────────────────────────────
 
-// 通用：app_settings > env > '' 优先级
-function readSetting(key) {
+// 通用：app_settings > env > '' 优先级，同时返回来源与是否覆盖了 .env
+export function readSettingWithSource(key) {
+  let dbValue = '';
   try {
     const value = getAppSetting(key);
-    if (value !== null && value !== undefined && value !== '') return value;
+    if (value !== null && value !== undefined && value !== '') dbValue = String(value);
   } catch {}
-  return process.env[key] || '';
+  const envValue = process.env[key] ? String(process.env[key]) : '';
+  if (dbValue) {
+    return { value: dbValue, source: 'app_settings', dbValue, envValue, shadowed: Boolean(envValue && envValue !== dbValue) };
+  }
+  if (envValue) {
+    return { value: envValue, source: 'env', dbValue: '', envValue, shadowed: false };
+  }
+  return { value: '', source: 'default', dbValue: '', envValue: '', shadowed: false };
+}
+
+function readSetting(key) {
+  return readSettingWithSource(key).value;
 }
 
 function getActiveProviderName() {
@@ -182,6 +194,37 @@ function getDynamicBaseURL(entry) {
 }
 function getDynamicModel(entry) {
   return entry?.modelEnv ? readSetting(entry.modelEnv) : entry?.defaultModel || '';
+}
+
+export function isReasoningModel(model, role = 'primary', { inherited = false } = {}) {
+  if ((role === 'primary' || inherited) && /^(1|true|yes|on)$/i.test(readSetting('CHAT_IS_REASONING_MODEL').trim())) {
+    return true;
+  }
+  return /reasoner|deepseek-r1|\br1\b|thinking|^o[134](?:-|$)/i.test(String(model || '').trim());
+}
+
+function resolveChatTarget(role = 'primary') {
+  const primaryProvider = getActiveProviderName();
+  const primaryModel = activeModel(primaryProvider);
+  if (role !== 'aux') {
+    return { provider: primaryProvider, model: primaryModel, inherited: false };
+  }
+  const auxProviderRaw = readSetting('CHAT_AUX_PROVIDER').toLowerCase().trim();
+  const auxModelRaw = readSetting('CHAT_AUX_MODEL').trim();
+  if (!auxProviderRaw && !auxModelRaw) {
+    return { provider: primaryProvider, model: primaryModel, inherited: true };
+  }
+  const provider = auxProviderRaw || primaryProvider;
+  const entry = REGISTRY[provider];
+  const model = auxModelRaw
+    || (provider === primaryProvider
+      ? primaryModel
+      : (entry?.custom ? getDynamicModel(entry) : entry?.defaultModel || ''));
+  return { provider, model, inherited: false };
+}
+
+function shouldOmitSamplingParams(providerName, model, role) {
+  return (providerName === 'deepseek' || providerName === 'openai') && isReasoningModel(model, role);
 }
 
 // ─── Anthropic 单独走原生协议（messages API） ─────────────────────────────
@@ -218,8 +261,13 @@ async function anthropicChat({ system, messages, model, temperature, max_tokens,
     .map((b) => b.text)
     .join('')
     .trim();
+  const reasoning = (data.content || [])
+    .filter((b) => b.type === 'thinking' && typeof b.thinking === 'string')
+    .map((b) => b.thinking)
+    .join('\n')
+    .trim() || null;
   return normalizeChatResponse({
-    text, finishReason: data.stop_reason,
+    text, reasoning, finishReason: data.stop_reason,
     usage: {
       prompt_tokens: data.usage?.input_tokens || 0,
       completion_tokens: data.usage?.output_tokens || 0,
@@ -262,13 +310,19 @@ async function geminiChat({ system, messages, model, temperature, max_tokens, to
     throw Object.assign(new Error(`Gemini HTTP ${resp.status}`), { status: resp.status });
   }
   const data = await resp.json();
-  const text = (data.candidates?.[0]?.content?.parts || [])
+  const parts = data.candidates?.[0]?.content?.parts || [];
+  const text = parts
     .filter((p) => !p.thought)
     .map((p) => typeof p.text === 'string' ? p.text : '')
     .join('')
     .trim();
+  const reasoning = parts
+    .filter((p) => p.thought && typeof p.text === 'string')
+    .map((p) => p.text)
+    .join('\n')
+    .trim() || null;
   return normalizeChatResponse({
-    text, finishReason: data.candidates?.[0]?.finishReason, refusal: Boolean(data.promptFeedback?.blockReason),
+    text, reasoning, finishReason: data.candidates?.[0]?.finishReason, refusal: Boolean(data.promptFeedback?.blockReason),
     usage: {
       prompt_tokens: data.usageMetadata?.promptTokenCount || 0,
       completion_tokens: data.usageMetadata?.candidatesTokenCount || 0,
@@ -334,10 +388,19 @@ export async function chatComplete({
   max_tokens = 3000,
   top_p = 0.95,
   timeout_ms = readSetting('CHAT_TIMEOUT_MS') || 60_000,
+  role = 'primary',
 } = {}) {
-  const name = getActiveProviderName();
-  const model = activeModel(name);
-  const snapshot = { provider: name, model };
+  const effectiveRole = role === 'aux' ? 'aux' : 'primary';
+  const target = resolveChatTarget(effectiveRole);
+  const name = target.provider;
+  const model = target.model;
+  const reasoningMode = isReasoningModel(model, effectiveRole, {
+    inherited: target.inherited || (effectiveRole === 'aux' && model === activeModel(getActiveProviderName())),
+  });
+  const effectiveMaxTokens = reasoningMode
+    ? Math.max(Number(max_tokens) || 0, boundedNumber(readSetting('CHAT_REASONING_MAX_TOKENS'), 4096, 512, 32768))
+    : max_tokens;
+  const snapshot = { provider: name, model, role: effectiveRole };
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), boundedNumber(timeout_ms, 60_000, 1_000, 180_000));
   try {
@@ -347,7 +410,7 @@ export async function chatComplete({
         messages,
         model,
         temperature,
-        max_tokens,
+        max_tokens: effectiveMaxTokens,
         top_p,
         signal: controller.signal,
       }), ...snapshot };
@@ -358,7 +421,7 @@ export async function chatComplete({
         messages,
         model,
         temperature,
-        max_tokens,
+        max_tokens: effectiveMaxTokens,
         top_p,
         signal: controller.signal,
       }), ...snapshot };
@@ -371,14 +434,24 @@ export async function chatComplete({
       );
     }
     const allMessages = [{ role: 'system', content: system }, ...messages];
+    const reqBody = { model, messages: allMessages, max_tokens: effectiveMaxTokens };
+    if (!shouldOmitSamplingParams(name, model, effectiveRole)) {
+      reqBody.temperature = temperature;
+      reqBody.top_p = top_p;
+    }
     const resp = await client.chat.completions.create(
-      { model, messages: allMessages, temperature, max_tokens, top_p },
+      reqBody,
       { signal: controller.signal },
     );
+    const msg = resp.choices?.[0]?.message;
+    const rawReasoning = typeof msg?.reasoning_content === 'string'
+      ? msg.reasoning_content
+      : (typeof msg?.reasoning === 'string' ? msg.reasoning : null);
     return { ...normalizeChatResponse({
-      text: resp.choices?.[0]?.message?.content,
+      text: msg?.content,
+      reasoning: rawReasoning,
       finishReason: resp.choices?.[0]?.finish_reason,
-      refusal: Boolean(resp.choices?.[0]?.message?.refusal),
+      refusal: Boolean(msg?.refusal),
       usage: {
         prompt_tokens: resp.usage?.prompt_tokens || 0,
         completion_tokens: resp.usage?.completion_tokens || 0,
@@ -393,11 +466,44 @@ export async function chatComplete({
 }
 
 export function getActiveChatProvider() {
-  const name = getActiveProviderName();
+  const providerInfo = readSettingWithSource('CHAT_PROVIDER');
+  const name = providerInfo.value ? providerInfo.value.toLowerCase() : 'deepseek';
+  const entry = REGISTRY[name];
+  const modelKey = entry?.custom && entry?.modelEnv ? entry.modelEnv : 'CHAT_MODEL';
+  const modelOverride = readSettingWithSource('CHAT_MODEL');
+  const customModelInfo = entry?.custom && entry?.modelEnv ? readSettingWithSource(entry.modelEnv) : null;
+  const model = activeModel(name);
+  const modelSource = modelOverride.value
+    ? modelOverride.source
+    : (customModelInfo?.value ? customModelInfo.source : 'default');
   return {
     id: name,
-    label: REGISTRY[name]?.label,
-    model: activeModel(name),
+    label: entry?.label,
+    model,
+    source: providerInfo.source,
+    model_source: modelSource,
+    shadowed_env: {
+      provider: providerInfo.shadowed ? providerInfo.envValue : null,
+      model: modelOverride.shadowed ? modelOverride.envValue : (modelKey !== 'CHAT_MODEL' && customModelInfo?.shadowed ? customModelInfo.envValue : null),
+    },
+    is_reasoning: isReasoningModel(model, 'primary'),
+  };
+}
+
+export function getActiveAuxChatProvider() {
+  const target = resolveChatTarget('aux');
+  const providerInfo = readSettingWithSource('CHAT_AUX_PROVIDER');
+  const modelInfo = readSettingWithSource('CHAT_AUX_MODEL');
+  return {
+    id: target.provider,
+    label: REGISTRY[target.provider]?.label,
+    model: target.model,
+    inherited: target.inherited,
+    source: target.inherited ? 'inherited' : (providerInfo.value ? providerInfo.source : modelInfo.source),
+    model_source: target.inherited ? 'inherited' : (modelInfo.value ? modelInfo.source : 'default'),
+    is_reasoning: isReasoningModel(target.model, 'aux', {
+      inherited: target.inherited || target.model === activeModel(getActiveProviderName()),
+    }),
   };
 }
 
@@ -416,7 +522,9 @@ export async function testChatProvider(name) {
 
   const t0 = Date.now();
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15_000);
+  const modelForTimeout = activeModel(name) || entry.defaultModel || '';
+  const timeoutMs = isReasoningModel(modelForTimeout, 'primary') ? 30_000 : 15_000;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     if (name === 'anthropic') {
       await anthropicChat({
@@ -440,16 +548,19 @@ export async function testChatProvider(name) {
       if (!model) {
         throw new Error(`${entry.label} 未指定模型，请在 /app/setup.html 填写 Model`);
       }
+      const testBody = {
+        model,
+        messages: [
+          { role: 'system', content: 'Reply with exactly one word.' },
+          { role: 'user', content: 'Say: ok' },
+        ],
+        max_tokens: isReasoningModel(model, 'primary') ? 256 : 5,
+      };
+      if (!shouldOmitSamplingParams(name, model, 'primary')) {
+        testBody.temperature = 0;
+      }
       await client.chat.completions.create(
-        {
-          model,
-          messages: [
-            { role: 'system', content: 'Reply with exactly one word.' },
-            { role: 'user', content: 'Say: ok' },
-          ],
-          temperature: 0,
-          max_tokens: 5,
-        },
+        testBody,
         { signal: controller.signal },
       );
     }

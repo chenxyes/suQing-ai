@@ -72,10 +72,21 @@ async function readJson(response, capability) {
   try { return await response.json(); }
   catch { throw new Error(`custom ${capability} invalid JSON response`); }
 }
+const DEFAULT_CUSTOM_VISION_PROMPT = [
+  '请用中文简洁转述这张图，帮助对方自然接话（不超过 220 字）：',
+  '1. 画面主体与场景氛围（如日常照片、风景、食物、自拍等）；',
+  '2. 如果图里有清晰文字、字幕、弹幕、聊天记录或表情包配字，务必摘录关键原话；',
+  '3. 如果有明显的笑点、槽点、反差或情绪氛围，一并点出。',
+  '直接用 2-4 句自然描述，不要分点报告体，绝不编造看不清的字。',
+].join('\n');
+
 export async function customVision(buffer, mime = 'image/jpeg', options = {}) {
+  const prompt = typeof options?.prompt === 'string' && options.prompt.trim()
+    ? options.prompt.trim()
+    : DEFAULT_CUSTOM_VISION_PROMPT;
   const response = await post('vision', '/chat/completions', c => ({ model: c.model, messages: [{ role: 'user', content: [
     { type: 'image_url', image_url: { url: `data:${mime};base64,${buffer.toString('base64')}` } },
-    { type: 'text', text: '请描述图片内容，并识别图片中可读的文字。' },
+    { type: 'text', text: prompt },
   ] }] }), options);
   const text = (await readJson(response, 'vision')).choices?.[0]?.message?.content;
   if (typeof text !== 'string' || !text.trim()) throw new Error('custom vision empty or invalid response');

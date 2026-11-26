@@ -3288,6 +3288,64 @@ export function createCompanion(wechatUserId, botId, data) {
   return getCompanionById(newId);
 }
 
+/**
+ * 为 Web 账号直接创建 companion（无需先绑定微信；后续绑定微信时
+ * findCurrentCompanionForAccount + ensureCompanionBot 会自动接管该 companion）。
+ */
+export function createCompanionForAccount(accountId, data = {}, { botId = null } = {}) {
+  const accId = Number(accountId);
+  if (!Number.isInteger(accId) || accId <= 0) {
+    throw new Error('accountId 无效');
+  }
+  const db = getDb();
+  const tx = db.transaction(() => {
+    const existing = getCompanionByAccountId(accId);
+    if (existing) {
+      const err = new Error('该账号已存在 companion，请用 PUT 更新');
+      err.code = 'EXISTS';
+      err.id = existing.id;
+      throw err;
+    }
+
+    // 确保 users 表存在 id = accId 的宿主行，满足 companions.user_id 外键及所有权查询
+    const userRow = db.prepare('SELECT id FROM users WHERE id = ?').get(accId);
+    if (!userRow) {
+      const account = getUserAccountById(accId);
+      const displayName = account?.username || account?.display_name || null;
+      db.prepare(`
+        INSERT INTO users (id, wechat_user_id, display_name)
+        VALUES (?, ?, ?)
+      `).run(accId, `web_account_${accId}`, displayName);
+    }
+
+    const effectiveBotId = String(botId || `web_${accId}`);
+    const dataWithDefaults = {
+      sticker_reply_enabled: 1,
+      proactive_daily_target: 4,
+      ...data,
+    };
+    const fields = buildUpsertFields(dataWithDefaults);
+    const info = db.prepare(`
+      INSERT INTO companions (user_id, bot_id${fields.cols.length ? ', ' + fields.cols.join(', ') : ''})
+      VALUES (?, ?${fields.cols.length ? ', ' + fields.placeholders.join(', ') : ''})
+    `).run(accId, effectiveBotId, ...fields.values);
+    return info.lastInsertRowid;
+  });
+
+  const newId = tx();
+  if ('hobbies' in data || 'dislikes' in data) {
+    try {
+      syncLegacyPreferences(newId, {
+        hobbies: 'hobbies' in data ? (Array.isArray(data.hobbies) ? JSON.stringify(data.hobbies) : data.hobbies) : null,
+        dislikes: 'dislikes' in data ? (Array.isArray(data.dislikes) ? JSON.stringify(data.dislikes) : data.dislikes) : null,
+      });
+    } catch (e) {
+      console.error(`[createCompanionForAccount] preferences sync skipped: ${e.message}`);
+    }
+  }
+  return getCompanionById(newId);
+}
+
 export function updateCompanion(id, data) {
   const db = getDb();
   const existing = getCompanionById(id);
