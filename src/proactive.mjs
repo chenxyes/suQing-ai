@@ -21,6 +21,7 @@ import {
   listPreferences, getMemories,               // v1.21.6 PR-B 想到你素材源（梗 listShaping 已在上）
   getActiveCurrentWorks, countRecentMaterialUse,   // v1.21.4 PR-W2 works 注入 + 周上限计数
   getActiveLifeStates,                        // v1.22 PR-L1: #317 四档身体事件闸查档案
+  markCompanionFeedItemStatus,                // Phase 2: 自主冲浪见闻状态更新
 } from './db.mjs';
 import { getActivePeriodContext, isPeriodHeavyWindow, isPmsActive } from './life_state.mjs';   // v1.22 PR-L3 经期情绪路由
 import { buildWorksPromptHint, worksSceneSeed, pickProactiveWork, workMaterialId, worksConfig } from './current_works.mjs';  // v1.21.4 PR-W2 表达层
@@ -31,8 +32,9 @@ import { filterForStorage } from './privacy_filter.mjs';                        
 // 对话召回（bot.mjs）绝不挂：主动不提是克制，他聊起来接不住是失忆。
 import {
   materialDedupDays, filterRecentlyUsed, extractMaterialRefs,
-  memMaterialId, loopMaterialId, buildRecentProactiveHint,
+  memMaterialId, loopMaterialId, feedMaterialId, buildRecentProactiveHint,
 } from './proactive_material.mjs';
+import { pickProactiveFeedItem } from './plugins/surf_engine.mjs';
 import { canAcceptConfession } from './memory.mjs';
 import { buildSystemPrompt } from './companion.mjs';
 import { generateReply } from './ai.mjs';
@@ -932,6 +934,22 @@ ${recallLoop.expected_followup ? `你心里想：${recallLoop.expected_followup}
     }
   }
 
+  // Phase 2: 不定时自主冲浪见闻供给——仅 normal/lastcall 且未选中 works 时候选，
+  // 同样走 14 天素材冷却账本（feed:<id>），绝不刷屏、不破坏克制感。
+  let chosenFeedItem = null;
+  if (!chosenWorkMatId && (effectiveKind === 'normal' || effectiveKind === 'lastcall')) {
+    try {
+      const feedPick = pickProactiveFeedItem(companion.id, { usedIds: _materialUsed });
+      if (feedPick) {
+        chosenFeedItem = feedPick;
+        const gist = feedPick.thought_text || feedPick.title;
+        systemPrompt += `\n\n【★ 可选话题 · 你刚自己刷到的新鲜事】你之前刷手机看到：「${String(feedPick.title || '').slice(0, 60)}」（你当时的想法：${String(gist || '').slice(0, 90)}）。这次**可以**像真人一样随口提一句跟对方分享吐槽，也可以不提、聊你此刻更想说的。严禁像播报新闻，一句带过就好。`;
+      }
+    } catch (e) {
+      log('warn', `[Surf] proactive 话题供给失败（不影响发送）companion=${companion.id}: ${e.message}`);
+    }
+  }
+
   const proactiveBinding = getActiveWechatBinding(companion.wechat_user_id, companion.bot_id);
   let reply = await generateReply(systemPrompt, history, userMessage, {
     temperature: companion.temperature,
@@ -1073,6 +1091,10 @@ ${recallLoop.expected_followup ? `你心里想：${recallLoop.expected_followup}
       // v1.21.4 PR-W2: works 话题"注入即占一次出场"——发送成功就落账（48h 冷却的判定单位），
       // 不做锚匹配归因（她这次没提也算这本"轮过一次"，方向偏克制=少复读，符合 §8 手感）。
       if (chosenWorkMatId) refs.push(chosenWorkMatId);
+      if (chosenFeedItem?.id) {
+        refs.push(feedMaterialId(chosenFeedItem.id));
+        try { markCompanionFeedItemStatus(chosenFeedItem.id, 'used_chat'); } catch {}
+      }
       if (refs.length) {
         insertProactiveMaterialLog(companion.id, {
           materialIds: refs,

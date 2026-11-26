@@ -54,6 +54,7 @@ import {
   tryLockSchedule,
 } from './sleep.mjs';
 import { dispatchUrgentGoodnight, dispatchUrgentMorning } from './proactive.mjs';
+import { runAutonomousSurfTick } from './plugins/surf_engine.mjs';
 
 const TZ = 'Asia/Shanghai';
 const TICK_MS = 60_000;
@@ -135,6 +136,11 @@ async function tick(now = new Date()) {
   } catch (e) {
     log('warn', `[Sleep] tick failed: ${e.message}`);
   }
+
+  // Phase 2 不定时自主冲浪检视（随机窗口到期才触发，fail-open，不阻塞主 tick）
+  runAutonomousSurfTick(now).catch(e => {
+    log('warn', `[Surf] tick failed: ${e.message}`);
+  });
 }
 
 // ─── v1.10.0 sleep ─────────────────────────────────────────────────────────

@@ -57,6 +57,7 @@ export function getDb() {
     migrateTimeCapsules();
     migrateSilentMode();
     migrateRelationalDiary();
+    migratePluginsAndFeeds();
     migrateProactiveLastSent();
     migrateConversationTurnSynthetic();
     migrateBackfillFlag();
@@ -5177,4 +5178,189 @@ export function countMissedSince(companionId, sinceTs) {
     .prepare(`SELECT COUNT(*) AS n FROM companion_missed_messages WHERE companion_id = ? AND received_at >= ?`)
     .get(companionId, sinceTs || 0);
   return row?.n || 0;
+}
+
+// ─── Phase 2: 轻量插件配置 / 不定时自主冲浪状态 / 冲浪见闻素材 ────────────────
+function migratePluginsAndFeeds() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS companion_plugin_configs (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      companion_id  INTEGER NOT NULL REFERENCES companions(id) ON DELETE CASCADE,
+      plugin_id     TEXT    NOT NULL,
+      enabled       INTEGER NOT NULL DEFAULT 0,
+      config_json   TEXT    NOT NULL DEFAULT '{}',
+      updated_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(companion_id, plugin_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS companion_surf_state (
+      companion_id       INTEGER PRIMARY KEY REFERENCES companions(id) ON DELETE CASCADE,
+      next_surf_check_at INTEGER,
+      last_surf_at       INTEGER,
+      surf_count_today   INTEGER NOT NULL DEFAULT 0,
+      surf_count_date    TEXT,
+      last_decision_note TEXT,
+      updated_at         DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS companion_feed_items (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      companion_id  INTEGER NOT NULL REFERENCES companions(id) ON DELETE CASCADE,
+      plugin_id     TEXT    NOT NULL,
+      external_key  TEXT    NOT NULL,
+      title         TEXT    NOT NULL,
+      summary       TEXT    NOT NULL DEFAULT '',
+      thought_text  TEXT    NOT NULL DEFAULT '',
+      source_url    TEXT,
+      tags_json     TEXT    NOT NULL DEFAULT '[]',
+      status        TEXT    NOT NULL DEFAULT 'fresh',
+      created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+      expires_at    DATETIME,
+      UNIQUE(companion_id, external_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_companion_feed_items_lookup
+      ON companion_feed_items(companion_id, status, created_at DESC);
+  `);
+}
+
+export function listCompanionPluginConfigs(companionId) {
+  const rows = getDb().prepare(`
+    SELECT plugin_id, enabled, config_json, updated_at
+    FROM companion_plugin_configs
+    WHERE companion_id = ?
+  `).all(companionId);
+  return rows.map(r => {
+    let config = {};
+    try { config = JSON.parse(r.config_json || '{}') || {}; } catch {}
+    return { plugin_id: r.plugin_id, enabled: Boolean(r.enabled), config, updated_at: r.updated_at };
+  });
+}
+
+export function getCompanionPluginConfig(companionId, pluginId) {
+  const row = getDb().prepare(`
+    SELECT plugin_id, enabled, config_json, updated_at
+    FROM companion_plugin_configs
+    WHERE companion_id = ? AND plugin_id = ?
+  `).get(companionId, String(pluginId || ''));
+  if (!row) return null;
+  let config = {};
+  try { config = JSON.parse(row.config_json || '{}') || {}; } catch {}
+  return { plugin_id: row.plugin_id, enabled: Boolean(row.enabled), config, updated_at: row.updated_at };
+}
+
+export function upsertCompanionPluginConfig(companionId, pluginId, { enabled = false, config = {} } = {}) {
+  const safeCfg = config && typeof config === 'object' ? JSON.stringify(config).slice(0, 4000) : '{}';
+  getDb().prepare(`
+    INSERT INTO companion_plugin_configs (companion_id, plugin_id, enabled, config_json, updated_at)
+    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(companion_id, plugin_id) DO UPDATE SET
+      enabled = excluded.enabled,
+      config_json = excluded.config_json,
+      updated_at = CURRENT_TIMESTAMP
+  `).run(companionId, String(pluginId), enabled ? 1 : 0, safeCfg);
+  return getCompanionPluginConfig(companionId, pluginId);
+}
+
+export function getSurfState(companionId) {
+  return getDb().prepare('SELECT * FROM companion_surf_state WHERE companion_id = ?').get(companionId) || null;
+}
+
+export function upsertSurfState(companionId, fields = {}) {
+  const existing = getSurfState(companionId);
+  const next = {
+    next_surf_check_at: fields.next_surf_check_at ?? existing?.next_surf_check_at ?? null,
+    last_surf_at: fields.last_surf_at ?? existing?.last_surf_at ?? null,
+    surf_count_today: fields.surf_count_today ?? existing?.surf_count_today ?? 0,
+    surf_count_date: fields.surf_count_date ?? existing?.surf_count_date ?? null,
+    last_decision_note: fields.last_decision_note !== undefined
+      ? (fields.last_decision_note == null ? null : String(fields.last_decision_note).slice(0, 200))
+      : (existing?.last_decision_note ?? null),
+  };
+  getDb().prepare(`
+    INSERT INTO companion_surf_state
+      (companion_id, next_surf_check_at, last_surf_at, surf_count_today, surf_count_date, last_decision_note, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(companion_id) DO UPDATE SET
+      next_surf_check_at = excluded.next_surf_check_at,
+      last_surf_at = excluded.last_surf_at,
+      surf_count_today = excluded.surf_count_today,
+      surf_count_date = excluded.surf_count_date,
+      last_decision_note = excluded.last_decision_note,
+      updated_at = CURRENT_TIMESTAMP
+  `).run(
+    companionId,
+    next.next_surf_check_at,
+    next.last_surf_at,
+    next.surf_count_today,
+    next.surf_count_date,
+    next.last_decision_note,
+  );
+  return getSurfState(companionId);
+}
+
+export function insertCompanionFeedItem(companionId, item) {
+  const dbRef = getDb();
+  const tagsJson = JSON.stringify(Array.isArray(item.tags) ? item.tags.slice(0, 8) : []);
+  const ttlHours = Math.max(1, Math.min(168, Number(item.ttlHours) || 48));
+  const expiresAt = item.expiresAt || new Date(Date.now() + ttlHours * 3_600_000).toISOString();
+  const info = dbRef.prepare(`
+    INSERT OR IGNORE INTO companion_feed_items
+      (companion_id, plugin_id, external_key, title, summary, thought_text, source_url, tags_json, status, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'fresh', ?)
+  `).run(
+    companionId,
+    String(item.pluginId || ''),
+    String(item.externalKey || '').slice(0, 200),
+    String(item.title || '').slice(0, 200),
+    String(item.summary || '').slice(0, 400),
+    String(item.thoughtText || '').slice(0, 300),
+    item.sourceUrl ? String(item.sourceUrl).slice(0, 500) : null,
+    tagsJson,
+    expiresAt,
+  );
+  if (info.changes === 0) return null;
+  return dbRef.prepare('SELECT * FROM companion_feed_items WHERE id = ?').get(info.lastInsertRowid) || null;
+}
+
+export function listCompanionFeedItems(companionId, { status = null, limit = 20, includeExpired = false } = {}) {
+  const nowIso = new Date().toISOString();
+  const lim = Math.max(1, Math.min(100, Number(limit) || 20));
+  const clauses = ['companion_id = ?'];
+  const params = [companionId];
+  if (status) {
+    clauses.push('status = ?');
+    params.push(String(status));
+  }
+  if (!includeExpired) {
+    clauses.push('(expires_at IS NULL OR expires_at > ?)');
+    params.push(nowIso);
+  }
+  params.push(lim);
+  const rows = getDb().prepare(`
+    SELECT * FROM companion_feed_items
+    WHERE ${clauses.join(' AND ')}
+    ORDER BY id DESC
+    LIMIT ?
+  `).all(...params);
+  return rows.map(r => {
+    let tags = [];
+    try { tags = JSON.parse(r.tags_json || '[]') || []; } catch {}
+    return { ...r, tags };
+  });
+}
+
+export function markCompanionFeedItemStatus(id, status) {
+  const allowed = new Set(['fresh', 'used_chat', 'used_social', 'expired']);
+  if (!allowed.has(status)) return false;
+  const info = getDb().prepare('UPDATE companion_feed_items SET status = ? WHERE id = ?').run(status, id);
+  return info.changes > 0;
+}
+
+export function expireStaleFeedItems(nowIso = new Date().toISOString()) {
+  const info = getDb().prepare(`
+    UPDATE companion_feed_items
+    SET status = 'expired'
+    WHERE status = 'fresh' AND expires_at IS NOT NULL AND expires_at <= ?
+  `).run(nowIso);
+  return info.changes;
 }
