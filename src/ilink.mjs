@@ -448,8 +448,8 @@ export async function sendMessage(ctx, msg, text, opts = {}) {
   }
 }
 
-export async function sendTextMessage(ctx, toUserId, text, contextToken) {
-  return sendMessage(ctx, { to_user_id: toUserId, context_token: contextToken }, text);
+export async function sendTextMessage(ctx, toUserId, text, contextToken, opts = {}) {
+  return sendMessage(ctx, { to_user_id: toUserId, context_token: contextToken }, text, opts);
 }
 
 /**

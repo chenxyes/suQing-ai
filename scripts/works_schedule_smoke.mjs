@@ -2,7 +2,7 @@
  * works_schedule_smoke —— PR-W5 日程结构化红验（2026-06-13）。纯函数零网络零 LLM。
  * 设计 §7「进行中」：日程消费 works 档案 + progress 渐进推进 + life_state 预留位。
  *
- * 红验：①progress 渐进单调不跳/不回退 ②advanceWorkProgress 跨阶段才写、generic 不动
+ * 红验：①progress 渐进单调不跳/不回退 ②advanceWorkProgress 跨阶段才写、generic 只推进普通活动
  *   ③ensureCurrentWorks 真推进 active works 进度并与生命周期换档衔接 ④buildScheduleWorksHint
  *   只含档案真实条目（杜绝日程层漂移）+ life_state 预留位在场 ⑤静态：plan_tasks 先刷档案再生成日程。
  */
@@ -36,14 +36,14 @@ const daysAgo = (d) => new Date(Date.now() - d * 86400_000).toISOString();
   ok(workProgressRatio({ kind: 'book', started_at: daysAgo(999) }) === 1, '超期 clamp 到 1');
 }
 
-// ── ② advanceWorkProgress：跨阶段才写、同阶段 null、generic 不动 ──
+// ── ② advanceWorkProgress：跨阶段才写、同阶段 null、generic 只推进普通活动 ──
 {
   const fresh = { kind: 'book', started_at: daysAgo(0), progress_note: '才翻开没几页', verify_status: 'verified' };
   ok(advanceWorkProgress(fresh) === null, '同阶段 → null（不重复写库）');
   const moved = { kind: 'book', started_at: daysAgo(999), progress_note: '才翻开没几页', verify_status: 'verified' };
   ok(advanceWorkProgress(moved) === '快读完了', '跨到末阶段 → 返回新文案');
   const generic = { kind: 'book', started_at: daysAgo(999), progress_note: null, verify_status: 'generic' };
-  ok(advanceWorkProgress(generic) === null, 'generic 泛读态不推进具体进度');
+  ok(/翻翻/.test(advanceWorkProgress(generic)) && !/章|读完/.test(advanceWorkProgress(generic)), 'generic 延续普通阅读活动，不推断章节或读完');
 }
 
 // ── ③ ensureCurrentWorks 真推进 active works + 与换档衔接 ──

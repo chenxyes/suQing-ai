@@ -25,7 +25,8 @@
     "stickers:fetch": "python3 scripts/fetch_stickers.py",
     "smoke": "bash scripts/release_smoke_test.sh",
     "postinstall": "wx-voice compile || echo '[postinstall] wx-voice compile failed (语音功能将不可用，先忽略)'",
-    "retention:board": "node scripts/retention-board.mjs"
+    "retention:board": "node scripts/retention-board.mjs",
+    "check:behavior": "node scripts/reply_context_check.mjs && node scripts/reply_review_check.mjs && node scripts/reply_pipeline_check.mjs && node scripts/behavior_runtime_check.mjs && node scripts/behavior_inner_check.mjs && node scripts/behavior_tasks_check.mjs && node scripts/behavior_bot_check.mjs && node scripts/behavior_playground_check.mjs && node scripts/proactive_delivery_check.mjs && node scripts/behavior_scheduler_check.mjs && node scripts/proactive_photo_delivery_check.mjs"
   },
   "keywords": [
     "ai-companion",

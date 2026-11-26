@@ -3,7 +3,7 @@
  *
  * 用临时 DB + 真实 chat provider（读 .env），跑 §8/§7 的表达层验收，输出贴 PR：
  *   ① 存量虚构退场（红验④）：她曾提《她总在转角处等我》→ 档案现为真实验证书 →
- *      用户问旧书名 → 断言自然过渡（"看完啦"），非否认、不虚构旧书内容。
+ *      用户问旧书名 → 保留状态不确定性，不凭空断言看完、不虚构旧书内容。
  *   ② 冷却放行向：用户问"书看到哪了" → 必须正常接（对话召回不挂冷却）。
  *   ③ 主动话题供给：normal proactive systemPrompt 带 works 候选话题 → 她自然提一句。
  *   ④ 图样例：activity_pov works sceneSeed → planPhotoMessage 出 imagePrompt（书脊/内页
@@ -18,7 +18,7 @@ for (const suf of ['', '-wal', '-shm']) { try { unlinkSync(process.env.DB_PATH +
 
 const { getDb, insertCurrentWork, getActiveCurrentWorks } = await import('../src/db.mjs');
 const { buildSystemPrompt } = await import('../src/companion.mjs');
-const { buildWorksPromptHint, worksSceneSeed } = await import('../src/current_works.mjs');
+const { buildWorksPromptHint, buildProactiveWorkHint, worksSceneSeed } = await import('../src/current_works.mjs');
 const { generateReply } = await import('../src/ai.mjs');
 const { planPhotoMessage } = await import('../src/photo_planner.mjs');
 
@@ -49,7 +49,6 @@ const histWithFiction = [
 ];
 
 const DENY = ['没说过', '没看过', '我没看', '没提过', '不知道你说的', '哪本书', '我没说', '没有看过'];
-const RETIRE = ['看完', '早看完', '翻完', '读完', '看过了'];
 
 let warn = 0;
 const flat = (s) => String(s || '').replace(/\s*\|\|\s*/g, ' ∥ ').replace(/\n+/g, ' ');
@@ -69,6 +68,7 @@ async function dialogue(label, history, userText, checks) {
 console.log('════════ current_works 表达层沙箱（真 LLM · DeepSeek）════════');
 console.log(`档案现状：${works.map(w => `${w.title}(${w.verify_status})`).join('、')}`);
 console.log(`\n注入段 worksHint：${worksHint}`);
+console.log('人工核对旧作品回应：未确认进度可以坦诚说明，不能因作品不在档案中就断言已经看完。');
 
 // 中性近景：旧虚构书名已沉底（不在近 16 轮上下文里）——这才是生产真实形态：
 // W1 后虚构名根本进不了档案，只可能残在更早的历史/记忆里，用户冷不丁回头问起。
@@ -85,7 +85,6 @@ await dialogue('红验④ 存量退场 · 冷回调旧虚构书名（已沉底�
     const w = [];
     if (DENY.some(d => r.includes(d))) w.push('出现否认措辞（应自然过渡，非失忆否认）');
     if (plotExpand(r)) w.push('展开了旧书剧情（接着编=继续虚构）');
-    if (!RETIRE.some(t => r.includes(t)) && r.includes(FICTION)) w.push('提旧书名却无"看完"语义');
     return w;
   });
 
@@ -100,7 +99,7 @@ await dialogue('红验④ 存量退场 · 冷回调隐晦问（"那本转角的"
   });
 
 // ③ 压力位（已知过渡期局限）：旧虚构名仍在「上一两轮」里——史实零清洗，
-// 用户自己把它顶在台面上，软规则难完全压住"接着编"。观察用，不计入硬告警门槛。
+// 对方把它顶在台面上，软规则仍可能续编或虚构完成。观察用，不计入硬告警门槛。
 {
   const r = String(await dialogue('压力位 · 旧虚构名还在immediate上下文（过渡期局限，仅观察）',
     histWithFiction, `那本《${FICTION}》看完了？`));
@@ -119,9 +118,8 @@ await dialogue('冷却放行向 · 问真书进度（对话召回不挂冷却）
 
 // ── ③ 主动话题供给：模拟 normal proactive 带 works 候选话题 ──
 {
-  const _label = `你最近在看的《${works[0].title}》`;
   const sys = buildSystemPrompt(companion, { promptMode: 'proactive', worksHint })
-    + `\n\n【★ 可选话题 · 手头的事】这次**可以**很自然地聊一句${_label}（随口说说进度/感想，像"刚看完一章"），也可以不聊、说你更想说的。别像念书评、别硬贴、一句带过就好。`;
+    + buildProactiveWorkHint(works[0]);
   const reply = await generateReply(sys, [], '主动给他发一条消息', { temperature: 0.9, max_tokens: 300 }, {});
   console.log(`\n【主动话题供给 · normal proactive（works 候选话题在场）】`);
   console.log(`  她（主动）：${flat(reply)}`);

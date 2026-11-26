@@ -331,7 +331,7 @@ async function load() {
         });
         const d = await r.json();
         if (!r.ok || !d.ok) throw new Error(d.error || '声明失败');
-        if (d.released) { showToast('安全模式已解除'); banner.style.display = 'none'; }
+        if (d.data.released) { showToast('安全模式已解除'); banner.style.display = 'none'; }
         else { alert('根据你填写的出生年份，安全模式将保持开启。'); }
       } catch (e) { alert(e.message); }
     });
@@ -1306,7 +1306,8 @@ async function loadP2Section(companionId) {
       try {
         exportBtn.disabled = true;
         exportBtn.textContent = '导出中...';
-        const r = await fetch(`/api/companions/${companionId}/export`, {
+        const includeMemories = document.getElementById('transfer-include-memories')?.checked;
+        const r = await fetch(`/api/companions/${companionId}/export${includeMemories ? '?include_memories=1' : ''}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (!r.ok) throw new Error('导出失败');
@@ -1337,9 +1338,11 @@ async function loadP2Section(companionId) {
       importStatus.classList.remove('hidden');
       importStatus.textContent = '解析中...';
       try {
+        if (file.size > 32 * 1024 * 1024) throw new Error('网页导入最大支持 32 MiB；更大的备份请使用本地迁移工具');
         const text = await file.text();
-        const payload = JSON.parse(text);
-        const r = await fetch('/api/companions/import', {
+        JSON.parse(text);
+        const includeMemories = document.getElementById('transfer-include-memories')?.checked;
+        const r = await fetch('/api/companions/import' + (includeMemories ? '?include_memories=1' : ''), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
           body: text,
@@ -1347,6 +1350,7 @@ async function loadP2Section(companionId) {
         const d = await r.json();
         if (!r.ok || !d.ok) throw new Error(d.error || '导入失败');
         importStatus.textContent = `✓ 导入成功，角色 ID: ${d.data.companion_id}`;
+        if (includeMemories) importStatus.textContent += `；${d.data.quarantined_memories || 0} 条记忆及导入历史已保留待审阅，暂不用于聊天`;
         showToast('导入成功！');
       } catch (e2) {
         importStatus.textContent = '✗ ' + e2.message;

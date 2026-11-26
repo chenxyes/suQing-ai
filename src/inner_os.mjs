@@ -75,9 +75,18 @@ export function shouldRunInnerOs(userText, opts = {}) {
 /**
  * 给"内心 OS"生成 system prompt：让模型用第一人称写她此刻的真实内心反应
  */
-function buildInnerSystemPrompt(companion) {
+function buildInnerSystemPrompt(companion, { structuredOnly = false } = {}) {
   const name = companion?.name || '她';
   const stage = companion?.relationship_stage || '暧昧';
+  if (structuredOnly) {
+    return `你现在帮助 ${name} 判断当前对话，关系阶段为【${stage}】。现在不是写回复。
+只根据提供的真实对话输出一个 JSON 对象，不写内心独白、解释或补充故事：
+{"intent":"对方本轮意图(8字内)","user_tone":"warm|neutral|harsh|pressure","perceived_hurt":0,"is_apology":false,"apology_target":"","reply_energy":"low|mid|high"}
+perceived_hurt 为本轮明确冒犯你的程度 0-3；普通表达委屈、纠正你的话或要求按自己的时间安排，不等于攻击你，不据此反过来责怪对方。
+is_apology 只在对方向你道歉时为 true；apology_target 只取明确说出的事，没有就留空。
+不要猜测对方过去的经历、付出、失约或心理动机。信息不足保持中性。
+如后文提供相处行为候选，在同一个 JSON 中加入 behavior 字段；其他字段保持上述格式。`;
+  }
   return `你现在扮演 ${name}，处在【${stage}】阶段。
 
 你刚收到对方一条消息。**现在不是写回复**，是先想一下你的**真实内心反应**。
@@ -97,20 +106,41 @@ is_apology 是他在不在道歉/求和；apology_target 是他具体在为什�
 输出 = 内心想法（每句一行）+ 最后一行 JSON，不要其他任何内容。`;
 }
 
-/** v1.21: 从 inner 输出里剥出末行结构化 JSON（失败返回 null，绝不抛） */
+// JSON can now contain a nested behavior object. Scan balanced objects while
+// respecting quoted braces; a truncated payload never becomes visible thought.
+function readInnerPayload(raw) {
+  const text = String(raw || '').slice(0, 12000);
+  const start = text.search(/\{\s*"/);
+  if (start < 0) return { text, start: text.length, payload: null };
+  let depth = 0, quoted = false, escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') quoted = false;
+    } else if (ch === '"') quoted = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}' && --depth === 0) {
+      try { return { text, start, payload: JSON.parse(text.slice(start, i + 1)) }; }
+      catch { break; }
+    }
+  }
+  return { text, start, payload: null };
+}
+
+/** Preserve the existing conflict-signal contract when behavior is nested. */
 export function parseInnerStruct(raw) {
-  if (!raw) return null;
   try {
-    const m = String(raw).match(/\{[^{}]*"user_tone"[^{}]*\}/g);
-    if (!m || !m.length) return null;
-    const obj = JSON.parse(m[m.length - 1]);
+    const { payload: obj } = readInnerPayload(raw);
+    if (!obj || !Object.hasOwn(obj, 'user_tone')) return null;
     const tone = ['warm', 'neutral', 'harsh', 'pressure'].includes(obj.user_tone) ? obj.user_tone : 'neutral';
     const hurt = Number(obj.perceived_hurt);
     return {
       intent: String(obj.intent || '').slice(0, 24),
       user_tone: tone,
       perceived_hurt: Number.isFinite(hurt) ? Math.max(0, Math.min(3, Math.round(hurt))) : null,
-      is_apology: !!obj.is_apology,
+      is_apology: obj.is_apology === true,
       apology_target: String(obj.apology_target || '').slice(0, 60),
       reply_energy: ['low', 'mid', 'high'].includes(obj.reply_energy) ? obj.reply_energy : 'mid',
     };
@@ -119,10 +149,25 @@ export function parseInnerStruct(raw) {
   }
 }
 
+export function parseInnerResponse(raw) {
+  const { text, start, payload } = readInnerPayload(raw);
+  const thought = text.slice(0, start)
+    .replace(/```[^\n]*\n?/g, '')
+    .replace(/^[#\-*>•]+\s*/gm, '')
+    .replace(/我应该.*?(回复|说).*?[。\.\n]/g, '')
+    .replace(/\n{3,}/g, '\n\n').trim().slice(0, 240);
+  const behavior = payload?.behavior;
+  return {
+    thought,
+    struct: parseInnerStruct(raw),
+    behavior: behavior && typeof behavior === 'object' && !Array.isArray(behavior) ? behavior : null,
+  };
+}
+
 /**
  * 给 outer reply 注入内心 OS 的 prompt 片段
  */
-export function buildInnerOsHint(innerThought) {
+export function buildInnerOsHint(innerThought, { behaviorPlan = null } = {}) {
   if (!innerThought) return '';
   // 接线护栏：本函数期望 string（即 generateInnerMonologue 返回对象的 .thought）。
   // 若调用方误传整个 { thought, struct } 对象，过去会在下面 .trim() 处裸抛
@@ -133,6 +178,10 @@ export function buildInnerOsHint(innerThought) {
       `buildInnerOsHint 期望 string，收到 ${typeof innerThought}` +
       `（调用方应传 innerRes.thought，而非整个返回对象）`,
     );
+  }
+  if (behaviorPlan) {
+    // Free-form inner narration is not evidence for a grounded action.
+    return '';
   }
   return `
 
@@ -163,34 +212,26 @@ export async function generateInnerMonologue({
   context = {},
 } = {}) {
   if (!isInnerOsEnabled(companion)) return null;
-  if (!shouldRunInnerOs(userText, { hasOpenArcEvent: !!context?.hasOpenArcEvent })) return null;
+  if (!context?.behaviorPlanningHint && !shouldRunInnerOs(userText, { hasOpenArcEvent: !!context?.hasOpenArcEvent })) return null;
 
   try {
-    const sys = buildInnerSystemPrompt(companion);
+    const structuredOnly = !!(context?.behaviorEnabled || context?.behaviorPlanningHint);
+    const sys = buildInnerSystemPrompt(companion, { structuredOnly }) + (context?.behaviorPlanningHint || '');
     // 只取最近 4 轮 history 让 inner 更聚焦当下
     const recent = (history || []).slice(-4);
     const inner = await generateReply(
       sys,
       recent,
       userText,
-      { temperature: 0.85, max_tokens: MAX_INNER_TOKENS, top_p: 0.9 },
-      { accountId: context?.accountId || null },
+      { temperature: structuredOnly ? 0.2 : 0.85, max_tokens: context?.behaviorPlanningHint ? Math.max(MAX_INNER_TOKENS, 480) : MAX_INNER_TOKENS, top_p: 0.9 },
+      { accountId: context?.accountId || null, purpose: 'internal', probe: !!context?.probe },
     );
     if (!inner || isChatFallback(inner)) return null;
     // 先从原始输出剥结构化 JSON（清理/截断之前，防 slice 吃掉末行）
-    const struct = parseInnerStruct(inner);
-    // 清理：去掉 JSON 行 / markdown / 多余空行 / "我应该" 这类元话术
-    const cleaned = String(inner)
-      .replace(/\{[^{}]*"user_tone"[^{}]*\}/g, '')
-      .replace(/```[\s\S]*?```/g, '')
-      .replace(/^[#\-*>•]+\s*/gm, '')
-      .replace(/我应该.*?(回复|说).*?[。\.\n]/g, '')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim()
-      .slice(0, 240);
-    if (cleaned.length < 4 && !struct) return null;
-    log('debug', `[InnerOS] companion=${companion?.id} thought="${cleaned.slice(0, 80)}..." tone=${struct?.user_tone || '-'}`);
-    return { thought: cleaned.length >= 4 ? cleaned : '', struct };
+    const result = parseInnerResponse(inner);
+    if (result.thought.length < 4 && !result.struct && !result.behavior) return null;
+    log('debug', `[InnerOS] companion=${companion?.id} tone=${result.struct?.user_tone || '-'} behavior=${!!result.behavior}`);
+    return { ...result, thought: !structuredOnly && result.thought.length >= 4 ? result.thought : '' };
   } catch (e) {
     log('warn', `[InnerOS] 生成失败 companion=${companion?.id}: ${e.message}`);
     return null;

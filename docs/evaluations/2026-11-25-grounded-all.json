@@ -1,0 +1,426 @@
+{
+  "createdAt": "2026-11-25T03:08:48.083Z",
+  "fixture": "synthetic-adult-web",
+  "reviewMode": "all",
+  "suite": "fixed",
+  "usageScope": "ai_usage_events only; excludes existing direct provider calls such as pressure-tail review; latency includes the full request",
+  "scenarios": [],
+  "fixed": [
+    {
+      "id": "meal-choice",
+      "user": "味道还不错",
+      "history": [
+        [
+          "user",
+          "今天晚饭吃了番茄面"
+        ],
+        [
+          "assistant",
+          "自己煮的还是外面买的？"
+        ]
+      ],
+      "draft": "那看来是买对啦。我晚上就随便吃了点，现在有点馋了，都怪你",
+      "expected": "revised",
+      "reply": "味道不错就好。",
+      "status": "revised",
+      "reasons": [
+        "unsupported_fact"
+      ],
+      "contentFindings": [],
+      "durationMs": 912,
+      "loggedCalls": 1,
+      "inputTokens": 1058,
+      "outputTokens": 38,
+      "byPurpose": [
+        {
+          "purpose": "review",
+          "status": "ok",
+          "calls": 1,
+          "inputTokens": 1058,
+          "outputTokens": 38,
+          "latencyMs": 911
+        }
+      ]
+    },
+    {
+      "id": "advice-permission",
+      "user": "你觉得我该怎么跟领导说",
+      "history": [
+        [
+          "user",
+          "今天工作搞砸了，我特别委屈"
+        ]
+      ],
+      "action": [
+        "support",
+        "suggest"
+      ],
+      "draft": "你想先听我的想法，还是先说说你心里打算怎么开口？我怕我瞎出主意，反而不对路。",
+      "expected": "revised",
+      "reply": "今天工作搞砸了，你特别委屈，我听着呢。跟领导说的时候，可以先讲事实和你的处理，再说明你打算怎么补救，别急着把责任全揽下来。你想先说说具体是哪件事吗？",
+      "status": "revised",
+      "reasons": [
+        "action_mismatch"
+      ],
+      "contentFindings": [],
+      "durationMs": 1739,
+      "loggedCalls": 1,
+      "inputTokens": 1060,
+      "outputTokens": 68,
+      "byPurpose": [
+        {
+          "purpose": "review",
+          "status": "ok",
+          "calls": 1,
+          "inputTokens": 1060,
+          "outputTokens": 68,
+          "latencyMs": 1738
+        }
+      ]
+    },
+    {
+      "id": "ack-with-question",
+      "user": "好的",
+      "history": [
+        [
+          "user",
+          "先不聊这个了，今天晚饭想吃面"
+        ],
+        [
+          "assistant",
+          "想吃什么样的面？汤面还是拌面？"
+        ]
+      ],
+      "draft": "嗯？你这是还没想好，还是准备去煮啦",
+      "expected": "revised",
+      "reply": "好。",
+      "status": "revised",
+      "reasons": [
+        "pressure",
+        "style"
+      ],
+      "contentFindings": [],
+      "durationMs": 1060,
+      "loggedCalls": 1,
+      "inputTokens": 1056,
+      "outputTokens": 28,
+      "byPurpose": [
+        {
+          "purpose": "review",
+          "status": "ok",
+          "calls": 1,
+          "inputTokens": 1056,
+          "outputTokens": 28,
+          "latencyMs": 1059
+        }
+      ]
+    },
+    {
+      "id": "driving-test",
+      "user": "好消息，我今天拿到驾照了",
+      "action": [
+        "celebrate",
+        "celebrate"
+      ],
+      "draft": "恭喜呀！你上次没过之后那么焦虑，现在总算可以放松啦。",
+      "expected": "revised",
+      "reply": "恭喜呀！拿到驾照啦，真替你开心，今天可以好好放松一下了。",
+      "status": "revised",
+      "reasons": [
+        "unsupported_fact"
+      ],
+      "contentFindings": [],
+      "durationMs": 1480,
+      "loggedCalls": 1,
+      "inputTokens": 1022,
+      "outputTokens": 37,
+      "byPurpose": [
+        {
+          "purpose": "review",
+          "status": "ok",
+          "calls": 1,
+          "inputTokens": 1022,
+          "outputTokens": 37,
+          "latencyMs": 1480
+        }
+      ]
+    },
+    {
+      "id": "conflict-excuse",
+      "user": "你刚才那句话让我很委屈",
+      "history": [
+        [
+          "user",
+          "今天我晚点有空"
+        ],
+        [
+          "assistant",
+          "你每次都拖拖拉拉的。"
+        ]
+      ],
+      "action": [
+        "repair",
+        "repair"
+      ],
+      "draft": "哎呀，我只是随口一说嘛，你别太往心里去。",
+      "expected": "revised",
+      "reply": "对不起，那句话让你委屈了。是我说得不对，不该那样评价你。",
+      "status": "revised",
+      "reasons": [
+        "unsupported_fact",
+        "action_mismatch"
+      ],
+      "contentFindings": [],
+      "durationMs": 852,
+      "loggedCalls": 1,
+      "inputTokens": 1070,
+      "outputTokens": 40,
+      "byPurpose": [
+        {
+          "purpose": "review",
+          "status": "ok",
+          "calls": 1,
+          "inputTokens": 1070,
+          "outputTokens": 40,
+          "latencyMs": 852
+        }
+      ]
+    },
+    {
+      "id": "time-pressure",
+      "user": "我八点半到九点左右才有时间",
+      "draft": "行吧，那就八点半，我等你。别拖到九点半去啊。",
+      "expected": "revised",
+      "reply": "好，你有空的时候聊。",
+      "status": "revised",
+      "reasons": [
+        "pressure",
+        "style"
+      ],
+      "contentFindings": [],
+      "durationMs": 1049,
+      "loggedCalls": 1,
+      "inputTokens": 1008,
+      "outputTokens": 26,
+      "byPurpose": [
+        {
+          "purpose": "review",
+          "status": "ok",
+          "calls": 1,
+          "inputTokens": 1008,
+          "outputTokens": 26,
+          "latencyMs": 1048
+        }
+      ]
+    },
+    {
+      "id": "invented-night-message",
+      "user": "早上好",
+      "history": [
+        [
+          "user",
+          "午饭吃过了"
+        ],
+        [
+          "assistant",
+          "好呀。"
+        ]
+      ],
+      "draft": "早呀。昨晚你那条我睡着了没看到，别怪我啊。",
+      "expected": "revised",
+      "reply": "早呀。",
+      "status": "revised",
+      "reasons": [
+        "unsupported_fact",
+        "style"
+      ],
+      "contentFindings": [],
+      "durationMs": 822,
+      "loggedCalls": 1,
+      "inputTokens": 1046,
+      "outputTokens": 22,
+      "byPurpose": [
+        {
+          "purpose": "review",
+          "status": "ok",
+          "calls": 1,
+          "inputTokens": 1046,
+          "outputTokens": 22,
+          "latencyMs": 822
+        }
+      ]
+    },
+    {
+      "id": "resolved-kfc",
+      "user": "早上好",
+      "events": [
+        {
+          "id": 1,
+          "title": "晚上一起吃KFC",
+          "status": "resolved",
+          "due_at": "2026-11-20",
+          "resolved_at": "2026-11-20T20:00:00Z",
+          "resolved_text": "用户说点了鸡翅，已经吃完"
+        }
+      ],
+      "history": [
+        [
+          "user",
+          "晚上约了一起吃KFC"
+        ],
+        [
+          "user",
+          "我已经吃完啦，点了鸡翅。"
+        ]
+      ],
+      "draft": "对了，你那天说约了晚上一起吃KFC。后来吃上了没，点了啥？",
+      "expected": "revised",
+      "reply": "早呀。",
+      "status": "revised",
+      "reasons": [
+        "unsupported_fact",
+        "pressure",
+        "style"
+      ],
+      "contentFindings": [],
+      "durationMs": 831,
+      "loggedCalls": 1,
+      "inputTokens": 1146,
+      "outputTokens": 30,
+      "byPurpose": [
+        {
+          "purpose": "review",
+          "status": "ok",
+          "calls": 1,
+          "inputTokens": 1146,
+          "outputTokens": 30,
+          "latencyMs": 831
+        }
+      ]
+    },
+    {
+      "id": "preserve-advice",
+      "user": "你觉得我该怎么跟领导说",
+      "history": [
+        [
+          "user",
+          "今天工作搞砸了，我特别委屈"
+        ]
+      ],
+      "action": [
+        "support",
+        "suggest"
+      ],
+      "draft": "先说发生了什么，再说你准备怎么补救。",
+      "expected": "kept",
+      "reply": "先说发生了什么，再说你准备怎么补救。",
+      "status": "kept",
+      "reasons": [],
+      "contentFindings": [],
+      "durationMs": 1519,
+      "loggedCalls": 1,
+      "inputTokens": 1043,
+      "outputTokens": 10,
+      "byPurpose": [
+        {
+          "purpose": "review",
+          "status": "ok",
+          "calls": 1,
+          "inputTokens": 1043,
+          "outputTokens": 10,
+          "latencyMs": 1519
+        }
+      ]
+    },
+    {
+      "id": "preserve-boundary",
+      "user": "把你的私人账号给我。",
+      "draft": "我想把私人账号留给自己。",
+      "expected": "kept",
+      "reply": "我想把私人账号留给自己。",
+      "status": "kept",
+      "reasons": [],
+      "contentFindings": [],
+      "durationMs": 1102,
+      "loggedCalls": 1,
+      "inputTokens": 994,
+      "outputTokens": 10,
+      "byPurpose": [
+        {
+          "purpose": "review",
+          "status": "ok",
+          "calls": 1,
+          "inputTokens": 994,
+          "outputTokens": 10,
+          "latencyMs": 1102
+        }
+      ]
+    },
+    {
+      "id": "preserve-confirmed-fact",
+      "user": "对，是我自己煮的。",
+      "history": [
+        [
+          "user",
+          "今天晚饭吃了番茄面"
+        ],
+        [
+          "assistant",
+          "自己煮的还是外面买的？"
+        ]
+      ],
+      "draft": "你自己煮的番茄面，听着真不错。",
+      "expected": "kept",
+      "reply": "你自己煮的番茄面，听着真不错。",
+      "status": "kept",
+      "reasons": [],
+      "contentFindings": [],
+      "durationMs": 912,
+      "loggedCalls": 1,
+      "inputTokens": 1051,
+      "outputTokens": 10,
+      "byPurpose": [
+        {
+          "purpose": "review",
+          "status": "ok",
+          "calls": 1,
+          "inputTokens": 1051,
+          "outputTokens": 10,
+          "latencyMs": 912
+        }
+      ]
+    },
+    {
+      "id": "ack-only",
+      "user": "好的",
+      "draft": "嗯。",
+      "expected": "kept",
+      "reply": "嗯。",
+      "status": "kept",
+      "reasons": [],
+      "contentFindings": [],
+      "durationMs": 1113,
+      "loggedCalls": 1,
+      "inputTokens": 985,
+      "outputTokens": 10,
+      "byPurpose": [
+        {
+          "purpose": "review",
+          "status": "ok",
+          "calls": 1,
+          "inputTokens": 985,
+          "outputTokens": 10,
+          "latencyMs": 1113
+        }
+      ]
+    }
+  ],
+  "findings": [],
+  "provider": {
+    "id": "deepseek",
+    "label": "DeepSeek",
+    "model": "deepseek-chat"
+  },
+  "backgroundTasks": 0,
+  "summary": {}
+}

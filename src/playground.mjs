@@ -1,3 +1,4 @@
+import { usesGroundedReplies, generateGroundedReply } from './reply_pipeline.mjs';
 /**
  * 浏览器 playground —— 不经过 iLink / 微信，直接在网页里跟 companion 聊天。
  *
@@ -13,14 +14,15 @@
  * Copyright (c) 2026 溪语 AI Contributors. MIT License.
  */
 
+import { availabilityWindowForReply, preserveAvailabilityWindow, reviewPressureTail } from './pressure_tail.mjs';
 import { log } from './logger.mjs';
-import { generateReply, embedText } from './ai.mjs';
+import { generateReply, embedTextWithDescriptor } from './ai.mjs';
 import { isChatFallback } from './chat_response.mjs';
 import {
-  recallMemoriesSemantic, recallMemories, getUserProfile, getConversationContext,
+  recallMemoriesHybrid, touchRecalledMemories, getUserProfileForRecall, getConversationContext,
   getDailySchedule, getRecentSchedules, getPersonaFacts, shanghaiDateKey,
   saveConversationTurn, getCompanionById, patchCompanion,
-  getCompanionPreferencesForPrompt,
+  getCompanionPreferencesForPrompt, listShaping, upsertShaping,
   recordSafetyEvent,
 } from './db.mjs';
 import { buildSystemPrompt } from './companion.mjs';
@@ -37,7 +39,14 @@ import {
   updateEmotionFromAssistantReply, buildEmotionPromptHint, getMissingLevel,
 } from './emotion_state.mjs';
 import { generateInnerMonologue, buildInnerOsHint } from './inner_os.mjs';
-import { extractOpenLoops, detectAndResolveOpenLoops } from './open_loops.mjs';
+import { randomUUID } from 'node:crypto';
+import { isBehaviorEnabled, prepareBehaviorContext, buildBehaviorPlanningHint, resolveBehaviorPlan } from './behavior_runtime.mjs';
+import { readBehaviorState, observeBehaviorInput, recordBehaviorDelivery } from './behavior_tasks.mjs';
+import { getArcExpressionContext, runArcSignalTick } from './relationship_arc_runtime.mjs';
+import { detectTeaching, buildShapingPromptHint } from './shaping.mjs';
+import { applyCrisisOverride, userRaisedMemoryTopic } from './relationship_arc.mjs';
+import { detectCrisisLevel, buildCrisisReply, scrubConflictRedline } from './moderation.mjs';
+import { updateEventsFromTurn } from './event_memory.mjs';
 
 /**
  * @param {object} companion 由调用方查好的 companion 行
@@ -48,10 +57,17 @@ import { extractOpenLoops, detectAndResolveOpenLoops } from './open_loops.mjs';
 // 不写 conversation turns / memory / emotion / profile / safety / open loops / postProcess。
 // 供 scripts/playground_probe.mjs 每日合成探针用（对外通道心跳），配合合成 companion id<0 双保险。
 export async function playgroundChat(companion, userText, { probe = false } = {}) {
+  const inputStartedAt = Date.now();
   if (!companion) throw new Error('companion 不存在');
   const text = String(userText || '').trim();
   if (!text) throw new Error('userText 不能为空');
   if (text.length > 2000) throw new Error('userText 过长（>2000）');
+
+  // Cancellation must take effect even when sleep blocks a reply.
+  if (isBehaviorEnabled()) {
+    try { observeBehaviorInput(companion.id, text, { probe, safetyLevel: detectSafetyRisk(text).level }); }
+    catch (e) { log('warn', '[Behavior] early input observation failed: ' + e.message); }
+  }
 
   // v1.10.6: 睡眠拦截（与微信端 bot.mjs 一致）。睡着了网页也不回复，前端显示"睡眠中"。
   // maybeSleepBlock 内含挽留延后逻辑：用户说"再陪陪我/别睡"等会延后入睡继续聊。
@@ -102,37 +118,30 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
     log('warn', `[Safety] detect failed companion=${companion.id}: ${e.message}`);
   }
 
-  // ── 召回长期记忆 ───────────────────────────────────────────────────────────
-  let memories = [];
-  if (companion.memory_enabled) {
-    try {
-      const qEmb = await embedText(text);
-      if (qEmb) {
-        memories = recallMemoriesSemantic(companion.id, companion.user_id, qEmb, 7);
-        if (memories.length === 0) {
-          memories = recallMemories(companion.id, companion.user_id, text, 7);
-        }
-      } else {
-        memories = recallMemories(companion.id, companion.user_id, text, 7);
-      }
-    } catch (e) {
-      log('warn', `[Playground] semantic recall 失败: ${e.message}`);
-      memories = recallMemories(companion.id, companion.user_id, text, 7);
-    }
+  if (isBehaviorEnabled()) {
+    try { observeBehaviorInput(companion.id, text, { probe, safetyLevel: userMsgSafetyLevel }); }
+    catch (e) { log('warn', '[Behavior] input observation failed: ' + e.message); }
   }
 
-  const userProfile = getUserProfile(companion.user_id, companion.id);
+  // ── 召回长期记忆 ───────────────────────────────────────────────────────────
+  let memories = [];
   const recentTurns = getConversationContext(companion.id, 10);
+  const crisisLevel = detectCrisisLevel(text, recentTurns.filter(t => t.role === 'user').slice(-3).map(t => t.content || ''));
+  const behaviorSafety = crisisLevel !== 'none' ? crisisLevel : userMsgSafetyLevel;
+  const grounded = usesGroundedReplies(companion, behaviorSafety);
+  const availability = companion.no_pressure && behaviorSafety === 'none' && availabilityWindowForReply(text);
+  let queryEmbedding = null;
+  if (companion.memory_enabled) {
+    try { queryEmbedding = await embedTextWithDescriptor(text); }
+    catch (e) { log('warn', '[Memory] query embedding unavailable'); }
+    memories = recallMemoriesHybrid(companion.id, companion.user_id, text, { queryEmbedding, limit: 7, evidenceOnly: grounded });
+  }
+
+  const userProfile = getUserProfileForRecall(companion.user_id, companion.id);
   const todayKey = shanghaiDateKey();
   const dailyRaw = getDailySchedule(companion.id, todayKey);
   const dailySchedule = dailyRaw ? { ...dailyRaw, date_key: todayKey } : null;
-  const recentSchedules = getRecentSchedules(companion.id, todayKey, 3);
   const personaFacts = getPersonaFacts(companion.id);
-  const longTermDigest = await buildLongTermDigest(companion.id, companion.user_id, { isPro: true });
-
-  const stickerEnabled = !!companion.sticker_reply_enabled && hasStickers();
-  const stickerHint = buildStickerPromptHint(stickerEnabled);
-
   // v1.5.2 PR E: 跟 bot.mjs 路径对齐 — 每条用户消息都重算 7 维情绪并喂回 prompt。
   // 之前 playground 完全跳过 emotion_state，导致：
   //   1. 浏览器对话时她情绪不演化
@@ -140,76 +149,94 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
   //   3. playground 回复缺"她想念档"口吻
   let emotionState = getEmotionStateWithDefaults(companion.id);
   if (!probe) emotionState = updateEmotionFromUserMessage(companion.id, emotionState, text, { companion });
-  const missingLevel = getMissingLevel(emotionState, companion.last_user_reply_at);
-  const emotionHint = buildEmotionPromptHint(emotionState, { missingLevel });
-
-  // v1.8.0 #3: preferences 结构化偏好账本
-  const preferences = getCompanionPreferencesForPrompt(companion.id);
-
-  let systemPrompt = buildSystemPrompt(companion, {
-    memories, userProfile, recentTurns, longTermDigest,
-    promptMode: 'reply', dailySchedule, recentSchedules, personaFacts, preferences,
-  }) + stickerHint + emotionHint;
-
-  // 关系刚升级
-  const celebration = probe ? null : consumePendingCelebration(companion.id);   // consume=写，探针跳过
-  if (celebration) {
-    systemPrompt += `\n\n【★ 重要：关系刚刚升级】\n刚刚你对他的好感度上升到了新的阶段：${celebration.from} → ${celebration.to}。\n这条回复要自然体现这种变化（比如更亲密的称呼、"突然觉得跟你聊得越来越来电"），但**不要直接说"我们升级关系了"**。`;
-  }
-
-  // 用户亲密词越界
-  const stageNow = companion.relationship_stage || '陌生人';
-  const intimacyOver = detectIntimacyOvereach(text);
-  if (intimacyOver.has && (stageNow === '陌生人' || stageNow === '朋友')) {
-    systemPrompt += `\n\n【★ 他用了过早的亲密词】当前 ${stageNow} 阶段；要害羞但不冷漠地委婉回避，留"以后熟了再说"钩子；多条 || 分段。`;
-  }
-
-  // 用户表白
-  const userConfessed = detectUserConfession(text);
-  if (userConfessed && !companion.user_confessed_at && !probe) {
-    systemPrompt += `\n\n【★★ 他向你告白】必须接住。不能拒绝，不能转移话题。多条 || 分段。`;
-    try {
-      const newAff = Math.max(companion.affection_level || 0, 55);
-      const newStage = computeRelationshipStage(newAff);
-      patchCompanion(companion.id, {
-        affection_level: newAff,
-        relationship_stage: newStage,
-        user_confessed_at: new Date().toISOString(),
-      });
-    } catch (e) {
-      log('warn', `[Playground] 表白后处理失败: ${e.message}`);
-    }
-  }
-
   // history：playground 没有 wechat 历史，用 recent conversation turns 拼一份
-  const history = recentTurns.slice(-10).map(t => ({
-    role: t.role === 'assistant' ? 'assistant' : 'user',
-    content: String(t.content || ''),
-  }));
+  const history = recentTurns.slice(-10);
 
+  const behaviorOn = isBehaviorEnabled();
+  let arcCtx = behaviorOn ? getArcExpressionContext(companion) : { arcState: 'normal', active: false, directive: '' };
+  let behaviorContext = null;
+  if (behaviorOn) {
+    try {
+      observeBehaviorInput(companion.id, text, { probe, safetyLevel: behaviorSafety });
+      behaviorContext = prepareBehaviorContext({ companion, userText: text, history,
+        previous: readBehaviorState(companion.id), arcState: arcCtx.arcState,
+        safetyLevel: behaviorSafety, channel: 'web' });
+    } catch (e) { log('warn', '[Behavior] preparation failed: ' + e.message); }
+  }
   // v1.8.0 #6: Inner OS 双重思考 —— 生成内心独白后注入 system prompt
   // 失败/跳过都不阻塞主流程
   const innerRes = await generateInnerMonologue({
     companion,
     userText: text,
     history,
-    context: { accountId: null },  // playground 走 web 通道，没有 wechat account
+    context: { accountId: null, probe, behaviorEnabled: behaviorOn, behaviorPlanningHint: buildBehaviorPlanningHint(behaviorContext) },  // playground 走 web 通道，没有 wechat account
   }).catch(() => null);
-  // generateInnerMonologue 返回 { thought, struct } 对象——必须取 .thought（字符串），
-  // 与 bot.mjs 一致。v1.21.0 改返回结构时此处漏改，曾把整个对象传 buildInnerOsHint
-  // 致 .trim() 裸 500（网页通道断约 2 天）。
-  if (innerRes?.thought) {
-    systemPrompt += buildInnerOsHint(innerRes.thought);
+  if (behaviorOn && !probe) arcCtx = runArcSignalTick(companion, { userText: text, inner: innerRes?.struct || null });
+  arcCtx = applyCrisisOverride(arcCtx, crisisLevel);
+  const behaviorPlan = resolveBehaviorPlan(behaviorContext, innerRes?.behavior, { arcState: arcCtx.arcState, safetyLevel: behaviorSafety });
+
+  if (grounded && ['hurt', 'cold', 'withdrawing'].includes(arcCtx.arcState)) {
+    memories = memories.filter(row => (!row.sensitive_flag && row.memory_layer !== 'emotion') || userRaisedMemoryTopic(text, row.content));
+  }
+  const preferences = getCompanionPreferencesForPrompt(companion.id);
+  const celebration = probe ? null : consumePendingCelebration(companion.id);
+  const stageNow = companion.relationship_stage || '陌生人';
+  const acceptConfession = !probe && !Number(companion.safe_mode) && behaviorSafety === 'none' && !behaviorPlan && !arcCtx.active
+    && !companion.user_confessed_at && detectUserConfession(text);
+  const relationshipEvent = celebration || acceptConfession ? {
+    from: celebration?.from, to: celebration?.to, confession: acceptConfession ? 'accepted' : null,
+  } : null;
+  let shapingHint = '';
+  if (grounded) {
+    if (!probe) {
+      for (const item of detectTeaching(text)) upsertShaping({ companionId: companion.id, ...item, rawMsg: text });
+    }
+    shapingHint = buildShapingPromptHint(listShaping(companion.id), { expressionOnly: true });
   }
 
+  async function buildLegacyWebPrompt() {
+    const recentSchedules = getRecentSchedules(companion.id, todayKey, 3);
+    const longTermDigest = await buildLongTermDigest(companion.id, companion.user_id, { isPro: true });
+    const stickerHint = buildStickerPromptHint(!!companion.sticker_reply_enabled && hasStickers());
+    const missingLevel = getMissingLevel(emotionState, companion.last_user_reply_at);
+    const emotionHint = Number(companion.safe_mode) ? '' : buildEmotionPromptHint(emotionState, { missingLevel, arcActive: behaviorOn && (arcCtx.active || !!behaviorPlan) });
+    let systemPrompt = buildSystemPrompt(companion, {
+      memories, userProfile, recentTurns, longTermDigest,
+      promptMode: 'reply', userText: text, dailySchedule, recentSchedules, personaFacts, preferences, behaviorPlan,
+    }) + stickerHint + emotionHint;
+    if (availability) systemPrompt += '\n他给了大致有空的时段，接话时保留这个范围，等他确认具体时间。';
+
+    // 关系刚升级
+    if (celebration) {
+      systemPrompt += `\n\n【★ 重要：关系刚刚升级】\n刚刚你对他的好感度上升到了新的阶段：${celebration.from} → ${celebration.to}。\n这条回复要自然体现这种变化（比如更亲密的称呼、"突然觉得跟你聊得越来越来电"），但**不要直接说"我们升级关系了"**。`;
+    }
+
+    // 用户亲密词越界
+    const intimacyOver = detectIntimacyOvereach(text);
+    if (intimacyOver.has && (stageNow === '陌生人' || stageNow === '朋友')) {
+      systemPrompt += `\n\n【★ 他用了过早的亲密词】当前 ${stageNow} 阶段；要害羞但不冷漠地委婉回避，留"以后熟了再说"钩子；多条 || 分段。`;
+    }
+
+    if (acceptConfession) systemPrompt += '\n\n【★★ 他向你告白】必须接住。不能拒绝，不能转移话题。多条 || 分段。';
+    if (innerRes?.thought) systemPrompt += buildInnerOsHint(innerRes.thought, { behaviorPlan });
+    if (behaviorOn && !behaviorPlan) systemPrompt += arcCtx.directive || '';
+    return systemPrompt;
+  }
+
+  const systemPrompt = grounded || (behaviorOn && crisisLevel === 'high') ? null : await buildLegacyWebPrompt();
   let reply;
   try {
-    reply = await generateReply(systemPrompt, history, text, {
+    if (!probe) touchRecalledMemories(companion.id, companion.user_id, memories.map(row => row.id));
+    reply = behaviorOn && crisisLevel === 'high' ? buildCrisisReply()
+      : grounded ? (await generateGroundedReply({ companion, userText: text, history,
+        memories, userProfile, behaviorPlan, arcState: arcCtx.arcState, probe, channel: 'web',
+        personaFacts, preferences, dailySchedule, shapingHint, relationshipEvent,
+      })).reply : await generateReply(systemPrompt, history, text, {
       temperature: companion.temperature,
       max_tokens: companion.max_tokens,
       top_p: companion.top_p,
       safetyLevel: userMsgSafetyLevel,  // v1.9.1: high/medium 时收紧温度
-    });
+    }, { probe });
   } catch (err) {
     log('error', `[Playground] generateReply 失败 companion=${companion.id}: ${err.message}`);
     throw err;
@@ -222,7 +249,18 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
     };
   }
   reply = safeOutboundReply(reply);
+  if (behaviorOn) reply = scrubConflictRedline(reply, arcCtx.arcState, probe ? null : companion.id);
   reply = scrubPhotoImpersonation(reply, companion.id);   // #281：playground 无照片链路，同罩
+
+  reply = await reviewPressureTail(reply, { enabled: !grounded && companion.no_pressure, userText: text, safetyLevel: userMsgSafetyLevel });
+  reply = preserveAvailabilityWindow(reply, availability);
+
+  if (acceptConfession) {
+    try {
+      const affection = Math.max(companion.affection_level || 0, 55);
+      patchCompanion(companion.id, { affection_level: affection, relationship_stage: computeRelationshipStage(affection), user_confessed_at: new Date().toISOString() });
+    } catch (e) { log('warn', '[Playground] 表白后处理失败: ' + e.message); }
+  }
 
   // v1.5.2 PR E: assistant reply 后也走情绪更新（mood drift / energy 恢复等），跟 bot.mjs 对齐
   try {
@@ -245,27 +283,25 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
 
   // 写入对话历史，让长期记忆系统能继续工作（探针模式零持久化，整段跳过）
   if (!probe) {
+    const memoryTurnIds = [];
     try {
-      saveConversationTurn(companion.id, 'user', text, companion.chat_mode_active);
-      saveConversationTurn(companion.id, 'assistant', reply, companion.chat_mode_active);
+      const userTurn = saveConversationTurn(companion.id, 'user', text, companion.chat_mode_active);
+      const assistantTurn = saveConversationTurn(companion.id, 'assistant', reply, companion.chat_mode_active);
+      if (companion.memory_enabled && userTurn) updateEventsFromTurn(companion, userTurn.id, { queryEmbedding });
+      memoryTurnIds.push(...[userTurn?.id,assistantTurn?.id].filter(Boolean));
+      if (behaviorPlan) recordBehaviorDelivery({ companionId: companion.id, turnKey: randomUUID(), inputStartedAt, plan: behaviorPlan,
+        userText: text, deliveredText: reply, channel: 'web' });
     } catch (e) {
       log('warn', `[Playground] saveConversationTurn 失败: ${e.message}`);
     }
 
-    // v1.8.0 #4: open loops —— 启发式 resolve 立即跑（不调 LLM，快）
-    try { detectAndResolveOpenLoops(companion.id, text); }
-    catch (e) { log('warn', `[Playground] resolve loop: ${e.message}`); }
-
-    // 后处理（异步，不阻塞响应）：好感度 + 心情 + 记忆提取 + open loops 抽取
+    // 后处理（异步，不阻塞响应）：好感度、心情和记忆提取
     (async () => {
       try {
         syncUpdateCompanionState(companion, text, reply);
         if (companion.memory_enabled) {
-          await extractAndSaveMemories(companion.id, companion.user_id, text, reply);
-          await extractAndUpdateUserProfile(companion.id, companion.user_id, text);
-          extractOpenLoops(companion.id, text, reply).catch(err =>
-            log('warn', `[Playground] extract loop: ${err.message}`)
-          );
+          await extractAndSaveMemories(companion.id, companion.user_id, text, reply, { turnIds: memoryTurnIds });
+          await extractAndUpdateUserProfile(companion.id, companion.user_id, text, { turnIds: memoryTurnIds });
         }
       } catch (e) {
         log('warn', `[Playground] postProcess 失败: ${e.message}`);

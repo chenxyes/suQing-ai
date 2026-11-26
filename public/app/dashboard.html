@@ -658,7 +658,10 @@
                 <span class="dash-acc-arrow" aria-hidden="true">›</span>
               </div>
               <div class="dash-acc-body" hidden>
-                <p class="text-[12px] text-mute mb-4 leading-relaxed">将角色人设导出为 JSON 文件，可迁移或分享。导入时只恢复人设设定，不包含账号信息。</p>
+                <p class="text-[12px] text-mute mb-3 leading-relaxed">默认只迁移角色人设，不包含账号信息。勾选下方选项可一并备份全部记忆和历史，文件包含私人内容，请妥善保存。导入的历史先保留待审阅，不会直接用于聊天。</p>
+                <label class="flex items-center gap-2 text-[12px] mb-4">
+                  <input id="transfer-include-memories" type="checkbox" /> 导出或导入时包含全部记忆与历史
+                </label>
                 <div class="flex flex-col sm:flex-row gap-2">
                   <button type="button" id="btn-export-persona" class="flex-1 py-2.5 text-[13px] font-semibold rounded-xl bg-sakura-soft text-sakura-deep hover:bg-sakura/30 transition-all">
                     <i data-lucide="download" class="inline w-4 h-4 align-[-3px]"></i>
