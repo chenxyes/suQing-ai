@@ -972,7 +972,7 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
       }
       return generateReply(systemPrompt, history, userText, {
         temperature: companion.temperature, max_tokens: companion.max_tokens, top_p: companion.top_p, safetyLevel: userMsgSafetyLevel,
-      }, { accountId: binding.account_id || null });
+      }, { accountId: binding.account_id || null, companionId: companion.id });
     }
     try {
       reply = await genReplyOnce();

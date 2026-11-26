@@ -62,6 +62,8 @@ export function getDb() {
     migrateTimeCapsules();
     migrateSilentMode();
     migrateRelationalDiary();
+    migratePluginsAndFeeds();
+    migrateSocialStudio();
     migrateProactiveLastSent();
     migrateConversationTurnSynthetic();
     migrateBackfillFlag();
@@ -3393,6 +3395,64 @@ export function createCompanion(wechatUserId, botId, data) {
   return getCompanionById(newId);
 }
 
+/**
+ * 为 Web 账号直接创建 companion（无需先绑定微信；后续绑定微信时
+ * findCurrentCompanionForAccount + ensureCompanionBot 会自动接管该 companion）。
+ */
+export function createCompanionForAccount(accountId, data = {}, { botId = null } = {}) {
+  const accId = Number(accountId);
+  if (!Number.isInteger(accId) || accId <= 0) {
+    throw new Error('accountId 无效');
+  }
+  const db = getDb();
+  const tx = db.transaction(() => {
+    const existing = getCompanionByAccountId(accId);
+    if (existing) {
+      const err = new Error('该账号已存在 companion，请用 PUT 更新');
+      err.code = 'EXISTS';
+      err.id = existing.id;
+      throw err;
+    }
+
+    // 确保 users 表存在 id = accId 的宿主行，满足 companions.user_id 外键及所有权查询
+    const userRow = db.prepare('SELECT id FROM users WHERE id = ?').get(accId);
+    if (!userRow) {
+      const account = getUserAccountById(accId);
+      const displayName = account?.username || account?.display_name || null;
+      db.prepare(`
+        INSERT INTO users (id, wechat_user_id, display_name)
+        VALUES (?, ?, ?)
+      `).run(accId, `web_account_${accId}`, displayName);
+    }
+
+    const effectiveBotId = String(botId || `web_${accId}`);
+    const dataWithDefaults = {
+      sticker_reply_enabled: 1,
+      proactive_daily_target: 4,
+      ...data,
+    };
+    const fields = buildUpsertFields(dataWithDefaults);
+    const info = db.prepare(`
+      INSERT INTO companions (user_id, bot_id${fields.cols.length ? ', ' + fields.cols.join(', ') : ''})
+      VALUES (?, ?${fields.cols.length ? ', ' + fields.placeholders.join(', ') : ''})
+    `).run(accId, effectiveBotId, ...fields.values);
+    return info.lastInsertRowid;
+  });
+
+  const newId = tx();
+  if ('hobbies' in data || 'dislikes' in data) {
+    try {
+      syncLegacyPreferences(newId, {
+        hobbies: 'hobbies' in data ? (Array.isArray(data.hobbies) ? JSON.stringify(data.hobbies) : data.hobbies) : null,
+        dislikes: 'dislikes' in data ? (Array.isArray(data.dislikes) ? JSON.stringify(data.dislikes) : data.dislikes) : null,
+      });
+    } catch (e) {
+      console.error(`[createCompanionForAccount] preferences sync skipped: ${e.message}`);
+    }
+  }
+  return getCompanionById(newId);
+}
+
 export function updateCompanion(id, data) {
   const db = getDb();
   const existing = getCompanionById(id);
@@ -5586,4 +5646,357 @@ export function countMissedSince(companionId, sinceTs) {
     .prepare(`SELECT COUNT(*) AS n FROM companion_missed_messages WHERE companion_id = ? AND received_at >= ?`)
     .get(companionId, sinceTs || 0);
   return row?.n || 0;
+}
+
+// ─── Phase 2: 轻量插件配置 / 不定时自主冲浪状态 / 冲浪见闻素材 ────────────────
+function migratePluginsAndFeeds() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS companion_plugin_configs (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      companion_id  INTEGER NOT NULL REFERENCES companions(id) ON DELETE CASCADE,
+      plugin_id     TEXT    NOT NULL,
+      enabled       INTEGER NOT NULL DEFAULT 0,
+      config_json   TEXT    NOT NULL DEFAULT '{}',
+      updated_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(companion_id, plugin_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS companion_surf_state (
+      companion_id       INTEGER PRIMARY KEY REFERENCES companions(id) ON DELETE CASCADE,
+      next_surf_check_at INTEGER,
+      last_surf_at       INTEGER,
+      surf_count_today   INTEGER NOT NULL DEFAULT 0,
+      surf_count_date    TEXT,
+      last_decision_note TEXT,
+      updated_at         DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS companion_feed_items (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      companion_id  INTEGER NOT NULL REFERENCES companions(id) ON DELETE CASCADE,
+      plugin_id     TEXT    NOT NULL,
+      external_key  TEXT    NOT NULL,
+      title         TEXT    NOT NULL,
+      summary       TEXT    NOT NULL DEFAULT '',
+      thought_text  TEXT    NOT NULL DEFAULT '',
+      source_url    TEXT,
+      tags_json     TEXT    NOT NULL DEFAULT '[]',
+      status        TEXT    NOT NULL DEFAULT 'fresh',
+      created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+      expires_at    DATETIME,
+      UNIQUE(companion_id, external_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_companion_feed_items_lookup
+      ON companion_feed_items(companion_id, status, created_at DESC);
+  `);
+}
+
+export function listCompanionPluginConfigs(companionId) {
+  const rows = getDb().prepare(`
+    SELECT plugin_id, enabled, config_json, updated_at
+    FROM companion_plugin_configs
+    WHERE companion_id = ?
+  `).all(companionId);
+  return rows.map(r => {
+    let config = {};
+    try { config = JSON.parse(r.config_json || '{}') || {}; } catch {}
+    return { plugin_id: r.plugin_id, enabled: Boolean(r.enabled), config, updated_at: r.updated_at };
+  });
+}
+
+export function getCompanionPluginConfig(companionId, pluginId) {
+  const row = getDb().prepare(`
+    SELECT plugin_id, enabled, config_json, updated_at
+    FROM companion_plugin_configs
+    WHERE companion_id = ? AND plugin_id = ?
+  `).get(companionId, String(pluginId || ''));
+  if (!row) return null;
+  let config = {};
+  try { config = JSON.parse(row.config_json || '{}') || {}; } catch {}
+  return { plugin_id: row.plugin_id, enabled: Boolean(row.enabled), config, updated_at: row.updated_at };
+}
+
+export function upsertCompanionPluginConfig(companionId, pluginId, { enabled = false, config = {} } = {}) {
+  const safeCfg = config && typeof config === 'object' ? JSON.stringify(config).slice(0, 4000) : '{}';
+  getDb().prepare(`
+    INSERT INTO companion_plugin_configs (companion_id, plugin_id, enabled, config_json, updated_at)
+    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(companion_id, plugin_id) DO UPDATE SET
+      enabled = excluded.enabled,
+      config_json = excluded.config_json,
+      updated_at = CURRENT_TIMESTAMP
+  `).run(companionId, String(pluginId), enabled ? 1 : 0, safeCfg);
+  return getCompanionPluginConfig(companionId, pluginId);
+}
+
+export function getSurfState(companionId) {
+  return getDb().prepare('SELECT * FROM companion_surf_state WHERE companion_id = ?').get(companionId) || null;
+}
+
+export function upsertSurfState(companionId, fields = {}) {
+  const existing = getSurfState(companionId);
+  const next = {
+    next_surf_check_at: fields.next_surf_check_at ?? existing?.next_surf_check_at ?? null,
+    last_surf_at: fields.last_surf_at ?? existing?.last_surf_at ?? null,
+    surf_count_today: fields.surf_count_today ?? existing?.surf_count_today ?? 0,
+    surf_count_date: fields.surf_count_date ?? existing?.surf_count_date ?? null,
+    last_decision_note: fields.last_decision_note !== undefined
+      ? (fields.last_decision_note == null ? null : String(fields.last_decision_note).slice(0, 200))
+      : (existing?.last_decision_note ?? null),
+  };
+  getDb().prepare(`
+    INSERT INTO companion_surf_state
+      (companion_id, next_surf_check_at, last_surf_at, surf_count_today, surf_count_date, last_decision_note, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(companion_id) DO UPDATE SET
+      next_surf_check_at = excluded.next_surf_check_at,
+      last_surf_at = excluded.last_surf_at,
+      surf_count_today = excluded.surf_count_today,
+      surf_count_date = excluded.surf_count_date,
+      last_decision_note = excluded.last_decision_note,
+      updated_at = CURRENT_TIMESTAMP
+  `).run(
+    companionId,
+    next.next_surf_check_at,
+    next.last_surf_at,
+    next.surf_count_today,
+    next.surf_count_date,
+    next.last_decision_note,
+  );
+  return getSurfState(companionId);
+}
+
+export function insertCompanionFeedItem(companionId, item) {
+  const dbRef = getDb();
+  const tagsJson = JSON.stringify(Array.isArray(item.tags) ? item.tags.slice(0, 8) : []);
+  const ttlHours = Math.max(1, Math.min(168, Number(item.ttlHours) || 48));
+  const expiresAt = item.expiresAt || new Date(Date.now() + ttlHours * 3_600_000).toISOString();
+  const info = dbRef.prepare(`
+    INSERT OR IGNORE INTO companion_feed_items
+      (companion_id, plugin_id, external_key, title, summary, thought_text, source_url, tags_json, status, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'fresh', ?)
+  `).run(
+    companionId,
+    String(item.pluginId || ''),
+    String(item.externalKey || '').slice(0, 200),
+    String(item.title || '').slice(0, 200),
+    String(item.summary || '').slice(0, 400),
+    String(item.thoughtText || '').slice(0, 300),
+    item.sourceUrl ? String(item.sourceUrl).slice(0, 500) : null,
+    tagsJson,
+    expiresAt,
+  );
+  if (info.changes === 0) return null;
+  return dbRef.prepare('SELECT * FROM companion_feed_items WHERE id = ?').get(info.lastInsertRowid) || null;
+}
+
+export function listCompanionFeedItems(companionId, { status = null, limit = 20, includeExpired = false } = {}) {
+  const nowIso = new Date().toISOString();
+  const lim = Math.max(1, Math.min(100, Number(limit) || 20));
+  const clauses = ['companion_id = ?'];
+  const params = [companionId];
+  if (status) {
+    clauses.push('status = ?');
+    params.push(String(status));
+  }
+  if (!includeExpired) {
+    clauses.push('(expires_at IS NULL OR expires_at > ?)');
+    params.push(nowIso);
+  }
+  params.push(lim);
+  const rows = getDb().prepare(`
+    SELECT * FROM companion_feed_items
+    WHERE ${clauses.join(' AND ')}
+    ORDER BY id DESC
+    LIMIT ?
+  `).all(...params);
+  return rows.map(r => {
+    let tags = [];
+    try { tags = JSON.parse(r.tags_json || '[]') || []; } catch {}
+    return { ...r, tags };
+  });
+}
+
+export function markCompanionFeedItemStatus(id, status) {
+  const allowed = new Set(['fresh', 'used_chat', 'used_social', 'expired']);
+  if (!allowed.has(status)) return false;
+  const info = getDb().prepare('UPDATE companion_feed_items SET status = ? WHERE id = ?').run(status, id);
+  return info.changes > 0;
+}
+
+export function expireStaleFeedItems(nowIso = new Date().toISOString()) {
+  const info = getDb().prepare(`
+    UPDATE companion_feed_items
+    SET status = 'expired'
+    WHERE status = 'fresh' AND expires_at IS NOT NULL AND expires_at <= ?
+  `).run(nowIso);
+  return info.changes;
+}
+
+// ─── Phase 3: 个人抖音工作台（companion_social_drafts / reply_logs）──────────
+function migrateSocialStudio() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS companion_social_drafts (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      companion_id      INTEGER NOT NULL REFERENCES companions(id) ON DELETE CASCADE,
+      platform          TEXT    NOT NULL DEFAULT 'douyin',
+      format            TEXT    NOT NULL DEFAULT 'image_post',
+      title             TEXT    NOT NULL DEFAULT '',
+      caption           TEXT    NOT NULL DEFAULT '',
+      hashtags_json     TEXT    NOT NULL DEFAULT '[]',
+      voice_script      TEXT    NOT NULL DEFAULT '',
+      visual_prompts_json TEXT  NOT NULL DEFAULT '[]',
+      media_paths_json  TEXT    NOT NULL DEFAULT '[]',
+      audio_path        TEXT,
+      video_path        TEXT,
+      source_feed_id    INTEGER,
+      status            TEXT    NOT NULL DEFAULT 'draft',
+      published_at      DATETIME,
+      backflow_done     INTEGER NOT NULL DEFAULT 0,
+      created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_social_drafts_companion
+      ON companion_social_drafts(companion_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS companion_social_reply_logs (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      companion_id    INTEGER NOT NULL REFERENCES companions(id) ON DELETE CASCADE,
+      platform        TEXT    NOT NULL DEFAULT 'douyin',
+      draft_id        INTEGER,
+      inbound_kind    TEXT    NOT NULL DEFAULT 'comment',
+      inbound_summary TEXT    NOT NULL DEFAULT '',
+      suggestions_json TEXT   NOT NULL DEFAULT '[]',
+      chosen_reply    TEXT,
+      backflow_done   INTEGER NOT NULL DEFAULT 0,
+      created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_social_reply_logs_companion
+      ON companion_social_reply_logs(companion_id, created_at DESC);
+  `);
+}
+
+function parseSocialDraftRow(row) {
+  if (!row) return null;
+  const parseArr = (s) => {
+    try { const v = JSON.parse(s || '[]'); return Array.isArray(v) ? v : []; } catch { return []; }
+  };
+  return {
+    ...row,
+    hashtags: parseArr(row.hashtags_json),
+    visual_prompts: parseArr(row.visual_prompts_json),
+    media_paths: parseArr(row.media_paths_json),
+    backflow_done: Boolean(row.backflow_done),
+  };
+}
+
+export function createSocialDraft(companionId, draft = {}) {
+  const dbRef = getDb();
+  const info = dbRef.prepare(`
+    INSERT INTO companion_social_drafts
+      (companion_id, platform, format, title, caption, hashtags_json, voice_script, visual_prompts_json, source_feed_id, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')
+  `).run(
+    companionId,
+    String(draft.platform || 'douyin').slice(0, 32),
+    draft.format === 'voice_video' ? 'voice_video' : 'image_post',
+    String(draft.title || '').slice(0, 120),
+    String(draft.caption || '').slice(0, 1000),
+    JSON.stringify(Array.isArray(draft.hashtags) ? draft.hashtags.slice(0, 10) : []),
+    String(draft.voice_script || '').slice(0, 1000),
+    JSON.stringify(Array.isArray(draft.visual_prompts) ? draft.visual_prompts.slice(0, 4) : []),
+    draft.source_feed_id ? Number(draft.source_feed_id) : null,
+  );
+  return getSocialDraftById(info.lastInsertRowid);
+}
+
+export function getSocialDraftById(id) {
+  return parseSocialDraftRow(getDb().prepare('SELECT * FROM companion_social_drafts WHERE id = ?').get(id));
+}
+
+export function listSocialDrafts(companionId, { platform = null, status = null, limit = 20 } = {}) {
+  const clauses = ['companion_id = ?'];
+  const params = [companionId];
+  if (platform) { clauses.push('platform = ?'); params.push(String(platform)); }
+  if (status) { clauses.push('status = ?'); params.push(String(status)); }
+  params.push(Math.max(1, Math.min(50, Number(limit) || 20)));
+  return getDb().prepare(`
+    SELECT * FROM companion_social_drafts
+    WHERE ${clauses.join(' AND ')}
+    ORDER BY id DESC LIMIT ?
+  `).all(...params).map(parseSocialDraftRow);
+}
+
+export function updateSocialDraft(id, patch = {}) {
+  const allowed = {
+    title: v => String(v || '').slice(0, 120),
+    caption: v => String(v || '').slice(0, 1000),
+    hashtags_json: v => (typeof v === 'string' ? v : JSON.stringify(Array.isArray(v) ? v.slice(0, 10) : [])),
+    voice_script: v => String(v || '').slice(0, 1000),
+    visual_prompts_json: v => (typeof v === 'string' ? v : JSON.stringify(Array.isArray(v) ? v.slice(0, 4) : [])),
+    media_paths_json: v => (typeof v === 'string' ? v : JSON.stringify(Array.isArray(v) ? v.slice(0, 6) : [])),
+    audio_path: v => (v ? String(v).slice(0, 300) : null),
+    video_path: v => (v ? String(v).slice(0, 300) : null),
+    status: v => (['draft', 'ready', 'published', 'discarded'].includes(v) ? v : 'draft'),
+    published_at: v => (v ? String(v) : null),
+    backflow_done: v => (v ? 1 : 0),
+  };
+  const sets = [];
+  const vals = [];
+  for (const [k, fn] of Object.entries(allowed)) {
+    if (Object.prototype.hasOwnProperty.call(patch, k)) {
+      sets.push(`${k} = ?`);
+      vals.push(fn(patch[k]));
+    }
+  }
+  if (!sets.length) return getSocialDraftById(id);
+  sets.push('updated_at = CURRENT_TIMESTAMP');
+  vals.push(id);
+  getDb().prepare(`UPDATE companion_social_drafts SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+  return getSocialDraftById(id);
+}
+
+export function insertSocialReplyLog(companionId, entry = {}) {
+  const dbRef = getDb();
+  const info = dbRef.prepare(`
+    INSERT INTO companion_social_reply_logs
+      (companion_id, platform, draft_id, inbound_kind, inbound_summary, suggestions_json, chosen_reply, backflow_done)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    companionId,
+    String(entry.platform || 'douyin').slice(0, 32),
+    entry.draft_id ? Number(entry.draft_id) : null,
+    entry.inbound_kind === 'dm' ? 'dm' : 'comment',
+    String(entry.inbound_summary || '').slice(0, 500),
+    JSON.stringify(Array.isArray(entry.suggestions) ? entry.suggestions : []),
+    entry.chosen_reply ? String(entry.chosen_reply).slice(0, 300) : null,
+    entry.backflow_done ? 1 : 0,
+  );
+  const row = dbRef.prepare('SELECT * FROM companion_social_reply_logs WHERE id = ?').get(info.lastInsertRowid);
+  if (!row) return null;
+  let suggestions = [];
+  try { suggestions = JSON.parse(row.suggestions_json || '[]') || []; } catch {}
+  return { ...row, suggestions, backflow_done: Boolean(row.backflow_done) };
+}
+
+export function listSocialReplyLogs(companionId, limit = 20) {
+  const lim = Math.max(1, Math.min(50, Number(limit) || 20));
+  return getDb().prepare(`
+    SELECT * FROM companion_social_reply_logs
+    WHERE companion_id = ?
+    ORDER BY id DESC LIMIT ?
+  `).all(companionId, lim).map(r => {
+    let suggestions = [];
+    try { suggestions = JSON.parse(r.suggestions_json || '[]') || []; } catch {}
+    return { ...r, suggestions, backflow_done: Boolean(r.backflow_done) };
+  });
+}
+
+export function markSocialReplyBackflow(id, chosenReply = null) {
+  const info = getDb().prepare(`
+    UPDATE companion_social_reply_logs
+    SET backflow_done = 1, chosen_reply = COALESCE(?, chosen_reply)
+    WHERE id = ?
+  `).run(chosenReply ? String(chosenReply).slice(0, 300) : null, id);
+  return info.changes > 0;
 }

@@ -108,7 +108,7 @@
       <div class="step-tab" data-step="2" id="tab-2">② 选 Provider</div>
       <div class="step-tab" data-step="3" id="tab-3">③ 测试连通</div>
       <div class="step-tab" data-step="4" id="tab-4">④ 创建角色</div>
-      <div class="step-tab" data-step="5" id="tab-5">⑤ 绑定微信</div>
+      <div class="step-tab" data-step="5" id="tab-5">⑤ 绑定微信（可选）</div>
     </nav>
 
     <!-- ── Step 2：模型与能力配置（先全部一竖列，点击后在右侧/下方弹出对应配置） ── -->
@@ -614,15 +614,16 @@
 
       <div class="mt-5 pt-4 border-t border-line flex gap-3 flex-wrap items-center">
         <button class="btn-outline" id="s4-btn-back">← 上一步</button>
-        <button class="btn-primary" id="s4-btn-done">我已创建角色，继续 →</button>
-        <button class="btn-ghost"   id="s4-btn-skip">跳过，直接去绑定微信</button>
+        <a href="/app/playground.html" class="btn-primary inline-block" id="s4-btn-chat">💬 直接去网页聊天 →</a>
+        <button class="btn-outline" id="s4-btn-done">绑定微信（可选）→</button>
+        <button class="btn-ghost"   id="s4-btn-skip">跳过，直接进入控制台</button>
       </div>
     </section>
 
     <!-- ── Step 5：绑定微信（可选）── -->
     <section class="panel card p-6 mb-4" data-panel="5">
       <h2 class="text-[16px] font-bold mb-1">Step 5：绑定微信（可选）</h2>
-      <p class="text-[13px] text-mute mb-4">不想让她接入微信？跳过这一步也能正常用网页版聊天。</p>
+      <p class="text-[13px] text-mute mb-4">测试或平时使用网页版聊天就足够了，无需绑定微信也能完整体验；以后需要随时再绑。</p>
 
       <!-- 状态 A：还没开始 -->
       <div id="s5-idle" class="p-4 rounded-xl bg-cloud mb-4 text-[13px]">
@@ -660,12 +661,15 @@
 
       <div class="flex gap-3 flex-wrap mb-6">
         <button class="btn-outline" id="s5-btn-back">← 上一步</button>
-        <button class="btn-ghost" id="s5-btn-skip">跳过此步</button>
+        <button class="btn-ghost" id="s5-btn-skip">跳过绑定，直接去网页聊天</button>
       </div>
 
       <div class="pt-4 border-t border-line">
-        <p class="text-[13px] text-mute mb-3">🎉 全部配置完成！</p>
-        <a href="/app/dashboard.html" class="btn-primary inline-block">进入控制台</a>
+        <p class="text-[13px] text-mute mb-3">🎉 基础配置已完成！绑定微信为可选项，现在就可以直接开聊：</p>
+        <div class="flex gap-3 flex-wrap">
+          <a href="/app/playground.html" class="btn-primary inline-block">💬 开始网页聊天</a>
+          <a href="/app/dashboard.html" class="btn-outline inline-block">进入控制台</a>
+        </div>
       </div>
     </section>
 

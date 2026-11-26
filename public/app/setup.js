@@ -1002,7 +1002,9 @@ async function checkExistingRole() {
 
 document.getElementById('s4-btn-back').addEventListener('click', () => goStep(3));
 document.getElementById('s4-btn-done').addEventListener('click', () => goStep(5));
-document.getElementById('s4-btn-skip').addEventListener('click', () => goStep(5));
+document.getElementById('s4-btn-skip').addEventListener('click', () => {
+  window.location.href = '/app/dashboard.html';
+});
 
 // ─── Step 5：微信绑定（嵌入式扫码） ───────────────────────────────────────
 // 与 /app/bind.html 走同一套 API：POST /api/wechat/bind-session（rebind=true，
@@ -1102,7 +1104,7 @@ document.getElementById('s5-btn-start').addEventListener('click', bindStart);
 document.getElementById('s5-btn-refresh').addEventListener('click', bindStart);
 document.getElementById('s5-btn-skip').addEventListener('click', () => {
   bindStopTimers();
-  window.location.href = '/app/dashboard.html';
+  window.location.href = '/app/playground.html';
 });
 
 // ─── 状态 A：创建本地账号 ─────────────────────────────────────────────────

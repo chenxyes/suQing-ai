@@ -223,8 +223,8 @@ export async function generateInnerMonologue({
       sys,
       recent,
       userText,
-      { temperature: structuredOnly ? 0.2 : 0.85, max_tokens: context?.behaviorPlanningHint ? Math.max(MAX_INNER_TOKENS, 480) : MAX_INNER_TOKENS, top_p: 0.9 },
-      { accountId: context?.accountId || null, purpose: 'internal', probe: !!context?.probe },
+      { temperature: structuredOnly ? 0.2 : 0.85, max_tokens: context?.behaviorPlanningHint ? Math.max(MAX_INNER_TOKENS, 480) : MAX_INNER_TOKENS, top_p: 0.9, role: 'aux' },
+      { accountId: context?.accountId || null, companionId: companion?.id ?? null, purpose: 'internal', probe: !!context?.probe },
     );
     if (!inner || isChatFallback(inner)) return null;
     // 先从原始输出剥结构化 JSON（清理/截断之前，防 slice 吃掉末行）

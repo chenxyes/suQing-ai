@@ -81,7 +81,21 @@ import { buildSystemPrompt } from './companion.mjs';
 import { buildImageReactionText, computeRelationshipStage, extractImageMemories } from './memory.mjs';
 import { deactivateSafeMode } from './minor_guard.mjs';
 import { generatePersonaFacts, generateAvatarCandidates, embedText } from './ai.mjs';
-import { getActiveChatProvider, REGISTRY as CHAT_REGISTRY } from './providers/chat.mjs';
+import { getActiveChatProvider, getActiveAuxChatProvider, REGISTRY as CHAT_REGISTRY } from './providers/chat.mjs';
+import { getReasoningTraces, isReasoningCaptureEnabled } from './reasoning_debug.mjs';
+import './plugins/builtins.mjs';
+import { getCompanionPluginsStatus, setCompanionPluginConfig } from './plugins/registry.mjs';
+import { runManualSurfForCompanion } from './plugins/surf_engine.mjs';
+import {
+  detectFfmpeg,
+  getStudioMediaDir,
+  generateDouyinDraft,
+  renderDouyinDraftAssets,
+  suggestPublicReplies,
+  markDraftPublishedWithBackflow,
+  recordSocialReplyBackflow,
+} from './plugins/publishers/douyin_studio.mjs';
+import { isPublicStudioAllowed } from './public_persona.mjs';
 import { getActiveImageProvider } from './providers/image.mjs';
 import { getActiveVisionProvider, REGISTRY as VISION_REGISTRY } from './providers/vision.mjs';
 import { getActiveAsrProvider, REGISTRY as ASR_REGISTRY } from './providers/asr.mjs';
@@ -139,7 +153,7 @@ import { sendVerificationEmail } from './email.mjs';
 //   verifyNotifySignature, queryTrade,
 // } from './billing.mjs';
 import {
-  getCompanionById, getCompanion, ensureCompanion, createCompanion, updateCompanion, patchCompanion,
+  getCompanionById, getCompanion, ensureCompanion, createCompanion, createCompanionForAccount, updateCompanion, patchCompanion,
   saveMemory, saveMemories, recallMemories,
   saveImageReaction,
   getConversationContext, clearConversationContext,
@@ -162,6 +176,8 @@ import {
   findCurrentCompanionForAccount, ensureCompanionBot,
   deleteCompanionForAccount,
   getMemoriesV2, patchMemory, softDeleteMemory, archiveMemory, isCompanionOwnedByAccount,
+  listCompanionFeedItems, getSurfState,
+  listSocialDrafts, getSocialDraftById, updateSocialDraft, listSocialReplyLogs,
   listPreferences, upsertPreference, deletePreference,  // v1.8.0 #3
   listShaping,  // 共建留痕（你们的默契）
   upsertEmotionState,
@@ -1840,7 +1856,7 @@ router.get('/stickers/file/:fname', async (req, res) => {
   const full = resolveStickerFilePath(req.params.fname, { candidate: false });
   if (!full) return res.status(404).end();
   res.setHeader('Cache-Control', 'public, max-age=86400');
-  return res.sendFile(full);
+  return res.sendFile(path.basename(full), { root: path.dirname(full) });
 });
 
 router.get('/stickers/candidate/:fname', async (req, res) => {
@@ -1848,7 +1864,7 @@ router.get('/stickers/candidate/:fname', async (req, res) => {
   const full = resolveStickerFilePath(req.params.fname, { candidate: true });
   if (!full) return res.status(404).end();
   res.setHeader('Cache-Control', 'no-cache');
-  return res.sendFile(full);
+  return res.sendFile(path.basename(full), { root: path.dirname(full) });
 });
 
 router.post('/stickers/upload', requireAuth, blockIfHosted, async (req, res) => {
@@ -1902,6 +1918,31 @@ router.post('/stickers/recommend-packs', requireAuth, async (req, res) => {
     return ok(res, recommendPacksForCompanion(companion));
   } catch (e) {
     return err(res, e.message, 500);
+  }
+});
+
+router.get('/stickers/curated/:packId/preview', requireAuth, async (req, res) => {
+  try {
+    const { previewCuratedPack } = await import('./sticker_studio.mjs');
+    const limit = Number(req.query?.limit) || 12;
+    const offset = Number(req.query?.offset) || 0;
+    const data = await previewCuratedPack(req.params.packId, { limit, offset });
+    return ok(res, data);
+  } catch (e) {
+    return err(res, e.message || '加载精选图库预览失败', 400);
+  }
+});
+
+router.get('/stickers/curated-preview/:packId/:fname', async (req, res) => {
+  try {
+    const { fetchCuratedPreviewImage } = await import('./sticker_studio.mjs');
+    const img = await fetchCuratedPreviewImage(req.params.packId, req.params.fname);
+    if (!img) return res.status(404).end();
+    res.setHeader('Content-Type', img.contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    return res.send(img.buffer);
+  } catch {
+    return res.status(502).end();
   }
 });
 
@@ -2371,10 +2412,16 @@ router.get('/setup/provider-status', softAuth, (req, res) => {
     searchProviders[id] = info;
   }
 
+  const auxActive = getActiveAuxChatProvider();
   return ok(res, {
     chat_provider: active.id,
     chat_model: active.model || '',
     chat_model_override: isAuthed ? (currentChatModel || null) : null,
+    chat_source: isAuthed ? active.source : undefined,
+    chat_model_source: isAuthed ? active.model_source : undefined,
+    chat_shadowed_env: isAuthed ? active.shadowed_env : undefined,
+    chat_aux: isAuthed ? auxActive : undefined,
+    reasoning_capture: isAuthed ? isReasoningCaptureEnabled() : undefined,
     providers,
     vision: buildOptionalSection(VISION_REGISTRY, 'VISION_PROVIDER', 'VISION_MODEL', visionActive),
     asr:    buildOptionalSection(ASR_REGISTRY,    'ASR_PROVIDER',    'ASR_MODEL',    asrActive),
@@ -2555,7 +2602,10 @@ router.post('/setup/provider-config',
     }
 
     // ── Chat（默认）──────────────────────────────────────────────────────
-    const { chat_provider, api_key, clear_key = false, base_url, model } = req.body || {};
+    const {
+      chat_provider, api_key, clear_key = false, base_url, model,
+      aux_provider, aux_model, clear_aux = false, reasoning_capture,
+    } = req.body || {};
     if (!chat_provider || typeof chat_provider !== 'string') return err(res, 'chat_provider 不能为空');
     const name = chat_provider.toLowerCase().trim();
     if (!CHAT_REGISTRY[name]) {
@@ -2607,12 +2657,48 @@ router.post('/setup/provider-config',
         deleteAppSetting('CHAT_MODEL');
       }
     }
+    let auxSaved = false;
+    if (clear_aux === true) {
+      deleteAppSetting('CHAT_AUX_PROVIDER');
+      deleteAppSetting('CHAT_AUX_MODEL');
+      auxSaved = true;
+    } else {
+      if (typeof aux_provider === 'string') {
+        const trimmedAuxProv = aux_provider.toLowerCase().trim();
+        if (trimmedAuxProv) {
+          if (!CHAT_REGISTRY[trimmedAuxProv]) {
+            return err(res, `未知 aux_provider: ${trimmedAuxProv}，可选：${Object.keys(CHAT_REGISTRY).join(', ')}`);
+          }
+          setAppSetting('CHAT_AUX_PROVIDER', trimmedAuxProv, { secret: 0 });
+          auxSaved = true;
+        } else {
+          deleteAppSetting('CHAT_AUX_PROVIDER');
+          auxSaved = true;
+        }
+      }
+      if (typeof aux_model === 'string') {
+        const trimmedAuxModel = aux_model.trim();
+        if (trimmedAuxModel) {
+          if (/[\x00-\x1f\x7f]/.test(trimmedAuxModel)) return err(res, 'aux_model 不能包含控制字符');
+          setAppSetting('CHAT_AUX_MODEL', trimmedAuxModel, { secret: 0 });
+          auxSaved = true;
+        } else {
+          deleteAppSetting('CHAT_AUX_MODEL');
+          auxSaved = true;
+        }
+      }
+    }
+    if (typeof reasoning_capture === 'boolean') {
+      setAppSetting('CHAT_REASONING_CAPTURE', reasoning_capture ? 'true' : 'false', { secret: 0 });
+    }
     return ok(res, {
       chat_provider: name,
       label: entry.label,
       key_saved: trimmedKey.length >= 8,
       base_url_saved: baseUrlSaved,
       model_saved: modelSaved,
+      aux_saved: auxSaved,
+      reasoning_capture: isReasoningCaptureEnabled(),
     });
   },
 );
@@ -2957,9 +3043,52 @@ function applyCompanionAgeGuard(data, existingCompanion = null) {
 }
 
 // POST /api/companions
+// 支持两种创建方式：
+//   1. 带 wechat_user_id：微信绑定路径（兼容既有客户端）
+//   2. 不带 wechat_user_id：纯 Web 创建路径（绑定微信改为可选，直接进网页聊天）
 router.post('/companions', requireAuth, (req, res) => {
   const { wechat_user_id, bot_id, ...data } = req.body || {};
-  if (!wechat_user_id) return err(res, '缺少 wechat_user_id');
+
+  let guarded;
+  try {
+    guarded = applyCompanionAgeGuard(data);
+  } catch (e) {
+    return err(res, e.message, e.code === 'AGE_TOO_LOW' ? 400 : 400);
+  }
+
+  // 分支 A：纯 Web 创建（不传 wechat_user_id 时走当前登录账号）
+  if (!wechat_user_id) {
+    const accountId = req.authUser?.id;
+    if (!accountId) return err(res, '缺少登录账号', 401);
+    const activeBinding = getWechatAccountByAccountId(accountId);
+    const hasWechat = Boolean(activeBinding?.wechat_user_id && activeBinding?.bot_id && activeBinding.is_active !== 0);
+    if ((guarded.nsfw_level ?? 0) >= 1) log('warn', `[API] nsfw_level=${guarded.nsfw_level} account=${accountId}`);
+    try {
+      let c;
+      if (hasWechat) {
+        c = createCompanion(activeBinding.wechat_user_id, bot_id || activeBinding.bot_id, normalizeCompanionConfig(guarded));
+        getDb().prepare(`
+          UPDATE wechat_accounts
+          SET companion_id = ?, updated_at = CURRENT_TIMESTAMP
+          WHERE wechat_user_id = ? AND bot_id = ? AND is_active = 1
+        `).run(c.id, activeBinding.wechat_user_id, bot_id || activeBinding.bot_id);
+      } else {
+        c = createCompanionForAccount(accountId, normalizeCompanionConfig(guarded), {
+          botId: bot_id || `web_${accountId}`,
+        });
+      }
+      log('info', `[API] 创建 web companion id=${c.id} account=${accountId}`);
+      asyncGeneratePersonaFacts(c);
+      import('./backfill_history.mjs').then(m => m.maybeAutoBackfill(c, { reason: 'create' })).catch(() => {});
+      return ok(res, c, 201);
+    } catch (e) {
+      if (e.code === 'EXISTS') return err(res, e.message, 409, { existing_id: e.id });
+      log('error', `[API] createCompanionForAccount: ${e.message}`);
+      return err(res, '服务器内部错误', 500);
+    }
+  }
+
+  // 分支 B：显式 wechat_user_id 路径
   // multi-tenant：bot_id 优先从入参取，否则从该 wechat 用户的活绑定里查
   let botId = bot_id || '';
   if (!botId) {
@@ -2973,12 +3102,6 @@ router.post('/companions', requireAuth, (req, res) => {
   if (!botId) return err(res, '缺少 bot_id');
   // v1.3.4: 开源版无 companion 数量上限。自托管想加上限可在此处加 hard cap。
 
-  let guarded;
-  try {
-    guarded = applyCompanionAgeGuard(data);
-  } catch (e) {
-    return err(res, e.message, e.code === 'AGE_TOO_LOW' ? 400 : 400);
-  }
   if ((guarded.nsfw_level ?? 0) >= 1) log('warn', `[API] nsfw_level=${guarded.nsfw_level} user=${wechat_user_id}`);
   try {
     const c = createCompanion(wechat_user_id, botId, normalizeCompanionConfig(guarded));
@@ -3265,7 +3388,7 @@ router.get('/companions/:id/visual-identity/candidate-image/:fname', requireAuth
     const full = candidatePath(id, req.params.fname);
     if (!full) return err(res, '候选图不存在或已过期', 404);
     res.set('Cache-Control', 'private, max-age=300');
-    return res.sendFile(full);
+    return res.sendFile(path.basename(full), { root: path.dirname(full) });
   } catch (e) {
     return err(res, e.message || 'serve 失败', 500);
   }
@@ -3878,6 +4001,245 @@ router.get('/companions/:id/prompt-debug', requireAuth, (req, res) => {
   } catch (e) {
     log('error', `[API] prompt-debug 失败 companion=${id}: ${e.message}`);
     return err(res, 'prompt-debug 生成失败', 500);
+  }
+});
+
+// GET /api/companions/:id/reasoning-debug — 仅调试可见的后台思考流（内存环形缓冲，不落盘不进会话框）
+router.get('/companions/:id/reasoning-debug', requireAuth, (req, res) => {
+  noStore(res);
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+  const limit = Math.max(1, Math.min(20, Number(req.query.limit) || 10));
+  return ok(res, {
+    capture_enabled: isReasoningCaptureEnabled(),
+    primary: getActiveChatProvider(),
+    aux: getActiveAuxChatProvider(),
+    traces: getReasoningTraces(id, limit),
+    warning: '仅内存调试可见，绝不发送给用户或写入对话历史。',
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 2: 轻量插件管理 & 不定时自主冲浪见闻
+// ─────────────────────────────────────────────────────────────────────────────
+
+// GET /api/companions/:id/plugins
+router.get('/companions/:id/plugins', requireAuth, (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+  return ok(res, {
+    plugins: getCompanionPluginsStatus(id),
+    surf_state: getSurfState(id),
+  });
+});
+
+// PUT /api/companions/:id/plugins/:pluginId
+router.put('/companions/:id/plugins/:pluginId', requireAuth, (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+  const pluginId = String(req.params.pluginId || '').trim();
+  if (!pluginId) return err(res, 'pluginId 不能为空');
+  const { enabled, config } = req.body || {};
+  if (enabled !== undefined && typeof enabled !== 'boolean') {
+    return err(res, 'enabled 必须为布尔值');
+  }
+  if (config !== undefined && (typeof config !== 'object' || config === null || Array.isArray(config))) {
+    return err(res, 'config 必须为对象');
+  }
+  try {
+    const saved = setCompanionPluginConfig(id, pluginId, { enabled, config });
+    return ok(res, saved);
+  } catch (e) {
+    if (e.code === 'NOT_FOUND') return err(res, e.message, 404);
+    log('error', `[API] update plugin 失败 companion=${id} plugin=${pluginId}: ${e.message}`);
+    return err(res, '保存插件配置失败', 500);
+  }
+});
+
+// GET /api/companions/:id/feeds
+router.get('/companions/:id/feeds', requireAuth, (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+  const status = typeof req.query.status === 'string' && req.query.status.trim() ? req.query.status.trim() : null;
+  const limit = Math.max(1, Math.min(50, Number(req.query.limit) || 20));
+  const includeExpired = req.query.include_expired === '1' || req.query.include_expired === 'true';
+  return ok(res, {
+    items: listCompanionFeedItems(id, { status, limit, includeExpired }),
+    surf_state: getSurfState(id),
+  });
+});
+
+// POST /api/companions/:id/feeds/refresh — 手动试跑一次指定或首个已启用的 Feed 插件
+router.post('/companions/:id/feeds/refresh',
+  requireAuth,
+  rateLimit({ scope: 'feeds-refresh', maxPerWindow: 6, windowMs: 60_000, message: '刷新过于频繁，请稍后再试' }),
+  async (req, res) => {
+    const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+    const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+    const pluginId = typeof req.body?.plugin_id === 'string' && req.body.plugin_id.trim()
+      ? req.body.plugin_id.trim()
+      : null;
+    const query = typeof req.body?.query === 'string' ? req.body.query.trim().slice(0, 60) : '';
+    try {
+      const result = await runManualSurfForCompanion(c, { pluginId, query });
+      return ok(res, result);
+    } catch (e) {
+      if (e.code === 'NOT_FOUND') return err(res, e.message, 404);
+      log('warn', `[API] feeds/refresh 失败 companion=${id}: ${e.message}`);
+      return err(res, `冲浪刷新失败：${e.message}`, 502);
+    }
+  },
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 3: public_mode 公域隔离 + 个人抖音工作台（Douyin Studio）
+// ─────────────────────────────────────────────────────────────────────────────
+
+// GET /api/companions/:id/social/drafts
+router.get('/companions/:id/social/drafts', requireAuth, (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+  const gate = isPublicStudioAllowed(c);
+  const status = typeof req.query.status === 'string' && req.query.status.trim() ? req.query.status.trim() : null;
+  const limit = Math.max(1, Math.min(50, Number(req.query.limit) || 20));
+  return ok(res, {
+    studio_allowed: gate.allowed,
+    studio_lock_reason: gate.allowed ? null : (gate.message || gate.reason),
+    ffmpeg: detectFfmpeg(),
+    drafts: listSocialDrafts(id, { platform: 'douyin', status, limit }),
+    reply_logs: listSocialReplyLogs(id, 15),
+  });
+});
+
+// POST /api/companions/:id/social/drafts/generate
+router.post('/companions/:id/social/drafts/generate',
+  requireAuth,
+  rateLimit({ scope: 'social-draft-gen', maxPerWindow: 6, windowMs: 60_000, message: '草稿生成过于频繁，请稍后再试' }),
+  async (req, res) => {
+    const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+    const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+    const format = req.body?.format === 'voice_video' ? 'voice_video' : 'image_post';
+    const topicHint = typeof req.body?.topic_hint === 'string' ? req.body.topic_hint.trim().slice(0, 120) : '';
+    const sourceFeedId = req.body?.source_feed_id ? intId(req.body.source_feed_id) : null;
+    try {
+      const result = await generateDouyinDraft(c, { format, topicHint, sourceFeedId });
+      return ok(res, result, 201);
+    } catch (e) {
+      if (e.code === 'FORBIDDEN') return err(res, e.message, 403);
+      log('warn', `[API] social/drafts/generate 失败 companion=${id}: ${e.message}`);
+      return err(res, e.message || '生成草稿失败', 502);
+    }
+  },
+);
+
+// POST /api/companions/:id/social/drafts/:draftId/render
+router.post('/companions/:id/social/drafts/:draftId/render',
+  requireAuth,
+  rateLimit({ scope: 'social-draft-render', maxPerWindow: 4, windowMs: 60_000, message: '素材合成过于频繁，请稍后再试' }),
+  async (req, res) => {
+    const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+    const draftId = intId(req.params.draftId); if (!draftId) return err(res, 'draftId 无效');
+    const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+    const draft = getSocialDraftById(draftId);
+    if (!draft || Number(draft.companion_id) !== id) return err(res, '草稿不存在', 404);
+    try {
+      const result = await renderDouyinDraftAssets(c, draft);
+      return ok(res, result);
+    } catch (e) {
+      if (e.code === 'FORBIDDEN') return err(res, e.message, 403);
+      log('warn', `[API] social/drafts/render 失败 companion=${id} draft=${draftId}: ${e.message}`);
+      return err(res, e.message || '素材合成失败', 500);
+    }
+  },
+);
+
+// POST /api/companions/:id/social/drafts/:draftId/mark-published
+router.post('/companions/:id/social/drafts/:draftId/mark-published', requireAuth, (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const draftId = intId(req.params.draftId); if (!draftId) return err(res, 'draftId 无效');
+  const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+  const backflow = req.body?.backflow !== false;
+  const note = typeof req.body?.note === 'string' ? req.body.note.trim().slice(0, 120) : '';
+  try {
+    const result = markDraftPublishedWithBackflow(c, draftId, { backflow, note });
+    return ok(res, result);
+  } catch (e) {
+    if (e.code === 'NOT_FOUND') return err(res, e.message, 404);
+    return err(res, e.message || '标记发布失败', 500);
+  }
+});
+
+// POST /api/companions/:id/social/drafts/:draftId/discard
+router.post('/companions/:id/social/drafts/:draftId/discard', requireAuth, (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const draftId = intId(req.params.draftId); if (!draftId) return err(res, 'draftId 无效');
+  const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+  const draft = getSocialDraftById(draftId);
+  if (!draft || Number(draft.companion_id) !== id) return err(res, '草稿不存在', 404);
+  return ok(res, { draft: updateSocialDraft(draftId, { status: 'discarded' }) });
+});
+
+// GET /api/companions/:id/social/media/:draftId/:filename — 鉴权受控预览/下载合成的图片/配音/MP4
+router.get('/companions/:id/social/media/:draftId/:filename', requireAuth, (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const draftId = intId(req.params.draftId); if (!draftId) return err(res, 'draftId 无效');
+  const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+  const safeName = path.basename(String(req.params.filename || ''));
+  if (!/^[A-Za-z0-9_.-]+$/.test(safeName)) return err(res, '文件名无效', 400);
+  const mediaDir = getStudioMediaDir(id, draftId);
+  const fullPath = path.join(mediaDir, safeName);
+  if (!existsSync(fullPath)) return err(res, '文件不存在', 404);
+  if (req.query?.download === '1') {
+    res.setHeader('Content-Disposition', `attachment; filename="draft_${draftId}_${safeName}"`);
+  }
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  return res.sendFile(safeName, { root: mediaDir });
+});
+
+// POST /api/companions/:id/social/reply-suggest
+router.post('/companions/:id/social/reply-suggest',
+  requireAuth,
+  rateLimit({ scope: 'social-reply-suggest', maxPerWindow: 12, windowMs: 60_000, message: '拟稿过于频繁，请稍后再试' }),
+  async (req, res) => {
+    const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+    const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+    const inboundKind = req.body?.inbound_kind === 'dm' ? 'dm' : 'comment';
+    const inboundText = typeof req.body?.inbound_text === 'string' ? req.body.inbound_text : '';
+    const screenshotBase64 = typeof req.body?.screenshot_base64 === 'string' ? req.body.screenshot_base64 : '';
+    const screenshotMime = typeof req.body?.screenshot_mime === 'string' ? req.body.screenshot_mime : 'image/jpeg';
+    const draftId = req.body?.draft_id ? intId(req.body.draft_id) : null;
+    try {
+      const result = await suggestPublicReplies(c, {
+        inboundKind,
+        inboundText,
+        screenshotBase64,
+        screenshotMime,
+        draftId,
+      });
+      return ok(res, result);
+    } catch (e) {
+      if (e.code === 'FORBIDDEN') return err(res, e.message, 403);
+      if (e.code === 'BAD_INPUT') return err(res, e.message, 400);
+      if (e.code === 'PAYLOAD_TOO_LARGE') return err(res, e.message, 413);
+      log('warn', `[API] social/reply-suggest 失败 companion=${id}: ${e.message}`);
+      return err(res, e.message || '生成候选回复失败', 502);
+    }
+  },
+);
+
+// POST /api/companions/:id/social/replies/:logId/backflow
+router.post('/companions/:id/social/replies/:logId/backflow', requireAuth, (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const logId = intId(req.params.logId); if (!logId) return err(res, 'logId 无效');
+  const c  = requireOwnedCompanion(req, res, id); if (!c) return;
+  const chosenReply = typeof req.body?.chosen_reply === 'string' ? req.body.chosen_reply.trim().slice(0, 300) : '';
+  const note = typeof req.body?.note === 'string' ? req.body.note.trim().slice(0, 120) : '';
+  try {
+    const result = recordSocialReplyBackflow(c, logId, { chosenReply, note });
+    return ok(res, result);
+  } catch (e) {
+    if (e.code === 'NOT_FOUND') return err(res, e.message, 404);
+    return err(res, e.message || '回流失败', 500);
   }
 });
 

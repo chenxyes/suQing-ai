@@ -67,8 +67,11 @@
   <script>
     window.XIYU_I18N_TEXT = {
       "返回修改": "Back to edit",
-      "最后一步": "Last step",
+      "最后一步": "Last step (optional)",
+      "最后一步（可选）": "Last step (optional)",
       "把她接到微信": "Bring her into WeChat",
+      "跳过绑定，直接去网页聊天": "Skip binding & start web chat",
+      "暂不绑定，返回控制台": "Skip for now & return to dashboard",
       "用微信扫码并在手机上点「确认登录」，页面会自动跳转，扫码完成后微信里会自动出现「溪语AI」联系人。": "Scan with WeChat and tap \"Confirm login\" on your phone; the page redirects automatically, and \"Xiyu AI\" appears as a contact in WeChat once done.",
       "重新绑定成功后，原微信绑定将被替换。": "After rebinding succeeds, your previous WeChat binding is replaced.",
       "绑定成功！正在跳转...": "Bound successfully! Redirecting...",
@@ -107,9 +110,9 @@
   <main class="max-w-3xl mx-auto px-6 py-10 lg:py-16">
 
     <div class="text-center mb-10">
-      <p id="step-label" class="text-[14px] font-semibold text-sakura-deep tracking-wider mb-3">最后一步</p>
+      <p id="step-label" class="text-[14px] font-semibold text-sakura-deep tracking-wider mb-3">最后一步（可选）</p>
       <h1 id="page-title" class="text-[32px] sm:text-[42px] font-bold tracking-tightest leading-tight">把她接到微信</h1>
-      <p id="page-subtitle" class="mt-3 text-[15px] text-mute font-medium max-w-md mx-auto">用微信扫码并在手机上点「确认登录」，页面会自动跳转，扫码完成后微信里会自动出现「溪语AI」联系人。</p>
+      <p id="page-subtitle" class="mt-3 text-[15px] text-mute font-medium max-w-md mx-auto">用微信扫码并在手机上点「确认登录」即可接入微信；也可以直接跳过，使用网页版聊天。</p>
       <p id="rebind-notice" class="hidden mt-4 text-[13px] font-medium text-sakura-deep bg-sakura-soft rounded-2xl px-4 py-3 max-w-md mx-auto">
         重新绑定成功后，原微信绑定将被替换。
       </p>
@@ -175,6 +178,9 @@
         <button id="btn-confirm" class="btn-primary w-full mt-7 py-3.5 text-[14px] font-semibold text-white rounded-full shadow-sakura transition-all">
           刷新二维码
         </button>
+        <button id="btn-skip-bind" type="button" class="w-full mt-3 py-3 text-[14px] font-semibold text-sakura-deep rounded-full border border-sakura hover:bg-sakura-soft/50 transition-all">
+          跳过绑定，直接去网页聊天
+        </button>
       </div>
     </div>
 
@@ -223,7 +229,8 @@
     const params = new URLSearchParams(location.search);
     const isRebind = params.get('rebind') === 'true';
     const draft = JSON.parse(localStorage.getItem('xiyu_pending_companion') || 'null');
-    if (!isRebind && !draft) location.href = '/app/create.html';
+    const existingCompanionId = localStorage.getItem('xiyu_companion_id') || '';
+    if (!isRebind && !draft && !existingCompanionId) location.href = '/app/create.html';
 
     if (isRebind) {
       document.getElementById('back-link').href = '/app/dashboard.html';
@@ -232,6 +239,8 @@
       document.getElementById('page-title').textContent = '重新绑定微信';
       document.getElementById('page-subtitle').textContent = '用新微信扫码添加好友，发送任意消息后会替换当前 Web 账号的微信身份。';
       document.getElementById('rebind-notice').classList.remove('hidden');
+      const skipBtn = document.getElementById('btn-skip-bind');
+      if (skipBtn) skipBtn.textContent = '暂不绑定，返回控制台';
       lucide.createIcons({ attrs: { 'stroke-width': 1.8, 'aria-hidden': 'true' } });
     }
 
@@ -570,6 +579,50 @@
     }
 
     document.getElementById('btn-confirm').addEventListener('click', loadQr);
+    document.getElementById('btn-skip-bind').addEventListener('click', async () => {
+      completed = true;
+      clearTimeout(statusTimer);
+      clearInterval(countdownTimer);
+      if (isRebind) {
+        location.href = '/app/dashboard.html';
+        return;
+      }
+      const skipBtn = document.getElementById('btn-skip-bind');
+      skipBtn.disabled = true;
+      skipBtn.textContent = '正在准备网页聊天...';
+      try {
+        // 兼容旧流程残留草稿：尚未落库时自动以纯 Web 模式创建角色
+        if (draft && !localStorage.getItem('xiyu_companion_id')) {
+          const payload = normalizeCompanionConfig(draft);
+          let cr = await fetch('/api/companions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          let cd = await cr.json().catch(() => ({}));
+          if (cr.status === 409 && cd.existing_id) {
+            cr = await fetch('/api/companions/' + encodeURIComponent(cd.existing_id), {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+            });
+            cd = await cr.json().catch(() => ({}));
+          }
+          if (!cr.ok || !cd.ok || !cd.data?.id) {
+            throw new Error(cd.error || cd.message || '角色创建失败');
+          }
+          localStorage.setItem('xiyu_companion_id', String(cd.data.id));
+          localStorage.setItem('xiyu_companion_summary', JSON.stringify(cd.data));
+          localStorage.removeItem('xiyu_pending_companion');
+        }
+        location.href = '/app/playground.html';
+      } catch (e) {
+        completed = false;
+        skipBtn.disabled = false;
+        skipBtn.textContent = '跳过绑定，直接去网页聊天';
+        showMsg(e.message || '跳过失败，请重试', 'error');
+      }
+    });
     window.addEventListener('beforeunload', () => {
       clearTimeout(statusTimer);
       clearInterval(countdownTimer);

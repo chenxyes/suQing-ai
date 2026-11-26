@@ -258,6 +258,33 @@
           </div>
         </div>
       </div>
+
+      <!-- 精选图库预览弹窗 -->
+      <div id="stk-pack-preview-modal" role="dialog" aria-modal="true" aria-label="预览精选表情包图集" class="hidden fixed inset-0 bg-black/50 backdrop-blur-sm z-[10001] flex items-center justify-center p-4">
+        <div class="bg-white rounded-3xl max-w-[680px] w-full max-h-[86vh] flex flex-col shadow-card overflow-hidden">
+          <div class="px-6 py-4 border-b border-line flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <h3 id="stk-pv-title" class="text-[16px] font-bold flex items-center gap-2">预览表情包</h3>
+              <p id="stk-pv-desc" class="text-[12px] text-mute mt-0.5"></p>
+            </div>
+            <button type="button" id="stk-pv-close" class="text-mute hover:text-ink text-xl leading-none p-1 shrink-0" aria-label="关闭预览">×</button>
+          </div>
+          <div class="p-5 overflow-y-auto flex-1 space-y-3">
+            <p id="stk-pv-status" class="text-[12px] text-mute"></p>
+            <div id="stk-pv-grid" class="grid grid-cols-3 sm:grid-cols-4 gap-3"></div>
+            <div class="text-center pt-1">
+              <button type="button" id="stk-pv-more" class="hidden stk-btn-outline text-[12px]">加载更多示例</button>
+            </div>
+          </div>
+          <div class="px-6 py-3.5 border-t border-line bg-cloud/60 flex items-center justify-between gap-2 flex-wrap">
+            <span id="stk-pv-count" class="text-[12px] text-mute"></span>
+            <div class="flex items-center gap-2">
+              <button type="button" id="stk-pv-toggle" class="stk-btn-outline text-[12px]">勾选此套</button>
+              <button type="button" id="stk-pv-fetch" class="stk-btn-primary text-[12px]">一键拉取这一套</button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   `;
 
@@ -535,6 +562,127 @@
     });
 
     // ─── Curated Packs ───────────────────────────────────────────────────────
+    let previewState = { packId: null, offset: 0, total: 0, hasMore: false, items: [] };
+    const pvModal = $('#stk-pack-preview-modal');
+
+    function closePackPreview() {
+      pvModal?.classList.add('hidden');
+      previewState = { packId: null, offset: 0, total: 0, hasMore: false, items: [] };
+    }
+    $('#stk-pv-close')?.addEventListener('click', closePackPreview);
+    pvModal?.addEventListener('click', (e) => { if (e.target === pvModal) closePackPreview(); });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && pvModal && !pvModal.classList.contains('hidden')) closePackPreview();
+    });
+
+    function syncPreviewToggleBtn() {
+      const btn = $('#stk-pv-toggle');
+      if (!btn || !previewState.packId) return;
+      const sel = S.selectedPacks.has(previewState.packId);
+      btn.textContent = sel ? '✓ 已勾选此套（点击取消）' : '勾选此套';
+    }
+
+    async function loadPackPreviewPage(packId, { append = false } = {}) {
+      const statusEl = $('#stk-pv-status');
+      const gridEl = $('#stk-pv-grid');
+      const moreBtn = $('#stk-pv-more');
+      const countEl = $('#stk-pv-count');
+      const offset = append ? previewState.offset : 0;
+      if (!append) {
+        gridEl.innerHTML = '';
+        statusEl.textContent = '正在加载该图集的真实表情预览…';
+        moreBtn.classList.add('hidden');
+      } else {
+        moreBtn.disabled = true;
+        moreBtn.textContent = '加载中…';
+      }
+      const r = await api(`/api/stickers/curated/${encodeURIComponent(packId)}/preview?limit=12&offset=${offset}`);
+      moreBtn.disabled = false;
+      moreBtn.textContent = '加载更多示例';
+      if (!r?.ok) {
+        statusEl.textContent = '❌ 预览加载失败：' + (r?.error || r?.message || '请稍后重试');
+        return;
+      }
+      const d = r.data || {};
+      const items = Array.isArray(d.items) ? d.items : [];
+      previewState = {
+        packId,
+        offset: offset + items.length,
+        total: d.total_in_pack || items.length,
+        hasMore: Boolean(d.has_more),
+        items: append ? [...previewState.items, ...items] : items,
+      };
+      if (d.pack) {
+        $('#stk-pv-title').textContent = `${d.pack.emoji || '📦'} ${d.pack.name || packId}`;
+        $('#stk-pv-desc').textContent = d.pack.desc || '';
+      }
+      statusEl.textContent = items.length
+        ? `以下为图集内真实表情示例（点击下方按钮可直接勾选或拉取入库）：`
+        : '该图集暂无可预览图片';
+      countEl.textContent = `已展示 ${previewState.items.length} / 共 ${previewState.total} 张`;
+      moreBtn.classList.toggle('hidden', !previewState.hasMore);
+
+      const html = items.map(it => `
+        <div class="rounded-2xl border border-line bg-cloud p-2 flex flex-col gap-1.5">
+          <div class="aspect-square rounded-xl bg-white border border-line/60 flex items-center justify-center overflow-hidden p-1">
+            <img src="${esc(it.preview_url)}" alt="${esc(it.label)}" loading="lazy" class="w-full h-full object-contain" />
+          </div>
+          <div class="text-[11px] text-ink font-medium truncate" title="${esc(it.label)}">${esc(it.label)}</div>
+          <div class="flex flex-wrap gap-1">
+            <span class="text-[10px] px-1.5 py-0.5 rounded bg-sakura-soft/70 text-sakura-deep">${esc(it.emotion || 'cute')}</span>
+          </div>
+        </div>
+      `).join('');
+      if (append) gridEl.insertAdjacentHTML('beforeend', html);
+      else gridEl.innerHTML = html;
+      syncPreviewToggleBtn();
+    }
+
+    function openPackPreview(packId) {
+      const pack = (S.data?.curated_packs || []).find(p => p.id === packId);
+      $('#stk-pv-title').textContent = pack ? `${pack.emoji} ${pack.name}` : '预览表情包';
+      $('#stk-pv-desc').textContent = pack?.desc || '';
+      $('#stk-pv-count').textContent = '';
+      previewState = { packId, offset: 0, total: 0, hasMore: false, items: [] };
+      syncPreviewToggleBtn();
+      pvModal?.classList.remove('hidden');
+      loadPackPreviewPage(packId, { append: false });
+    }
+
+    $('#stk-pv-more')?.addEventListener('click', () => {
+      if (previewState.packId && previewState.hasMore) {
+        loadPackPreviewPage(previewState.packId, { append: true });
+      }
+    });
+    $('#stk-pv-toggle')?.addEventListener('click', () => {
+      if (!previewState.packId) return;
+      if (S.selectedPacks.has(previewState.packId)) S.selectedPacks.delete(previewState.packId);
+      else S.selectedPacks.add(previewState.packId);
+      renderCurated();
+      syncPreviewToggleBtn();
+    });
+    $('#stk-pv-fetch')?.addEventListener('click', async () => {
+      if (!previewState.packId) return;
+      const pid = previewState.packId;
+      const btn = $('#stk-pv-fetch');
+      const perPack = Number($('#curated-per-pack')?.value) || 8;
+      btn.disabled = true;
+      btn.textContent = '拉取中…';
+      const r = await api('/api/stickers/fetch-packs', {
+        method: 'POST', body: JSON.stringify({ pack_ids: [pid], per_pack: perPack }),
+      });
+      btn.disabled = false;
+      btn.textContent = '一键拉取这一套';
+      if (r?.ok) {
+        toast(`已拉取：新增 ${r.data.added} 张，跳过 ${r.data.skipped} 张`);
+        closePackPreview();
+        await loadAll();
+        switchTab('library');
+      } else {
+        toast(r?.error || '拉取失败', 'err');
+      }
+    });
+
     function renderCurated() {
       const packs = S.data?.curated_packs || [];
       const grid = $('#curated-grid');
@@ -542,7 +690,7 @@
         const sel = S.selectedPacks.has(p.id);
         const rec = S.recommendedPacks.has(p.id);
         return `
-          <button type="button" class="stk-pack-card ${sel ? 'selected' : ''} ${rec ? 'recommended' : ''}" data-pack="${esc(p.id)}" aria-pressed="${sel ? 'true' : 'false'}">
+          <div role="button" tabindex="0" class="stk-pack-card ${sel ? 'selected' : ''} ${rec ? 'recommended' : ''}" data-pack="${esc(p.id)}" aria-pressed="${sel ? 'true' : 'false'}">
             <span class="text-2xl leading-none shrink-0 mt-0.5" aria-hidden="true">${esc(p.emoji)}</span>
             <span class="flex-1 min-w-0">
               <span class="flex items-center gap-2 flex-wrap">
@@ -551,19 +699,32 @@
                 <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full ${p.risk === 'low' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}">${esc(p.risk_label)}</span>
               </span>
               <span class="block text-[12px] text-mute mt-1 leading-relaxed">${esc(p.desc)}</span>
-              <span class="flex flex-wrap gap-1 mt-2">
-                ${(p.base_tags || []).slice(0, 5).map(t => `<span class="text-[10px] px-1.5 py-0.5 rounded bg-cloud text-mute">#${esc(t)}</span>`).join('')}
+              <span class="flex items-center justify-between gap-2 flex-wrap mt-2">
+                <span class="flex flex-wrap gap-1">
+                  ${(p.base_tags || []).slice(0, 5).map(t => `<span class="text-[10px] px-1.5 py-0.5 rounded bg-cloud text-mute">#${esc(t)}</span>`).join('')}
+                </span>
+                <button type="button" class="js-preview-pack text-[11px] font-semibold px-2.5 py-1 rounded-full bg-white border border-sakura/60 text-sakura-deep hover:bg-sakura-soft/50 transition-colors shrink-0" data-pack="${esc(p.id)}">👀 预览图集</button>
               </span>
             </span>
-          </button>
+          </div>
         `;
       }).join('');
-      grid.querySelectorAll('.stk-pack-card').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const id = btn.dataset.pack;
+      grid.querySelectorAll('.stk-pack-card').forEach(card => {
+        const toggle = () => {
+          const id = card.dataset.pack;
           if (S.selectedPacks.has(id)) S.selectedPacks.delete(id);
           else S.selectedPacks.add(id);
           renderCurated();
+        };
+        card.addEventListener('click', toggle);
+        card.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+        });
+      });
+      grid.querySelectorAll('.js-preview-pack').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          openPackPreview(btn.dataset.pack);
         });
       });
       const count = S.selectedPacks.size;

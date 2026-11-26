@@ -30,9 +30,10 @@ export function materialDedupDays(env = process.env) {
   return Number.isFinite(n) && n >= 0 ? n : DEFAULT_DEDUP_DAYS;
 }
 
-/** 素材 ID 规范：记忆 mem:<id>，open loop loop:<id> */
+/** 素材 ID 规范：记忆 mem:<id>，open loop loop:<id>，自主冲浪见闻 feed:<id> */
 export function memMaterialId(memoryId) { return `mem:${memoryId}`; }
 export function loopMaterialId(loopId) { return `loop:${loopId}`; }
+export function feedMaterialId(feedId) { return `feed:${feedId}`; }
 
 /**
  * 召回候选冷却过滤：usedIds（Set）里出现过的记忆出局。
