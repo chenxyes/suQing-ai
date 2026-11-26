@@ -4015,7 +4015,7 @@ router.get('/companions/:id/reasoning-debug', requireAuth, (req, res) => {
     primary: getActiveChatProvider(),
     aux: getActiveAuxChatProvider(),
     traces: getReasoningTraces(id, limit),
-    warning: '仅内存调试可见，绝不发送给用户或写入对话历史。',
+    warning: '仅内存调试可见，绝不发送至聊天消息或写入对话历史。',
   });
 });
 
