@@ -50,6 +50,16 @@
       <span class="pill bg-sakura-soft text-sakura-deep">public_mode 已隔离</span>
     </div>
 
+    <div class="p-3 rounded-xl bg-sakura-soft/40 border border-sakura/30 text-xs text-ink leading-relaxed flex flex-wrap items-center justify-between gap-2">
+      <span>
+        <strong>个人抖音号零风控发布流程：</strong>① 生成草稿并合成素材 → ② 预览并下载图片/配音/视频、复制文案 → ③ 前往抖音创作者中心手动发布 → ④ 回来点「标记已发布并回流日常」，她就会记住这条动态并在私聊里自然聊起（可在 <a href="/app/memories.html" class="text-sakura-deep underline font-semibold">记忆管理</a> 中查看）。
+      </span>
+      <a href="https://creator.douyin.com/creator-micro/content/upload" target="_blank" rel="noopener noreferrer"
+         class="px-3 py-1 rounded-full bg-white border border-sakura text-sakura-deep font-semibold hover:bg-sakura-soft/50 shrink-0">
+        📤 打开抖音创作者中心 ↗
+      </a>
+    </div>
+
     <div class="grid sm:grid-cols-4 gap-3">
       <select id="draftFormat" class="px-3 py-2 text-sm rounded-xl border border-line bg-cloud">
         <option value="image_post">图文笔记 (image_post)</option>
@@ -60,8 +70,25 @@
       <button id="btnGenDraft" type="button" class="btn-primary px-4 py-2 text-sm">✨ 让她想一条</button>
     </div>
 
+    <div class="flex items-center gap-2 flex-wrap pt-1" id="draftFilterBar">
+      <button type="button" data-filter="all" class="draft-filter-btn px-3 py-1 text-xs rounded-full border border-sakura bg-sakura-soft text-sakura-deep font-semibold">全部 (<span id="cntAll">0</span>)</button>
+      <button type="button" data-filter="active" class="draft-filter-btn px-3 py-1 text-xs rounded-full border border-line bg-white text-mute">草稿 / 待发布 (<span id="cntActive">0</span>)</button>
+      <button type="button" data-filter="published" class="draft-filter-btn px-3 py-1 text-xs rounded-full border border-line bg-white text-mute">✅ 已发布归档 (<span id="cntPublished">0</span>)</button>
+    </div>
+
     <div id="draftList" class="space-y-4 text-sm text-mute">加载中…</div>
   </section>
+
+  <!-- 图片放大预览弹窗 -->
+  <div id="imgPreviewModal" class="hidden fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="relative max-w-3xl max-h-[90vh] flex flex-col items-center gap-3">
+      <img id="imgPreviewTarget" src="" alt="素材预览" class="max-h-[80vh] max-w-full rounded-2xl shadow-2xl object-contain bg-white" />
+      <div class="flex items-center gap-3">
+        <button id="imgPreviewDownload" type="button" class="btn-primary px-5 py-1.5 text-xs">下载原图</button>
+        <button id="imgPreviewClose" type="button" class="px-5 py-1.5 text-xs rounded-full bg-white text-ink font-semibold">关闭</button>
+      </div>
+    </div>
+  </div>
 
   <!-- 模块 B：评论 / 私信 3 档拟稿助手 -->
   <section class="card p-5 space-y-4">
@@ -98,7 +125,62 @@ let companionId = '';
 let studioAllowed = true;
 let screenshotDataUrl = '';
 let screenshotMime = 'image/jpeg';
+let allDrafts = [];
+let activeFilter = 'all';
+const previewObjectUrls = [];
+let modalDownloadCtx = null;
 const initialFeedId = new URLSearchParams(location.search).get('feedId') || '';
+
+function clearPreviewUrls() {
+  while (previewObjectUrls.length) {
+    try { URL.revokeObjectURL(previewObjectUrls.pop()); } catch {}
+  }
+}
+
+async function fetchAuthedMediaBlobUrl(draftId, fileName) {
+  const r = await fetch(`/api/companions/${encodeURIComponent(companionId)}/social/media/${encodeURIComponent(draftId)}/${encodeURIComponent(fileName)}`, {
+    headers: authHeaders(),
+  });
+  if (!r.ok) throw new Error(`加载失败 (${r.status})`);
+  const blob = await r.blob();
+  const url = URL.createObjectURL(blob);
+  previewObjectUrls.push(url);
+  return url;
+}
+
+function openImageLightbox(blobUrl, draftId, fileName) {
+  const modal = document.getElementById('imgPreviewModal');
+  document.getElementById('imgPreviewTarget').src = blobUrl;
+  modalDownloadCtx = { draftId, fileName };
+  modal.classList.remove('hidden');
+}
+
+function closeImageLightbox() {
+  document.getElementById('imgPreviewModal').classList.add('hidden');
+  document.getElementById('imgPreviewTarget').src = '';
+  modalDownloadCtx = null;
+}
+
+document.getElementById('imgPreviewClose').addEventListener('click', closeImageLightbox);
+document.getElementById('imgPreviewModal').addEventListener('click', (e) => {
+  if (e.target.id === 'imgPreviewModal') closeImageLightbox();
+});
+document.getElementById('imgPreviewDownload').addEventListener('click', () => {
+  if (modalDownloadCtx) downloadAuthedMedia(modalDownloadCtx.draftId, modalDownloadCtx.fileName);
+});
+
+document.getElementById('draftFilterBar').addEventListener('click', (e) => {
+  const btn = e.target.closest('.draft-filter-btn');
+  if (!btn) return;
+  activeFilter = btn.dataset.filter || 'all';
+  document.querySelectorAll('.draft-filter-btn').forEach(b => {
+    const on = b.dataset.filter === activeFilter;
+    b.className = 'draft-filter-btn px-3 py-1 text-xs rounded-full border ' + (
+      on ? 'border-sakura bg-sakura-soft text-sakura-deep font-semibold' : 'border-line bg-white text-mute'
+    );
+  });
+  renderDrafts(allDrafts);
+});
 
 function getToken() {
   return localStorage.getItem('xiyu_token') || localStorage.getItem('jwt_token') || sessionStorage.getItem('jwt_token') || '';
@@ -136,7 +218,7 @@ async function resolveCompanionId() {
 
 async function downloadAuthedMedia(draftId, fileName) {
   try {
-    const r = await fetch(`/api/companions/${encodeURIComponent(companionId)}/social/media/${encodeURIComponent(draftId)}/${encodeURIComponent(fileName)}`, {
+    const r = await fetch(`/api/companions/${encodeURIComponent(companionId)}/social/media/${encodeURIComponent(draftId)}/${encodeURIComponent(fileName)}?download=1`, {
       headers: authHeaders(),
     });
     if (!r.ok) throw new Error(`下载失败 (${r.status})`);
@@ -155,21 +237,39 @@ async function downloadAuthedMedia(draftId, fileName) {
 }
 
 function renderDrafts(drafts) {
+  clearPreviewUrls();
   const box = document.getElementById('draftList');
   box.innerHTML = '';
-  if (!drafts || !drafts.length) {
-    box.textContent = '还没有抖音草稿，点上方「让她想一条」生成第一条吧。';
+  const allList = Array.isArray(drafts) ? drafts : [];
+  const activeList = allList.filter(d => d.status !== 'published' && d.status !== 'discarded');
+  const pubList = allList.filter(d => d.status === 'published');
+  document.getElementById('cntAll').textContent = String(allList.length);
+  document.getElementById('cntActive').textContent = String(activeList.length);
+  document.getElementById('cntPublished').textContent = String(pubList.length);
+
+  const visible = activeFilter === 'published' ? pubList
+    : activeFilter === 'active' ? activeList
+    : allList;
+
+  if (!visible.length) {
+    box.textContent = activeFilter === 'published'
+      ? '还没有已发布的作品归档。完成发布后点「标记已发布并回流日常」，就会归档到这里并写入她的记忆。'
+      : '还没有抖音草稿，点上方「让她想一条」生成第一条吧。';
     return;
   }
-  for (const d of drafts) {
+  for (const d of visible) {
     const card = document.createElement('div');
-    card.className = 'p-4 rounded-xl bg-cloud border border-line space-y-2.5';
+    card.className = 'p-4 rounded-xl bg-cloud border border-line space-y-3';
 
     const head = document.createElement('div');
     head.className = 'flex items-center justify-between gap-2 flex-wrap';
     const title = document.createElement('div');
     title.className = 'font-bold text-ink text-sm';
     title.textContent = `#${d.id} · ${d.title || '无标题'}`;
+    const statusLabel = d.status === 'published' ? '已发布'
+      : d.status === 'ready' ? '素材就绪'
+      : d.status === 'discarded' ? '已丢弃'
+      : '草稿';
     const badge = document.createElement('span');
     badge.className = `pill ${
       d.status === 'published' ? 'bg-emerald-50 text-emerald-700'
@@ -177,7 +277,7 @@ function renderDrafts(drafts) {
         : d.status === 'discarded' ? 'bg-gray-200 text-mute'
         : 'bg-sakura-soft text-sakura-deep'
     }`;
-    badge.textContent = `${d.format === 'voice_video' ? '配音视频' : '图文'} · ${d.status}`;
+    badge.textContent = `${d.format === 'voice_video' ? '配音视频' : '图文'} · ${statusLabel}`;
     head.append(title, badge);
 
     const caption = document.createElement('p');
@@ -189,31 +289,86 @@ function renderDrafts(drafts) {
     script.className = 'text-xs text-mute';
     script.textContent = d.voice_script ? `🎙️ 口播稿：${d.voice_script}` : '';
 
-    const mediaRow = document.createElement('div');
-    mediaRow.className = 'flex items-center gap-2 flex-wrap';
-    for (const img of (d.media_paths || [])) {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'px-3 py-1 text-xs rounded-full bg-white border border-line hover:border-sakura';
-      b.textContent = `🖼️ 下载 ${img}`;
-      b.addEventListener('click', () => downloadAuthedMedia(d.id, img));
-      mediaRow.appendChild(b);
+    // 实时预览区（配图缩略图 + 音频播放器 + 视频播放器）
+    const previewWrap = document.createElement('div');
+    previewWrap.className = 'space-y-2.5';
+
+    if ((d.media_paths || []).length) {
+      const imgGrid = document.createElement('div');
+      imgGrid.className = 'grid grid-cols-2 sm:grid-cols-3 gap-2.5';
+      for (const imgFile of d.media_paths) {
+        const tile = document.createElement('div');
+        tile.className = 'bg-white rounded-xl border border-line overflow-hidden flex flex-col';
+        const thumbBox = document.createElement('div');
+        thumbBox.className = 'aspect-square bg-gray-50 flex items-center justify-center text-xs text-mute cursor-pointer overflow-hidden';
+        thumbBox.textContent = '加载预览中…';
+        const foot = document.createElement('div');
+        foot.className = 'px-2.5 py-1.5 flex items-center justify-between text-[11px] border-t border-line';
+        const lbl = document.createElement('span');
+        lbl.className = 'text-mute truncate';
+        lbl.textContent = imgFile;
+        const dlBtn = document.createElement('button');
+        dlBtn.type = 'button';
+        dlBtn.className = 'text-sakura-deep font-semibold hover:underline shrink-0';
+        dlBtn.textContent = '下载';
+        dlBtn.addEventListener('click', () => downloadAuthedMedia(d.id, imgFile));
+        foot.append(lbl, dlBtn);
+        tile.append(thumbBox, foot);
+        imgGrid.appendChild(tile);
+
+        fetchAuthedMediaBlobUrl(d.id, imgFile)
+          .then((blobUrl) => {
+            thumbBox.innerHTML = '';
+            const im = document.createElement('img');
+            im.src = blobUrl;
+            im.alt = imgFile;
+            im.className = 'w-full h-full object-cover hover:scale-[1.03] transition-transform';
+            thumbBox.title = '点击查看大图';
+            thumbBox.addEventListener('click', () => openImageLightbox(blobUrl, d.id, imgFile));
+            thumbBox.appendChild(im);
+          })
+          .catch(() => {
+            thumbBox.textContent = '预览加载失败（可点下方下载重试）';
+          });
+      }
+      previewWrap.appendChild(imgGrid);
     }
+
     if (d.audio_path) {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'px-3 py-1 text-xs rounded-full bg-white border border-line hover:border-sakura';
-      b.textContent = `🔊 下载 ${d.audio_path}`;
-      b.addEventListener('click', () => downloadAuthedMedia(d.id, d.audio_path));
-      mediaRow.appendChild(b);
+      const audioRow = document.createElement('div');
+      audioRow.className = 'p-2.5 rounded-xl bg-white border border-line flex items-center gap-3 flex-wrap';
+      const audioEl = document.createElement('audio');
+      audioEl.controls = true;
+      audioEl.className = 'h-9 flex-1 min-w-[200px]';
+      const dlBtn = document.createElement('button');
+      dlBtn.type = 'button';
+      dlBtn.className = 'px-3 py-1 text-xs rounded-full border border-line hover:border-sakura font-medium';
+      dlBtn.textContent = `🔊 下载 ${d.audio_path}`;
+      dlBtn.addEventListener('click', () => downloadAuthedMedia(d.id, d.audio_path));
+      audioRow.append(audioEl, dlBtn);
+      previewWrap.appendChild(audioRow);
+      fetchAuthedMediaBlobUrl(d.id, d.audio_path)
+        .then((u) => { audioEl.src = u; })
+        .catch(() => {});
     }
+
     if (d.video_path) {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'px-3 py-1 text-xs rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold';
-      b.textContent = `🎬 下载 9:16 视频 (${d.video_path})`;
-      b.addEventListener('click', () => downloadAuthedMedia(d.id, d.video_path));
-      mediaRow.appendChild(b);
+      const videoBox = document.createElement('div');
+      videoBox.className = 'p-3 rounded-xl bg-white border border-emerald-200 space-y-2';
+      const videoEl = document.createElement('video');
+      videoEl.controls = true;
+      videoEl.playsInline = true;
+      videoEl.className = 'w-full max-h-[360px] rounded-lg bg-black';
+      const dlBtn = document.createElement('button');
+      dlBtn.type = 'button';
+      dlBtn.className = 'px-3 py-1.5 text-xs rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold';
+      dlBtn.textContent = `🎬 下载 9:16 视频 (${d.video_path})`;
+      dlBtn.addEventListener('click', () => downloadAuthedMedia(d.id, d.video_path));
+      videoBox.append(videoEl, dlBtn);
+      previewWrap.appendChild(videoBox);
+      fetchAuthedMediaBlobUrl(d.id, d.video_path)
+        .then((u) => { videoEl.src = u; })
+        .catch(() => {});
     }
 
     const actions = document.createElement('div');
@@ -222,12 +377,12 @@ function renderDrafts(drafts) {
     const copyBtn = document.createElement('button');
     copyBtn.type = 'button';
     copyBtn.className = 'px-3 py-1.5 text-xs rounded-full border border-line bg-white hover:border-sakura';
-    copyBtn.textContent = '复制标题与文案';
+    copyBtn.textContent = '📋 复制标题与文案';
     copyBtn.addEventListener('click', async () => {
       try {
         await navigator.clipboard.writeText(`${d.title}\n\n${caption.textContent}`);
         copyBtn.textContent = '已复制 ✓';
-        setTimeout(() => { copyBtn.textContent = '复制标题与文案'; }, 1500);
+        setTimeout(() => { copyBtn.textContent = '📋 复制标题与文案'; }, 1500);
       } catch {}
     });
     actions.appendChild(copyBtn);
@@ -236,7 +391,7 @@ function renderDrafts(drafts) {
       const renderBtn = document.createElement('button');
       renderBtn.type = 'button';
       renderBtn.className = 'px-3 py-1.5 text-xs rounded-full border border-sakura text-sakura-deep bg-white hover:bg-sakura-soft/40';
-      renderBtn.textContent = '🎨 合成配图/配音/视频';
+      renderBtn.textContent = (d.media_paths?.length || d.video_path) ? '🔄 重新合成素材' : '🎨 合成配图/配音/视频';
       renderBtn.addEventListener('click', async () => {
         renderBtn.disabled = true;
         renderBtn.textContent = '合成中…';
@@ -260,6 +415,14 @@ function renderDrafts(drafts) {
     }
 
     if (d.status !== 'published' && d.status !== 'discarded') {
+      const uploadLink = document.createElement('a');
+      uploadLink.href = 'https://creator.douyin.com/creator-micro/content/upload';
+      uploadLink.target = '_blank';
+      uploadLink.rel = 'noopener noreferrer';
+      uploadLink.className = 'px-3 py-1.5 text-xs rounded-full border border-line bg-white hover:border-sakura text-ink font-medium';
+      uploadLink.textContent = '📤 去抖音创作者中心上传 ↗';
+      actions.appendChild(uploadLink);
+
       const pubBtn = document.createElement('button');
       pubBtn.type = 'button';
       pubBtn.className = 'px-3 py-1.5 text-xs rounded-full bg-emerald-500 text-white hover:bg-emerald-600';
@@ -274,7 +437,7 @@ function renderDrafts(drafts) {
           });
           const j = await r.json();
           if (!r.ok || !j.ok) throw new Error(j.error || '操作失败');
-          showMsg(`草稿 #${d.id} 已标记发布，并写入一条私聊日常记忆`, 'ok');
+          showMsg(`草稿 #${d.id} 已归档为已发布，并写入她的私聊日常记忆（可在「记忆管理」中查看）`, 'ok');
           await loadStudio();
         } catch (e) {
           showMsg(e.message || '标记失败', 'err');
@@ -296,11 +459,17 @@ function renderDrafts(drafts) {
         await loadStudio();
       });
       actions.appendChild(discBtn);
+    } else if (d.status === 'published') {
+      const pubInfo = document.createElement('div');
+      pubInfo.className = 'text-xs text-emerald-700 flex items-center gap-2 flex-wrap';
+      const at = d.published_at ? `发布于 ${String(d.published_at).replace('T', ' ').slice(0, 16)}` : '已标记发布';
+      pubInfo.innerHTML = `<span>✅ ${at}</span>${d.backflow_done ? ' · <a href="/app/memories.html" class="underline font-semibold">已回流到她的记忆（去记忆管理查看 →）</a>' : ''}`;
+      actions.appendChild(pubInfo);
     }
 
     card.append(head, caption);
     if (d.voice_script) card.appendChild(script);
-    if (mediaRow.children.length) card.appendChild(mediaRow);
+    if (previewWrap.children.length) card.appendChild(previewWrap);
     card.appendChild(actions);
     box.appendChild(card);
   }
@@ -334,7 +503,8 @@ async function loadStudio() {
     } else {
       lockEl.classList.add('hidden');
     }
-    renderDrafts(data.drafts || []);
+    allDrafts = data.drafts || [];
+    renderDrafts(allDrafts);
   } catch (e) {
     showMsg(e.message || '加载失败', 'err');
   }

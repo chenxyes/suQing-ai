@@ -564,6 +564,97 @@ async function fetchBufferWithLimit(url, maxBytes = MAX_REMOTE_BYTES, ms = 20000
   return buf;
 }
 
+const CURATED_LIST_TTL_MS = 30 * 60 * 1000;
+const CURATED_LIST_CACHE = new Map(); // packId -> { ts, items }
+const CURATED_IMG_CACHE = new Map();  // `${packId}/${name}` -> { buffer, contentType }
+const MAX_PREVIEW_IMG_CACHE = 120;
+
+const EXT_TO_MIME = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+};
+
+async function listCuratedPackFiles(pack, { fetcher = fetchJsonWithTimeout } = {}) {
+  const cached = CURATED_LIST_CACHE.get(pack.id);
+  if (cached && (Date.now() - cached.ts) < CURATED_LIST_TTL_MS) {
+    return cached.items;
+  }
+  const raw = await fetcher(GH_CONTENTS_BASE + encodeURIComponent(pack.repoDir));
+  if (!Array.isArray(raw)) throw new Error('返回列表异常');
+  const filtered = raw.filter(
+    it => it?.type === 'file'
+      && /\.(png|jpe?g|gif|webp)$/i.test(it.name || '')
+      && (it.size || 0) <= MAX_REMOTE_BYTES,
+  );
+  CURATED_LIST_CACHE.set(pack.id, { ts: Date.now(), items: filtered });
+  return filtered;
+}
+
+export async function previewCuratedPack(packId, { limit = 12, offset = 0, fetcher } = {}) {
+  const pack = CURATED_PACKS.find(p => p.id === packId);
+  if (!pack) throw new Error('未知的精选表情包');
+  const safeLimit = Math.max(1, Math.min(24, Number(limit) || 12));
+  const safeOffset = Math.max(0, Number(offset) || 0);
+  const files = await listCuratedPackFiles(pack, fetcher ? { fetcher } : {});
+  const slice = files.slice(safeOffset, safeOffset + safeLimit).map(it => {
+    const tags = deriveTagsFromName(it.name, pack.baseTags);
+    const emotion = pickPrimaryEmotion(tags, pack.defaultEmotion);
+    return {
+      name: it.name,
+      label: String(it.name || '').replace(/\.[^.]+$/, '').slice(0, 40),
+      size: it.size || 0,
+      tags,
+      emotion,
+      preview_url: `/api/stickers/curated-preview/${encodeURIComponent(pack.id)}/${encodeURIComponent(it.name)}`,
+    };
+  });
+  return {
+    pack: {
+      id: pack.id,
+      name: pack.name,
+      emoji: pack.emoji,
+      desc: pack.desc,
+      risk: pack.risk,
+      risk_label: pack.riskLabel,
+      base_tags: pack.baseTags,
+    },
+    total_in_pack: files.length,
+    offset: safeOffset,
+    limit: safeLimit,
+    has_more: safeOffset + slice.length < files.length,
+    items: slice,
+  };
+}
+
+export async function fetchCuratedPreviewImage(packId, filename, { fetcher = fetchBufferWithLimit } = {}) {
+  const pack = CURATED_PACKS.find(p => p.id === packId);
+  if (!pack) return null;
+  const rawName = String(filename || '').trim();
+  if (!rawName || rawName.includes('/') || rawName.includes('\\') || rawName.includes('..') || rawName.startsWith('.')) {
+    return null;
+  }
+  const ext = path.extname(rawName).toLowerCase();
+  const contentType = EXT_TO_MIME[ext];
+  if (!contentType) return null;
+
+  const cacheKey = `${pack.id}/${rawName}`;
+  const hit = CURATED_IMG_CACHE.get(cacheKey);
+  if (hit) return hit;
+
+  const rawUrl = GH_RAW_BASE + encodeURIComponent(pack.repoDir) + '/' + encodeURIComponent(rawName);
+  const buffer = await fetcher(rawUrl, MAX_REMOTE_BYTES);
+  const entry = { buffer, contentType };
+  if (CURATED_IMG_CACHE.size >= MAX_PREVIEW_IMG_CACHE) {
+    const firstKey = CURATED_IMG_CACHE.keys().next().value;
+    if (firstKey !== undefined) CURATED_IMG_CACHE.delete(firstKey);
+  }
+  CURATED_IMG_CACHE.set(cacheKey, entry);
+  return entry;
+}
+
 export async function fetchCuratedPacks(packIds = [], { perPack = 8 } = {}) {
   const limit = Math.max(1, Math.min(20, Number(perPack) || 8));
   const selected = CURATED_PACKS.filter(p => packIds.includes(p.id));
@@ -580,21 +671,14 @@ export async function fetchCuratedPacks(packIds = [], { perPack = 8 } = {}) {
   const addedItems = [];
 
   for (const pack of selected) {
-    let items;
+    let candidates;
     try {
-      items = await fetchJsonWithTimeout(GH_CONTENTS_BASE + encodeURIComponent(pack.repoDir));
+      const files = await listCuratedPackFiles(pack);
+      candidates = files.slice(0, limit);
     } catch (e) {
       errors.push(`${pack.name}: ${e.message}`);
       continue;
     }
-    if (!Array.isArray(items)) {
-      errors.push(`${pack.name}: 返回列表异常`);
-      continue;
-    }
-
-    const candidates = items
-      .filter(it => it?.type === 'file' && /\.(png|jpe?g|gif|webp)$/i.test(it.name || '') && (it.size || 0) <= MAX_REMOTE_BYTES)
-      .slice(0, limit);
 
     const slugBase = slugifyAscii(pack.id, 'pack');
     for (let i = 0; i < candidates.length; i++) {
@@ -673,7 +757,18 @@ async function generateStickerImageBuffer({ companion = null, emotion = 'happy',
 
   let buf = null;
   let ext = 'png';
-  if (result.b64) {
+  if (typeof result === 'string') {
+    const dataMatch = result.match(/^data:image\/([a-zA-Z0-9.+-]+);base64,(.+)$/);
+    if (dataMatch) {
+      buf = Buffer.from(dataMatch[2], 'base64');
+      ext = dataMatch[1].toLowerCase().replace('jpeg', 'jpg');
+    } else if (/^https?:\/\//i.test(result)) {
+      const dl = await downloadImageWithGuards(result, { maxBytes: 5 * 1024 * 1024 });
+      buf = dl.buffer;
+      if (/webp/i.test(dl.contentType || '')) ext = 'webp';
+      else if (/jpe?g/i.test(dl.contentType || '')) ext = 'jpg';
+    }
+  } else if (result.b64) {
     buf = Buffer.from(result.b64, 'base64');
   } else if (result.url) {
     const dl = await downloadImageWithGuards(result.url, { maxBytes: 5 * 1024 * 1024 });

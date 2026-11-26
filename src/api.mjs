@@ -1856,7 +1856,7 @@ router.get('/stickers/file/:fname', async (req, res) => {
   const full = resolveStickerFilePath(req.params.fname, { candidate: false });
   if (!full) return res.status(404).end();
   res.setHeader('Cache-Control', 'public, max-age=86400');
-  return res.sendFile(full);
+  return res.sendFile(path.basename(full), { root: path.dirname(full) });
 });
 
 router.get('/stickers/candidate/:fname', async (req, res) => {
@@ -1864,7 +1864,7 @@ router.get('/stickers/candidate/:fname', async (req, res) => {
   const full = resolveStickerFilePath(req.params.fname, { candidate: true });
   if (!full) return res.status(404).end();
   res.setHeader('Cache-Control', 'no-cache');
-  return res.sendFile(full);
+  return res.sendFile(path.basename(full), { root: path.dirname(full) });
 });
 
 router.post('/stickers/upload', requireAuth, blockIfHosted, async (req, res) => {
@@ -1918,6 +1918,31 @@ router.post('/stickers/recommend-packs', requireAuth, async (req, res) => {
     return ok(res, recommendPacksForCompanion(companion));
   } catch (e) {
     return err(res, e.message, 500);
+  }
+});
+
+router.get('/stickers/curated/:packId/preview', requireAuth, async (req, res) => {
+  try {
+    const { previewCuratedPack } = await import('./sticker_studio.mjs');
+    const limit = Number(req.query?.limit) || 12;
+    const offset = Number(req.query?.offset) || 0;
+    const data = await previewCuratedPack(req.params.packId, { limit, offset });
+    return ok(res, data);
+  } catch (e) {
+    return err(res, e.message || '加载精选图库预览失败', 400);
+  }
+});
+
+router.get('/stickers/curated-preview/:packId/:fname', async (req, res) => {
+  try {
+    const { fetchCuratedPreviewImage } = await import('./sticker_studio.mjs');
+    const img = await fetchCuratedPreviewImage(req.params.packId, req.params.fname);
+    if (!img) return res.status(404).end();
+    res.setHeader('Content-Type', img.contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    return res.send(img.buffer);
+  } catch {
+    return res.status(502).end();
   }
 });
 
@@ -3363,7 +3388,7 @@ router.get('/companions/:id/visual-identity/candidate-image/:fname', requireAuth
     const full = candidatePath(id, req.params.fname);
     if (!full) return err(res, '候选图不存在或已过期', 404);
     res.set('Cache-Control', 'private, max-age=300');
-    return res.sendFile(full);
+    return res.sendFile(path.basename(full), { root: path.dirname(full) });
   } catch (e) {
     return err(res, e.message || 'serve 失败', 500);
   }
@@ -4154,16 +4179,21 @@ router.post('/companions/:id/social/drafts/:draftId/discard', requireAuth, (req,
   return ok(res, { draft: updateSocialDraft(draftId, { status: 'discarded' }) });
 });
 
-// GET /api/companions/:id/social/media/:draftId/:filename — 鉴权受控下载合成的图片/配音/MP4
+// GET /api/companions/:id/social/media/:draftId/:filename — 鉴权受控预览/下载合成的图片/配音/MP4
 router.get('/companions/:id/social/media/:draftId/:filename', requireAuth, (req, res) => {
   const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
   const draftId = intId(req.params.draftId); if (!draftId) return err(res, 'draftId 无效');
   const c  = requireOwnedCompanion(req, res, id); if (!c) return;
   const safeName = path.basename(String(req.params.filename || ''));
   if (!/^[A-Za-z0-9_.-]+$/.test(safeName)) return err(res, '文件名无效', 400);
-  const fullPath = path.join(getStudioMediaDir(id, draftId), safeName);
+  const mediaDir = getStudioMediaDir(id, draftId);
+  const fullPath = path.join(mediaDir, safeName);
   if (!existsSync(fullPath)) return err(res, '文件不存在', 404);
-  return res.sendFile(fullPath);
+  if (req.query?.download === '1') {
+    res.setHeader('Content-Disposition', `attachment; filename="draft_${draftId}_${safeName}"`);
+  }
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  return res.sendFile(safeName, { root: mediaDir });
 });
 
 // POST /api/companions/:id/social/reply-suggest
