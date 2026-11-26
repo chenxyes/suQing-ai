@@ -2,8 +2,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 const html = readFileSync(new URL('../public/app/setup.html', import.meta.url), 'utf8');
+const setupJs = readFileSync(new URL('../public/app/setup.js', import.meta.url), 'utf8');
 for (const [, script] of html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)) new vm.Script(script);
-const updateTabs = /function updateTabs\(\) \{[\s\S]*?\n\}/.exec(html)?.[0];
+new vm.Script(setupJs);
+const scriptSrc = html + '\n' + setupJs;
+const updateTabs = /function updateTabs\(\) \{[\s\S]*?\n\}/.exec(scriptSrc)?.[0];
 assert.ok(updateTabs);
 const tabs = new Map();
 const document = { getElementById(id) {
@@ -23,8 +26,8 @@ for (const cap of ['vision', 'asr', 'tts', 'image', 'embedding']) {
 assert.ok(!/<head>[\s\S]*<section[\s\S]*<\/head>/.test(html));
 assert.match(html, /<option value="fish">Fish Audio/);
 assert.match(html, /id="s2-tts-model-hint"/);
-assert.match(html, /Reference ID（可选）/);
-const ttsHints = html.slice(html.indexOf('const TTS_VOICE_HINTS'), html.indexOf('// ─── ASR Provider'));
+assert.match(scriptSrc, /Reference ID（可选）/);
+const ttsHints = scriptSrc.slice(scriptSrc.indexOf('const TTS_VOICE_HINTS'), scriptSrc.indexOf('// ─── ASR Provider'));
 const hintElements = new Map(['s2-tts-azure-row', 's2-tts-doubao-row', 's2-tts-voice-hint', 's2-tts-model-hint', 's2-tts-voice-label', 's2-tts-key-label'].map(id => [id, {
   classList: { toggle() {} }, textContent: '', addEventListener() {},
 }]));
@@ -37,7 +40,7 @@ assert.match(hintElements.get('s2-tts-voice-label').textContent, /Reference ID/)
 assert.match(hintElements.get('s2-tts-key-label').textContent, /Fish Audio/);
 console.log('setup UI: inline scripts, tab initialization and all capability controls passed');
 
-const saveSearch = /async function saveSearch\(\) \{[\s\S]*?\n\}/.exec(html)?.[0];
+const saveSearch = /async function saveSearch\(\) \{[\s\S]*?\n\}/.exec(scriptSrc)?.[0];
 assert.ok(saveSearch);
 const fields = { 's2-search-provider': { value: 'tavily' }, 's2-search-key': { value: 'fixture-key' } };
 const messages = []; let refreshed = 0;
@@ -55,7 +58,7 @@ assert.equal(fields['s2-search-key'].value, '', 'saved search key must be cleare
 assert.equal(refreshed, 1, 'successful save must refresh metadata');
 console.log('setup UI: search save behavior passed');
 
-const testOptional = /async function testOptional\(cap\) \{[\s\S]*?\n\}/.exec(html)?.[0];
+const testOptional = /async function testOptional\(cap\) \{[\s\S]*?\n\}/.exec(scriptSrc)?.[0];
 const embeddingFields = { 's2-embedding-provider': { value: '' }, 's2-embedding-test': { disabled: false } };
 let testedProvider = '';
 let embeddingRefreshed = 0;

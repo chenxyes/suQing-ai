@@ -40,6 +40,7 @@ import { buildSystemPrompt, buildFirstTurnHint } from './companion.mjs';
 import { syncUpdateCompanionState, extractAndSaveMemories, extractAndUpdateUserProfile, consumePendingCelebration, detectUserConfession, detectCompanionConfession, detectIntimacyOvereach, canAcceptConfession, daysSinceMeet, DAYS_TO_LOVER } from './memory.mjs';
 import { buildLongTermDigest } from './plan_tasks.mjs';
 import { parseStickerMarkers, buildStickerPromptHint, hasStickers } from './stickers.mjs';
+import { recordStickerWish } from './sticker_studio.mjs';
 import { detectTeaching, buildShapingConfirmHint, buildShapingPromptHint } from './shaping.mjs';
 import { buildWorksPromptHint } from './current_works.mjs';   // v1.21.4 PR-W2 表达层注入
 import { buildRealityFacts, isNightShanghai } from './utils/reality_facts.mjs';   // v1.21.4 PR-W3 统一真实世界事实层
@@ -1092,7 +1093,16 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
     const deliveredSegments = [];
     for (let i = 0; i < segments.length; i++) {
       const segment = segments[i];
-      const { text: textOnly, stickers } = parseStickerMarkers(segment);
+      const { text: textOnly, stickers, missingTags } = parseStickerMarkers(segment);
+      if (companion.sticker_reply_enabled && missingTags?.length) {
+        for (const tag of missingTags) {
+          try {
+            recordStickerWish({ tag, companionId: companion.id, context: textOnly.slice(0, 60) });
+          } catch (e) {
+            log('debug', `[Bot] sticker wish record skipped: ${e.message}`);
+          }
+        }
+      }
 
       if (textOnly) {
         // 第一条按完整长度计算延迟，后续按本段长度（更短）

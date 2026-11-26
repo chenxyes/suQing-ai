@@ -13,12 +13,12 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5" />
   <meta name="color-scheme" content="light dark" />
-  <meta name="theme-color" content="#FFB6D9" />
+  <meta name="theme-color" content="#FFB6D9" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0F0F12" media="(prefers-color-scheme: dark)" />
   <title>溪语AI · 开源 AI 陪伴框架 (Xiyu AI · Open-source AI Companion Framework)</title>
   <meta name="description" content="溪语 AI 是一个开源的 AI 陪伴框架（MIT 协议）— 把大模型当作有完整人生背景的虚拟个体来调度，支持多家 chat / image provider 切换，自带浏览器 playground，可选微信网页扫码绑定。Xiyu AI: an open-source AI companion framework on GitHub (MIT)." />
   <meta name="keywords" content="AI女友,虚拟伴侣,溪语AI,AI聊天,微信AI,open source AI companion,xiyu ai,GitHub,MIT,Node.js,DeepSeek,Claude,GPT,LLM" />
   <meta name="author" content="溪语 AI Contributors" />
-  <meta name="theme-color" content="#FFFFFF" />
 
   <link rel="canonical" href="https://xiyuai.cc/" />
   <link rel="alternate" type="text/markdown" href="/llms.txt" title="LLM-friendly project index (llms.txt)" />
@@ -30,12 +30,12 @@
   <meta property="og:locale" content="zh_CN" />
   <meta property="og:locale:alternate" content="en_US" />
   <meta property="og:type" content="website" />
-  <meta property="og:image" content="/logo.png?v=2" />
+  <meta property="og:image" content="/logo-512.png" />
 
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="溪语AI / Xiyu AI · open-source AI companion framework" />
   <meta name="twitter:description" content="MIT-licensed AI companion framework — virtual character with full backstory, multi-provider LLM support, in-browser playground." />
-  <meta name="twitter:image" content="/logo.png?v=2" />
+  <meta name="twitter:image" content="/logo-512.png" />
 
   <!-- 显式开放给主流 AI 训练 / 答案引擎爬虫 -->
   <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1" />
@@ -69,33 +69,13 @@
   }
   </script>
 
-  <link rel="icon" href="/logo.png?v=2" />
-  <link rel="apple-touch-icon" href="/logo.png?v=2" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
   <link rel="preload" as="image" href="/logo-512.webp?v=2" type="image/webp" />
 
-  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/app/tailwind.css" />
   <link rel="stylesheet" href="/app/glass.css" />
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          colors: {
-            sakura:'#FFB6D9','sakura-soft':'#FFE8F2','sakura-deep':'#FF8FB8',
-            ink:'#1D1D1F', mute:'#86868B', line:'#F0F0F2', cloud:'#FAFAFA',
-          },
-          fontFamily: { sans: ['-apple-system','BlinkMacSystemFont','"PingFang SC"','"Hiragino Sans GB"','"Microsoft YaHei"','sans-serif'] },
-          boxShadow: {
-            sakura: '0 4px 24px rgba(255, 182, 217, 0.15)',
-            'sakura-lg':'0 16px 48px rgba(255, 143, 184, 0.22)',
-            nav: '0 1px 0 rgba(0,0,0,0.04), 0 8px 24px rgba(0,0,0,0.04)',
-            soft: '0 2px 16px rgba(0,0,0,0.04)',
-          },
-          letterSpacing: { tightest: '-0.04em' },
-          maxWidth: { content: '1120px' },
-        },
-      },
-    };
-  </script>
 
   <style>
     html { scroll-behavior: smooth; -webkit-font-smoothing: antialiased; }
@@ -296,8 +276,9 @@
 </head>
 
 <body class="bg-white text-ink font-sans antialiased selection:bg-sakura/30 selection:text-ink">
+  <a href="#hero" class="skip-link">跳到主要内容</a>
 
-  <nav id="nav" class="fixed top-0 inset-x-0 z-50 transition-all duration-300 bg-white/70 backdrop-blur-xl backdrop-saturate-150">
+  <nav id="nav" aria-label="主导航" class="fixed top-0 inset-x-0 z-50 transition-all duration-300 bg-white/70 backdrop-blur-xl backdrop-saturate-150">
     <div class="max-w-content mx-auto px-6 lg:px-8 h-16 flex items-center justify-between">
       <a href="#hero" class="flex items-center gap-2.5">
         <img src="/logo-256.webp?v=2" alt="溪语AI" width="32" height="32" class="w-8 h-8 rounded-lg" />
@@ -315,7 +296,7 @@
           <i data-lucide="arrow-right" class="w-3.5 h-3.5"></i>
         </a>
       </div>
-      <button id="menu-btn" class="md:hidden p-2 -mr-2" aria-label="菜单" data-i18n-aria="nav.menu">
+      <button type="button" id="menu-btn" class="md:hidden p-2 -mr-2" aria-label="菜单" aria-expanded="false" aria-controls="mobile-menu" data-i18n-aria="nav.menu">
         <i data-lucide="menu" class="w-6 h-6 text-ink"></i>
       </button>
     </div>
@@ -831,9 +812,9 @@
     </div>
   </footer>
 
-  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <script src="/vendor/lucide.min.js"></script>
   <script>
-    lucide.createIcons({ attrs: { 'stroke-width': 1.8 } });
+    lucide.createIcons({ attrs: { 'stroke-width': 1.8, 'aria-hidden': 'true' } });
 
     // v1.5.1: SINGLE_USER 模式 — 所有指向 /app/auth.html 的入口改为直接进 dashboard
     // 已登录的用户也透明走 auth.html 自动跳转链路（auth.html 自己处理 single_user 自动登录）
@@ -879,18 +860,18 @@
     const menuBtn = document.getElementById('menu-btn');
     const mobileMenu = document.getElementById('mobile-menu');
     let menuOpen = false;
-    menuBtn?.addEventListener('click', () => {
-      menuOpen = !menuOpen;
-      mobileMenu.classList.toggle('hidden', !menuOpen);
-      menuBtn.innerHTML = '<i data-lucide="' + (menuOpen ? 'x' : 'menu') + '" class="w-6 h-6 text-ink"></i>';
-      lucide.createIcons({ attrs: { 'stroke-width': 1.8 } });
-    });
-    mobileMenu?.querySelectorAll('a').forEach(a => a.addEventListener('click', () => {
-      menuOpen = false;
-      mobileMenu.classList.add('hidden');
-      menuBtn.innerHTML = '<i data-lucide="menu" class="w-6 h-6 text-ink"></i>';
-      lucide.createIcons({ attrs: { 'stroke-width': 1.8 } });
-    }));
+    function setMenuOpen(open) {
+      menuOpen = open;
+      mobileMenu?.classList.toggle('hidden', !open);
+      menuBtn?.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (menuBtn) {
+        menuBtn.innerHTML = '<i data-lucide="' + (open ? 'x' : 'menu') + '" class="w-6 h-6 text-ink"></i>';
+        lucide.createIcons({ attrs: { 'stroke-width': 1.8, 'aria-hidden': 'true' } });
+      }
+    }
+    menuBtn?.addEventListener('click', () => setMenuOpen(!menuOpen));
+    mobileMenu?.querySelectorAll('a').forEach(a => a.addEventListener('click', () => setMenuOpen(false)));
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && menuOpen) { setMenuOpen(false); menuBtn?.focus(); } });
   </script>
 
   <!-- 首次启动引导：chat provider 未配置则弹一个非阻塞的提示条 -->

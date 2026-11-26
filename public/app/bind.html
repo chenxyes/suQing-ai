@@ -5,22 +5,17 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5" />
   <meta name="color-scheme" content="light dark" />
-  <meta name="theme-color" content="#FFB6D9" />
+  <meta name="theme-color" content="#FFB6D9" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0F0F12" media="(prefers-color-scheme: dark)" />
+  <meta name="robots" content="noindex, nofollow" />
+  <meta name="description" content="通过网页扫码将你的溪语 AI 伴侣安全绑定到微信。" />
   <title>绑定微信 · 溪语AI</title>
-  <link rel="icon" href="/logo.png?v=2" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
 
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      theme: { extend: {
-        colors: { sakura:'#FFB6D9','sakura-soft':'#FFE8F2','sakura-deep':'#FF8FB8',
-          ink:'#1D1D1F', mute:'#86868B', line:'#F0F0F2', cloud:'#FAFAFA' },
-        fontFamily: { sans: ['-apple-system','BlinkMacSystemFont','"PingFang SC"','"Hiragino Sans GB"','"Microsoft YaHei"','sans-serif'] },
-        boxShadow: { sakura: '0 4px 24px rgba(255, 182, 217, 0.15)', card: '0 12px 48px rgba(0,0,0,0.06)' },
-        letterSpacing: { tightest: '-0.04em' },
-      } },
-    };
-  </script>
+  <link rel="stylesheet" href="/app/tailwind.css" />
+  <link rel="stylesheet" href="/app/glass.css" />
 
   <style>
     html { -webkit-font-smoothing: antialiased; }
@@ -201,9 +196,9 @@
     </div>
   </main>
 
-  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <script src="/vendor/lucide.min.js"></script>
   <script>
-    lucide.createIcons({ attrs: { 'stroke-width': 1.8 } });
+    lucide.createIcons({ attrs: { 'stroke-width': 1.8, 'aria-hidden': 'true' } });
 
     const user = JSON.parse(localStorage.getItem('xiyu_user') || 'null');
     const token = localStorage.getItem('xiyu_token') || '';
@@ -237,7 +232,7 @@
       document.getElementById('page-title').textContent = '重新绑定微信';
       document.getElementById('page-subtitle').textContent = '用新微信扫码添加好友，发送任意消息后会替换当前 Web 账号的微信身份。';
       document.getElementById('rebind-notice').classList.remove('hidden');
-      lucide.createIcons({ attrs: { 'stroke-width': 1.8 } });
+      lucide.createIcons({ attrs: { 'stroke-width': 1.8, 'aria-hidden': 'true' } });
     }
 
     function showMsg(text, kind = 'info') {
@@ -284,7 +279,7 @@
       const btn = document.getElementById('btn-confirm');
       btn.disabled = true;
       btn.innerHTML = `<i data-lucide="loader-2" class="inline w-4 h-4 spinner align-[-3px]"></i> ${text}`;
-      lucide.createIcons({ attrs: { 'stroke-width': 1.8 } });
+      lucide.createIcons({ attrs: { 'stroke-width': 1.8, 'aria-hidden': 'true' } });
     }
 
     function resetButton() {

@@ -376,7 +376,8 @@ try {
 // ─── 15. setup.html / auth.html 静态检查 ─────────────────────────────────
 try {
   const { readFileSync } = await import('node:fs');
-  const setupSrc = readFileSync(path.join(ROOT, 'public/app/setup.html'), 'utf-8');
+  const setupSrc = readFileSync(path.join(ROOT, 'public/app/setup.html'), 'utf-8') + '\n' +
+    readFileSync(path.join(ROOT, 'public/app/setup.js'), 'utf-8');
   const authSrc  = readFileSync(path.join(ROOT, 'public/app/auth.html'), 'utf-8');
 
   // setup.html 不得出现邮箱验证码发送逻辑

@@ -5,22 +5,17 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5" />
   <meta name="color-scheme" content="light dark" />
-  <meta name="theme-color" content="#FFB6D9" />
+  <meta name="theme-color" content="#FFB6D9" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0F0F12" media="(prefers-color-scheme: dark)" />
+  <meta name="robots" content="noindex, nofollow" />
+  <meta name="description" content="验证溪语 AI 离线留言胶囊的签名与真实性。" />
   <title>验证离线留言 · 溪语AI</title>
-  <link rel="icon" href="/logo.png?v=2" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
 
-  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/app/tailwind.css" />
   <link rel="stylesheet" href="/app/glass.css" />
-  <script>
-    tailwind.config = {
-      theme: { extend: {
-        colors: { sakura:'#FFB6D9','sakura-soft':'#FFE8F2','sakura-deep':'#FF8FB8',
-          ink:'#1D1D1F', mute:'#86868B', line:'#F0F0F2', cloud:'#FAFAFA' },
-        fontFamily: { sans: ['-apple-system','BlinkMacSystemFont','"PingFang SC"','"Hiragino Sans GB"','"Microsoft YaHei"','sans-serif'] },
-        boxShadow: { sakura: '0 4px 24px rgba(255,182,217,.15)', card: '0 12px 48px rgba(0,0,0,.06)' },
-      } },
-    };
-  </script>
   <style>
     html { -webkit-font-smoothing: antialiased; }
     body {
@@ -29,7 +24,7 @@
         #FAFAFA;
       background-attachment: fixed;
       font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
-      color: #1D1D1F;
+      color: var(--ink, #1D1D1F);
     }
     .btn-primary {
       background: linear-gradient(135deg, #FFB6D9 0%, #FF8FB8 100%);
