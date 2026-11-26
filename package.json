@@ -8,6 +8,9 @@
   "scripts": {
     "start": "node index.mjs",
     "dev": "node --watch index.mjs",
+    "build:css": "tailwindcss -i src/styles/tailwind.css -o public/app/tailwind.css --minify",
+    "build:vendor": "node scripts/sync-vendor.mjs",
+    "build:frontend": "npm run build:vendor && npm run build:css",
     "setup": "node scripts/setup-wizard.mjs",
     "setup:full": "bash scripts/setup.sh",
     "ilink:login": "node scripts/ilink_login.mjs",
@@ -22,7 +25,8 @@
     "stickers:fetch": "python3 scripts/fetch_stickers.py",
     "smoke": "bash scripts/release_smoke_test.sh",
     "postinstall": "wx-voice compile || echo '[postinstall] wx-voice compile failed (语音功能将不可用，先忽略)'",
-    "retention:board": "node scripts/retention-board.mjs"
+    "retention:board": "node scripts/retention-board.mjs",
+    "check:behavior": "node scripts/reply_context_check.mjs && node scripts/reply_review_check.mjs && node scripts/reply_pipeline_check.mjs && node scripts/behavior_runtime_check.mjs && node scripts/behavior_inner_check.mjs && node scripts/behavior_tasks_check.mjs && node scripts/behavior_bot_check.mjs && node scripts/behavior_playground_check.mjs && node scripts/proactive_delivery_check.mjs && node scripts/behavior_scheduler_check.mjs && node scripts/proactive_photo_delivery_check.mjs"
   },
   "keywords": [
     "ai-companion",
@@ -57,6 +61,8 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "eslint": "^10.4.1"
+    "eslint": "^10.4.1",
+    "lucide": "^0.511.0",
+    "tailwindcss": "^3.4.19"
   }
 }

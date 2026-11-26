@@ -1,3 +1,4 @@
+import { shanghaiMessageTime } from './activity_time.mjs';
 /**
  * AI 集成模块（业务层）
  *
@@ -24,6 +25,7 @@ import { imageGenerate } from './providers/image.mjs';
 import { visionRecognize } from './providers/vision.mjs';
 import { asrRecognize } from './providers/asr.mjs';
 import { embedText as _embedText } from './providers/embedding.mjs';
+export { embedTextWithDescriptor } from './providers/embedding.mjs';
 import { shouldSearch, webSearch, formatSearchContext } from './web_search.mjs';
 import './plugins/builtins.mjs';
 import { resolveMessageContext } from './plugins/registry.mjs';
@@ -295,6 +297,17 @@ function stripActionNarration(text) {
   return unwrapped.length ? unwrapped : text;
 }
 
+export async function resolveReplySearchContext(userMessage) {
+  try {
+    if (!shouldSearch(userMessage).search) return '';
+    const result = await webSearch(userMessage, { maxResults: 5, timeoutMs: 6000 });
+    if (result.ok && result.results.length) return formatSearchContext(userMessage, result.results) || '';
+  } catch (error) {
+    log('warn', `[ai] web_search 调用异常: ${error.message}`);
+  }
+  return '';
+}
+
 export async function generateReply(personaPrompt, history, userMessage, params = {}, ctx = {}) {
   // v1.2.10: 兜底默认与 companions 表 DEFAULT 对齐 (0.8 / 3000 / 0.95)，
   // 让回复更有创意、空间更宽、用词更自然。caller 显式传值会优先。
@@ -303,7 +316,7 @@ export async function generateReply(personaPrompt, history, userMessage, params 
   if (safetyLevel && temperature !== rawTemp) {
     log('info', `[ai] safety-aware temp: ${rawTemp} → ${temperature} (risk=${safetyLevel})`);
   }
-  const { accountId = null, companionId = null } = ctx;
+  const { accountId = null, companionId = null, purpose = 'reply', probe = false } = ctx;
   const _t0 = Date.now();
 
   const messages = [];
@@ -316,29 +329,18 @@ export async function generateReply(personaPrompt, history, userMessage, params 
       ? (h.direction === 'in' ? 'user' : 'assistant')
       : (h.role === 'user' ? 'user' : 'assistant');
     if (role === 'assistant' && isChatFallback(h.content)) continue;
-    messages.push({ role, content: h.content });
+    const at = shanghaiMessageTime(h.created_at);
+    messages.push({ role, content: at ? `[北京时间 ${at}] ${h.content}` : h.content });
   }
   messages.push({ role: 'user', content: userMessage });
 
-  // ─── 可选：联网搜索 + Phase 2 HTTPS 链接解析插件（仅 primary，对用户透明） ──
+  // ─── 可选：联网搜索 + Phase 2 HTTPS 链接解析插件（仅 primary 非 internal，对用户透明） ──
   // 搜失败 / 插件超时 / 未配置时静默继续，绝不阻断主对话。
-  let effectiveSystem = personaPrompt;
-  if (role === 'primary') {
-    try {
-      const judge = shouldSearch(userMessage);
-      if (judge.search) {
-        const sr = await webSearch(userMessage, { maxResults: 5, timeoutMs: 6000 });
-        if (sr.ok && sr.results.length > 0) {
-          const ctxBlock = formatSearchContext(userMessage, sr.results);
-          if (ctxBlock) {
-            effectiveSystem = `${effectiveSystem}\n\n${ctxBlock}`;
-            log('debug', `[ai] web_search injected hits=${sr.results.length} provider=${sr.provider}`);
-          }
-        }
-      }
-    } catch (e) {
-      log('warn', `[ai] web_search 调用异常: ${e.message}`);
-    }
+  const search = (purpose === 'internal' || role !== 'primary')
+    ? ''
+    : (ctx.searchContext ?? await resolveReplySearchContext(userMessage));
+  let effectiveSystem = search ? `${personaPrompt}\n\n${search}` : personaPrompt;
+  if (role === 'primary' && purpose !== 'internal') {
     try {
       const resolvedBlock = await resolveMessageContext({ companionId, userText: userMessage });
       if (resolvedBlock) {
@@ -363,12 +365,12 @@ export async function generateReply(personaPrompt, history, userMessage, params 
     });
     let reply = text;
     // v1.13.x 真人感#1：非角色扮演模式，删掉动作神态旁白（确定性兜底，prompt 之外再保一道）
-    if (!/进入角色扮演模式/.test(personaPrompt)) reply = stripActionNarration(reply);
+    if (purpose !== 'internal' && !/进入角色扮演模式/.test(personaPrompt)) reply = stripActionNarration(reply);
     if (reasoning && companionId != null) {
       recordReasoningTrace({ companionId, provider, model, role, reasoning, replyPreview: reply });
     }
     log('info', `[ai] reply_length=${reply.length}`);
-    if (accountId && usage) {
+    if (!probe && accountId && usage) {
       try {
         recordAiUsage({
           accountId,
@@ -381,16 +383,16 @@ export async function generateReply(personaPrompt, history, userMessage, params 
       }
     }
     // P1-7 成本明细：chat 调用一律记一条（accountId 可空），含 token/延迟/状态/估算成本
-    recordAiUsageEvent({
-      accountId, companionId, provider, model,
+    if (!probe) recordAiUsageEvent({
+      accountId, companionId, provider, model, purpose,
       capability: 'chat', promptTokens: usage?.prompt_tokens || 0, completionTokens: usage?.completion_tokens || 0,
       latencyMs: Date.now() - _t0, status: reply === FALLBACK ? 'fallback' : 'ok',
     });
     return reply;
   } catch (err) {
     log('error', `[ai] chat 错误: ${JSON.stringify(chatFailureMetadata(err))}`);
-    recordAiUsageEvent({
-      accountId, companionId, provider: err.provider, model: err.model,
+    if (!probe) recordAiUsageEvent({
+      accountId, companionId, provider: err.provider, model: err.model, purpose,
       capability: 'chat', latencyMs: Date.now() - _t0, status: 'error',
     });
     return FALLBACK;

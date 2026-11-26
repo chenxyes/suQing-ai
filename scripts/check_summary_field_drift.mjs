@@ -26,9 +26,17 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-// ── 1. 从 dashboard.html 抽取所有 c.xxx 读取 ────────────────────────────
-const dashboardPath = path.join(ROOT, 'public/app/dashboard.html');
-const dashboardHtml = fs.readFileSync(dashboardPath, 'utf-8');
+// ── 1. 从 dashboard.html 及拆出的 JS 模块抽取所有 c.xxx 读取 ────────────
+const dashboardFiles = [
+  'public/app/dashboard.html',
+  'public/app/dashboard.js',
+  'public/app/dashboard-model-drawer.js',
+];
+const dashboardHtml = dashboardFiles
+  .map(f => path.join(ROOT, f))
+  .filter(p => fs.existsSync(p))
+  .map(p => fs.readFileSync(p, 'utf-8'))
+  .join('\n');
 // 匹配 c.xxx 但不匹配 c.xxx(...)（函数调用通常不是字段读取）
 // 注意：可能误报合法的局部变量 c（如 forEach((c) => c.label）。后面要过滤。
 const dashboardFields = new Set();

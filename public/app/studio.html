@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <script>(function(){try{var p=localStorage.getItem('xiyu_theme')||'auto';var d=p==='dark'||(p==='auto'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.setAttribute('data-theme',d?'dark':'light');}catch(e){}})();</script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5" />
+  <title>个人抖音工作台 · 溪语AI</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="stylesheet" href="/app/tailwind.css?v=35" />
+  <link rel="stylesheet" href="/app/glass.css?v=35" />
+  <style>
+    html { -webkit-font-smoothing: antialiased; }
+    .card { background:#fff; border-radius:18px; box-shadow:0 4px 20px rgba(0,0,0,0.05); border:1px solid #F0F0F2; }
+    .btn-primary { background: linear-gradient(135deg, #FFB6D9 0%, #FF8FB8 100%); color:#fff; border-radius:999px; font-weight:600; transition:all .15s; }
+    .btn-primary:hover:not(:disabled) { opacity:.92; }
+    .btn-primary:disabled { opacity:.5; cursor:not-allowed; }
+    .pill { display:inline-block; padding:2px 10px; border-radius:999px; font-size:11px; font-weight:600; }
+  </style>
+  <script src="/app/theme.js" defer></script>
+</head>
+<body class="min-h-screen bg-cloud font-sans text-ink antialiased">
+
+<div class="max-w-4xl mx-auto px-4 py-8 space-y-6">
+  <header class="flex items-center justify-between gap-3 flex-wrap">
+    <div>
+      <div class="flex items-center gap-3 text-sm text-mute mb-1">
+        <a href="/app/dashboard.html" class="hover:text-sakura-deep">← 返回控制台</a>
+        <span>·</span>
+        <a href="/app/plugins.html" class="hover:text-sakura-deep">插件与冲浪管理</a>
+      </div>
+      <h1 class="text-2xl font-bold tracking-tight">个人抖音工作台（Douyin Studio）</h1>
+      <p class="text-xs text-mute mt-1">公域隔离模式（public_mode）：绝不读取你的 1v1 私人记忆、好感度与冲突状态；人工确认发布，零封号风险。</p>
+    </div>
+    <div class="flex items-center gap-2">
+      <span id="ffmpegBadge" class="pill bg-gray-100 text-mute">检测 ffmpeg…</span>
+      <span id="companionBadge" class="text-xs text-mute"></span>
+    </div>
+  </header>
+
+  <div id="lockBanner" class="hidden rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700"></div>
+  <div id="msgBox" class="hidden rounded-xl px-4 py-3 text-sm"></div>
+
+  <!-- 模块 A：每日作品草稿包 -->
+  <section class="card p-5 space-y-4">
+    <div class="flex items-center justify-between flex-wrap gap-2">
+      <div>
+        <h2 class="text-base font-bold">1. 作品草稿包（图文 / 配音短视频）</h2>
+        <p class="text-xs text-mute mt-0.5">基于她的公开日程、手头作品与冲浪见闻生成标题、文案、口播稿与配图提示词。</p>
+      </div>
+      <span class="pill bg-sakura-soft text-sakura-deep">public_mode 已隔离</span>
+    </div>
+
+    <div class="p-3 rounded-xl bg-sakura-soft/40 border border-sakura/30 text-xs text-ink leading-relaxed flex flex-wrap items-center justify-between gap-2">
+      <span>
+        <strong>个人抖音号零风控发布流程：</strong>① 生成草稿并合成素材 → ② 预览并下载图片/配音/视频、复制文案 → ③ 前往抖音创作者中心手动发布 → ④ 回来点「标记已发布并回流日常」，她就会记住这条动态并在私聊里自然聊起（可在 <a href="/app/memories.html" class="text-sakura-deep underline font-semibold">记忆管理</a> 中查看）。
+      </span>
+      <a href="https://creator.douyin.com/creator-micro/content/upload" target="_blank" rel="noopener noreferrer"
+         class="px-3 py-1 rounded-full bg-white border border-sakura text-sakura-deep font-semibold hover:bg-sakura-soft/50 shrink-0">
+        📤 打开抖音创作者中心 ↗
+      </a>
+    </div>
+
+    <div class="grid sm:grid-cols-4 gap-3">
+      <select id="draftFormat" class="px-3 py-2 text-sm rounded-xl border border-line bg-cloud">
+        <option value="image_post">图文笔记 (image_post)</option>
+        <option value="voice_video">配音短视频 (voice_video)</option>
+      </select>
+      <input id="draftTopic" type="text" placeholder="可选：给个灵感方向（留空由她自己想）"
+             class="sm:col-span-2 px-3 py-2 text-sm rounded-xl border border-line bg-cloud outline-none focus:border-sakura" />
+      <button id="btnGenDraft" type="button" class="btn-primary px-4 py-2 text-sm">✨ 让她想一条</button>
+    </div>
+
+    <div class="flex items-center gap-2 flex-wrap pt-1" id="draftFilterBar">
+      <button type="button" data-filter="all" class="draft-filter-btn px-3 py-1 text-xs rounded-full border border-sakura bg-sakura-soft text-sakura-deep font-semibold">全部 (<span id="cntAll">0</span>)</button>
+      <button type="button" data-filter="active" class="draft-filter-btn px-3 py-1 text-xs rounded-full border border-line bg-white text-mute">草稿 / 待发布 (<span id="cntActive">0</span>)</button>
+      <button type="button" data-filter="published" class="draft-filter-btn px-3 py-1 text-xs rounded-full border border-line bg-white text-mute">✅ 已发布归档 (<span id="cntPublished">0</span>)</button>
+    </div>
+
+    <div id="draftList" class="space-y-4 text-sm text-mute">加载中…</div>
+  </section>
+
+  <!-- 图片放大预览弹窗 -->
+  <div id="imgPreviewModal" class="hidden fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="relative max-w-3xl max-h-[90vh] flex flex-col items-center gap-3">
+      <img id="imgPreviewTarget" src="" alt="素材预览" class="max-h-[80vh] max-w-full rounded-2xl shadow-2xl object-contain bg-white" />
+      <div class="flex items-center gap-3">
+        <button id="imgPreviewDownload" type="button" class="btn-primary px-5 py-1.5 text-xs">下载原图</button>
+        <button id="imgPreviewClose" type="button" class="px-5 py-1.5 text-xs rounded-full bg-white text-ink font-semibold">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 模块 B：评论 / 私信 3 档拟稿助手 -->
+  <section class="card p-5 space-y-4">
+    <div>
+      <h2 class="text-base font-bold">2. 评论 / 私信拟稿助手（支持贴文字或传截图）</h2>
+      <p class="text-xs text-mute mt-0.5">自动拦截提示词注入与恶意骚扰，一次给出「礼貌营业 / 俏皮接梗 / 简短高冷」3 种分寸，不污染私聊情绪。</p>
+    </div>
+
+    <div class="grid sm:grid-cols-3 gap-3">
+      <select id="replyKind" class="px-3 py-2 text-sm rounded-xl border border-line bg-cloud">
+        <option value="comment">评论区留言</option>
+        <option value="dm">陌生网友私信</option>
+      </select>
+      <label class="sm:col-span-2 flex items-center gap-2 px-3 py-2 text-xs rounded-xl border border-dashed border-sakura/60 bg-sakura-soft/20 cursor-pointer">
+        <span>📷 可选：上传抖音评论区/私信截图（≤4MB）</span>
+        <input id="replyScreenshot" type="file" accept="image/*" class="text-xs ml-auto max-w-[180px]" />
+      </label>
+    </div>
+
+    <textarea id="replyInbound" rows="3" placeholder="直接粘贴网友评论或私信内容（若已上传截图也可留空）…"
+              class="w-full px-3.5 py-2.5 text-sm rounded-xl border border-line bg-cloud outline-none focus:border-sakura"></textarea>
+
+    <div class="flex items-center justify-between gap-3 flex-wrap">
+      <span id="screenshotInfo" class="text-xs text-mute"></span>
+      <button id="btnSuggest" type="button" class="btn-primary px-5 py-2 text-sm">💬 生成 3 档候选回复</button>
+    </div>
+
+    <div id="suggestResult" class="hidden space-y-2.5 pt-3 border-t border-line"></div>
+  </section>
+</div>
+
+<script>
+let companionId = '';
+let studioAllowed = true;
+let screenshotDataUrl = '';
+let screenshotMime = 'image/jpeg';
+let allDrafts = [];
+let activeFilter = 'all';
+const previewObjectUrls = [];
+let modalDownloadCtx = null;
+const initialFeedId = new URLSearchParams(location.search).get('feedId') || '';
+
+function clearPreviewUrls() {
+  while (previewObjectUrls.length) {
+    try { URL.revokeObjectURL(previewObjectUrls.pop()); } catch {}
+  }
+}
+
+async function fetchAuthedMediaBlobUrl(draftId, fileName) {
+  const r = await fetch(`/api/companions/${encodeURIComponent(companionId)}/social/media/${encodeURIComponent(draftId)}/${encodeURIComponent(fileName)}`, {
+    headers: authHeaders(),
+  });
+  if (!r.ok) throw new Error(`加载失败 (${r.status})`);
+  const blob = await r.blob();
+  const url = URL.createObjectURL(blob);
+  previewObjectUrls.push(url);
+  return url;
+}
+
+function openImageLightbox(blobUrl, draftId, fileName) {
+  const modal = document.getElementById('imgPreviewModal');
+  document.getElementById('imgPreviewTarget').src = blobUrl;
+  modalDownloadCtx = { draftId, fileName };
+  modal.classList.remove('hidden');
+}
+
+function closeImageLightbox() {
+  document.getElementById('imgPreviewModal').classList.add('hidden');
+  document.getElementById('imgPreviewTarget').src = '';
+  modalDownloadCtx = null;
+}
+
+document.getElementById('imgPreviewClose').addEventListener('click', closeImageLightbox);
+document.getElementById('imgPreviewModal').addEventListener('click', (e) => {
+  if (e.target.id === 'imgPreviewModal') closeImageLightbox();
+});
+document.getElementById('imgPreviewDownload').addEventListener('click', () => {
+  if (modalDownloadCtx) downloadAuthedMedia(modalDownloadCtx.draftId, modalDownloadCtx.fileName);
+});
+
+document.getElementById('draftFilterBar').addEventListener('click', (e) => {
+  const btn = e.target.closest('.draft-filter-btn');
+  if (!btn) return;
+  activeFilter = btn.dataset.filter || 'all';
+  document.querySelectorAll('.draft-filter-btn').forEach(b => {
+    const on = b.dataset.filter === activeFilter;
+    b.className = 'draft-filter-btn px-3 py-1 text-xs rounded-full border ' + (
+      on ? 'border-sakura bg-sakura-soft text-sakura-deep font-semibold' : 'border-line bg-white text-mute'
+    );
+  });
+  renderDrafts(allDrafts);
+});
+
+function getToken() {
+  return localStorage.getItem('xiyu_token') || localStorage.getItem('jwt_token') || sessionStorage.getItem('jwt_token') || '';
+}
+
+function authHeaders(extra = {}) {
+  const t = getToken();
+  return { ...(t ? { Authorization: `Bearer ${t}` } : {}), ...extra };
+}
+
+function showMsg(text, kind = 'info') {
+  const el = document.getElementById('msgBox');
+  el.textContent = text;
+  el.className = 'rounded-xl px-4 py-3 text-sm ' + (
+    kind === 'err' ? 'bg-red-50 text-red-700 border border-red-200'
+      : kind === 'ok' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+      : 'bg-sakura-soft text-sakura-deep border border-sakura/30'
+  );
+  el.classList.remove('hidden');
+}
+
+async function resolveCompanionId() {
+  const q = new URLSearchParams(location.search).get('id');
+  if (q) return q;
+  const cached = localStorage.getItem('xiyu_companion_id');
+  if (cached) return cached;
+  const r = await fetch('/api/me/companion', { headers: authHeaders() });
+  const j = await r.json().catch(() => ({}));
+  if (r.ok && j.ok && j.data?.companion_id) {
+    localStorage.setItem('xiyu_companion_id', String(j.data.companion_id));
+    return String(j.data.companion_id);
+  }
+  return '';
+}
+
+async function downloadAuthedMedia(draftId, fileName) {
+  try {
+    const r = await fetch(`/api/companions/${encodeURIComponent(companionId)}/social/media/${encodeURIComponent(draftId)}/${encodeURIComponent(fileName)}?download=1`, {
+      headers: authHeaders(),
+    });
+    if (!r.ok) throw new Error(`下载失败 (${r.status})`);
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `draft_${draftId}_${fileName}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  } catch (e) {
+    showMsg(e.message || '文件下载失败', 'err');
+  }
+}
+
+function renderDrafts(drafts) {
+  clearPreviewUrls();
+  const box = document.getElementById('draftList');
+  box.innerHTML = '';
+  const allList = Array.isArray(drafts) ? drafts : [];
+  const activeList = allList.filter(d => d.status !== 'published' && d.status !== 'discarded');
+  const pubList = allList.filter(d => d.status === 'published');
+  document.getElementById('cntAll').textContent = String(allList.length);
+  document.getElementById('cntActive').textContent = String(activeList.length);
+  document.getElementById('cntPublished').textContent = String(pubList.length);
+
+  const visible = activeFilter === 'published' ? pubList
+    : activeFilter === 'active' ? activeList
+    : allList;
+
+  if (!visible.length) {
+    box.textContent = activeFilter === 'published'
+      ? '还没有已发布的作品归档。完成发布后点「标记已发布并回流日常」，就会归档到这里并写入她的记忆。'
+      : '还没有抖音草稿，点上方「让她想一条」生成第一条吧。';
+    return;
+  }
+  for (const d of visible) {
+    const card = document.createElement('div');
+    card.className = 'p-4 rounded-xl bg-cloud border border-line space-y-3';
+
+    const head = document.createElement('div');
+    head.className = 'flex items-center justify-between gap-2 flex-wrap';
+    const title = document.createElement('div');
+    title.className = 'font-bold text-ink text-sm';
+    title.textContent = `#${d.id} · ${d.title || '无标题'}`;
+    const statusLabel = d.status === 'published' ? '已发布'
+      : d.status === 'ready' ? '素材就绪'
+      : d.status === 'discarded' ? '已丢弃'
+      : '草稿';
+    const badge = document.createElement('span');
+    badge.className = `pill ${
+      d.status === 'published' ? 'bg-emerald-50 text-emerald-700'
+        : d.status === 'ready' ? 'bg-blue-50 text-blue-700'
+        : d.status === 'discarded' ? 'bg-gray-200 text-mute'
+        : 'bg-sakura-soft text-sakura-deep'
+    }`;
+    badge.textContent = `${d.format === 'voice_video' ? '配音视频' : '图文'} · ${statusLabel}`;
+    head.append(title, badge);
+
+    const caption = document.createElement('p');
+    caption.className = 'text-sm text-ink whitespace-pre-wrap bg-white p-3 rounded-lg border border-line';
+    const tagsStr = (d.hashtags || []).map(t => `#${t}`).join(' ');
+    caption.textContent = `${d.caption || ''}${tagsStr ? `\n\n${tagsStr}` : ''}`;
+
+    const script = document.createElement('p');
+    script.className = 'text-xs text-mute';
+    script.textContent = d.voice_script ? `🎙️ 口播稿：${d.voice_script}` : '';
+
+    // 实时预览区（配图缩略图 + 音频播放器 + 视频播放器）
+    const previewWrap = document.createElement('div');
+    previewWrap.className = 'space-y-2.5';
+
+    if ((d.media_paths || []).length) {
+      const imgGrid = document.createElement('div');
+      imgGrid.className = 'grid grid-cols-2 sm:grid-cols-3 gap-2.5';
+      for (const imgFile of d.media_paths) {
+        const tile = document.createElement('div');
+        tile.className = 'bg-white rounded-xl border border-line overflow-hidden flex flex-col';
+        const thumbBox = document.createElement('div');
+        thumbBox.className = 'aspect-square bg-gray-50 flex items-center justify-center text-xs text-mute cursor-pointer overflow-hidden';
+        thumbBox.textContent = '加载预览中…';
+        const foot = document.createElement('div');
+        foot.className = 'px-2.5 py-1.5 flex items-center justify-between text-[11px] border-t border-line';
+        const lbl = document.createElement('span');
+        lbl.className = 'text-mute truncate';
+        lbl.textContent = imgFile;
+        const dlBtn = document.createElement('button');
+        dlBtn.type = 'button';
+        dlBtn.className = 'text-sakura-deep font-semibold hover:underline shrink-0';
+        dlBtn.textContent = '下载';
+        dlBtn.addEventListener('click', () => downloadAuthedMedia(d.id, imgFile));
+        foot.append(lbl, dlBtn);
+        tile.append(thumbBox, foot);
+        imgGrid.appendChild(tile);
+
+        fetchAuthedMediaBlobUrl(d.id, imgFile)
+          .then((blobUrl) => {
+            thumbBox.innerHTML = '';
+            const im = document.createElement('img');
+            im.src = blobUrl;
+            im.alt = imgFile;
+            im.className = 'w-full h-full object-cover hover:scale-[1.03] transition-transform';
+            thumbBox.title = '点击查看大图';
+            thumbBox.addEventListener('click', () => openImageLightbox(blobUrl, d.id, imgFile));
+            thumbBox.appendChild(im);
+          })
+          .catch(() => {
+            thumbBox.textContent = '预览加载失败（可点下方下载重试）';
+          });
+      }
+      previewWrap.appendChild(imgGrid);
+    }
+
+    if (d.audio_path) {
+      const audioRow = document.createElement('div');
+      audioRow.className = 'p-2.5 rounded-xl bg-white border border-line flex items-center gap-3 flex-wrap';
+      const audioEl = document.createElement('audio');
+      audioEl.controls = true;
+      audioEl.className = 'h-9 flex-1 min-w-[200px]';
+      const dlBtn = document.createElement('button');
+      dlBtn.type = 'button';
+      dlBtn.className = 'px-3 py-1 text-xs rounded-full border border-line hover:border-sakura font-medium';
+      dlBtn.textContent = `🔊 下载 ${d.audio_path}`;
+      dlBtn.addEventListener('click', () => downloadAuthedMedia(d.id, d.audio_path));
+      audioRow.append(audioEl, dlBtn);
+      previewWrap.appendChild(audioRow);
+      fetchAuthedMediaBlobUrl(d.id, d.audio_path)
+        .then((u) => { audioEl.src = u; })
+        .catch(() => {});
+    }
+
+    if (d.video_path) {
+      const videoBox = document.createElement('div');
+      videoBox.className = 'p-3 rounded-xl bg-white border border-emerald-200 space-y-2';
+      const videoEl = document.createElement('video');
+      videoEl.controls = true;
+      videoEl.playsInline = true;
+      videoEl.className = 'w-full max-h-[360px] rounded-lg bg-black';
+      const dlBtn = document.createElement('button');
+      dlBtn.type = 'button';
+      dlBtn.className = 'px-3 py-1.5 text-xs rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold';
+      dlBtn.textContent = `🎬 下载 9:16 视频 (${d.video_path})`;
+      dlBtn.addEventListener('click', () => downloadAuthedMedia(d.id, d.video_path));
+      videoBox.append(videoEl, dlBtn);
+      previewWrap.appendChild(videoBox);
+      fetchAuthedMediaBlobUrl(d.id, d.video_path)
+        .then((u) => { videoEl.src = u; })
+        .catch(() => {});
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'flex items-center gap-2 flex-wrap pt-1';
+
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'px-3 py-1.5 text-xs rounded-full border border-line bg-white hover:border-sakura';
+    copyBtn.textContent = '📋 复制标题与文案';
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(`${d.title}\n\n${caption.textContent}`);
+        copyBtn.textContent = '已复制 ✓';
+        setTimeout(() => { copyBtn.textContent = '📋 复制标题与文案'; }, 1500);
+      } catch {}
+    });
+    actions.appendChild(copyBtn);
+
+    if (d.status !== 'discarded') {
+      const renderBtn = document.createElement('button');
+      renderBtn.type = 'button';
+      renderBtn.className = 'px-3 py-1.5 text-xs rounded-full border border-sakura text-sakura-deep bg-white hover:bg-sakura-soft/40';
+      renderBtn.textContent = (d.media_paths?.length || d.video_path) ? '🔄 重新合成素材' : '🎨 合成配图/配音/视频';
+      renderBtn.addEventListener('click', async () => {
+        renderBtn.disabled = true;
+        renderBtn.textContent = '合成中…';
+        try {
+          const r = await fetch(`/api/companions/${encodeURIComponent(companionId)}/social/drafts/${d.id}/render`, {
+            method: 'POST',
+            headers: authHeaders({ 'Content-Type': 'application/json' }),
+          });
+          const j = await r.json();
+          if (!r.ok || !j.ok) throw new Error(j.error || '合成失败');
+          const notes = (j.data?.notices || []).join('；');
+          showMsg(`草稿 #${d.id} 合成完成${notes ? `（提示：${notes}）` : ''}`, 'ok');
+          await loadStudio();
+        } catch (e) {
+          showMsg(e.message || '合成失败', 'err');
+        } finally {
+          renderBtn.disabled = false;
+        }
+      });
+      actions.appendChild(renderBtn);
+    }
+
+    if (d.status !== 'published' && d.status !== 'discarded') {
+      const uploadLink = document.createElement('a');
+      uploadLink.href = 'https://creator.douyin.com/creator-micro/content/upload';
+      uploadLink.target = '_blank';
+      uploadLink.rel = 'noopener noreferrer';
+      uploadLink.className = 'px-3 py-1.5 text-xs rounded-full border border-line bg-white hover:border-sakura text-ink font-medium';
+      uploadLink.textContent = '📤 去抖音创作者中心上传 ↗';
+      actions.appendChild(uploadLink);
+
+      const pubBtn = document.createElement('button');
+      pubBtn.type = 'button';
+      pubBtn.className = 'px-3 py-1.5 text-xs rounded-full bg-emerald-500 text-white hover:bg-emerald-600';
+      pubBtn.textContent = '✅ 标记已发布并回流日常';
+      pubBtn.addEventListener('click', async () => {
+        pubBtn.disabled = true;
+        try {
+          const r = await fetch(`/api/companions/${encodeURIComponent(companionId)}/social/drafts/${d.id}/mark-published`, {
+            method: 'POST',
+            headers: authHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ backflow: true }),
+          });
+          const j = await r.json();
+          if (!r.ok || !j.ok) throw new Error(j.error || '操作失败');
+          showMsg(`草稿 #${d.id} 已归档为已发布，并写入她的私聊日常记忆（可在「记忆管理」中查看）`, 'ok');
+          await loadStudio();
+        } catch (e) {
+          showMsg(e.message || '标记失败', 'err');
+        } finally {
+          pubBtn.disabled = false;
+        }
+      });
+      actions.appendChild(pubBtn);
+
+      const discBtn = document.createElement('button');
+      discBtn.type = 'button';
+      discBtn.className = 'px-3 py-1.5 text-xs rounded-full text-mute hover:text-red-600';
+      discBtn.textContent = '丢弃';
+      discBtn.addEventListener('click', async () => {
+        await fetch(`/api/companions/${encodeURIComponent(companionId)}/social/drafts/${d.id}/discard`, {
+          method: 'POST',
+          headers: authHeaders(),
+        });
+        await loadStudio();
+      });
+      actions.appendChild(discBtn);
+    } else if (d.status === 'published') {
+      const pubInfo = document.createElement('div');
+      pubInfo.className = 'text-xs text-emerald-700 flex items-center gap-2 flex-wrap';
+      const at = d.published_at ? `发布于 ${String(d.published_at).replace('T', ' ').slice(0, 16)}` : '已标记发布';
+      pubInfo.innerHTML = `<span>✅ ${at}</span>${d.backflow_done ? ' · <a href="/app/memories.html" class="underline font-semibold">已回流到她的记忆（去记忆管理查看 →）</a>' : ''}`;
+      actions.appendChild(pubInfo);
+    }
+
+    card.append(head, caption);
+    if (d.voice_script) card.appendChild(script);
+    if (previewWrap.children.length) card.appendChild(previewWrap);
+    card.appendChild(actions);
+    box.appendChild(card);
+  }
+}
+
+async function loadStudio() {
+  if (!getToken()) { location.href = '/app/auth.html'; return; }
+  companionId = await resolveCompanionId();
+  if (!companionId) { showMsg('未找到角色，请先创建 AI 角色。', 'err'); return; }
+  document.getElementById('companionBadge').textContent = `角色 #${companionId}`;
+  try {
+    const r = await fetch(`/api/companions/${encodeURIComponent(companionId)}/social/drafts`, { headers: authHeaders() });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error(j.error || '加载失败');
+    const data = j.data || {};
+    studioAllowed = Boolean(data.studio_allowed);
+    const ffBadge = document.getElementById('ffmpegBadge');
+    if (data.ffmpeg?.available) {
+      ffBadge.className = 'pill bg-emerald-50 text-emerald-700';
+      ffBadge.textContent = '✅ ffmpeg 就绪（支持 9:16 MP4）';
+    } else {
+      ffBadge.className = 'pill bg-amber-50 text-amber-700';
+      ffBadge.textContent = '⚠️ 无 ffmpeg（自动降级图文+MP3包）';
+    }
+    const lockEl = document.getElementById('lockBanner');
+    if (!studioAllowed) {
+      lockEl.textContent = data.studio_lock_reason || '当前人设安全策略已锁定公域工作台。';
+      lockEl.classList.remove('hidden');
+      document.getElementById('btnGenDraft').disabled = true;
+      document.getElementById('btnSuggest').disabled = true;
+    } else {
+      lockEl.classList.add('hidden');
+    }
+    allDrafts = data.drafts || [];
+    renderDrafts(allDrafts);
+  } catch (e) {
+    showMsg(e.message || '加载失败', 'err');
+  }
+}
+
+document.getElementById('btnGenDraft').addEventListener('click', async () => {
+  const btn = document.getElementById('btnGenDraft');
+  btn.disabled = true;
+  btn.textContent = '构思中…';
+  try {
+    const body = {
+      format: document.getElementById('draftFormat').value,
+      topic_hint: document.getElementById('draftTopic').value.trim(),
+    };
+    if (initialFeedId) body.source_feed_id = Number(initialFeedId);
+    const r = await fetch(`/api/companions/${encodeURIComponent(companionId)}/social/drafts/generate`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error(j.error || '生成失败');
+    showMsg('✨ 新草稿已生成（已完成公域隐私清洗）', 'ok');
+    document.getElementById('draftTopic').value = '';
+    await loadStudio();
+  } catch (e) {
+    showMsg(e.message || '生成失败', 'err');
+  } finally {
+    btn.disabled = !studioAllowed;
+    btn.textContent = '✨ 让她想一条';
+  }
+});
+
+document.getElementById('replyScreenshot').addEventListener('change', (ev) => {
+  const file = ev.target.files?.[0];
+  const info = document.getElementById('screenshotInfo');
+  if (!file) { screenshotDataUrl = ''; info.textContent = ''; return; }
+  if (file.size > 4 * 1024 * 1024) {
+    showMsg('截图不能超过 4MB', 'err');
+    ev.target.value = '';
+    return;
+  }
+  screenshotMime = file.type || 'image/jpeg';
+  const reader = new FileReader();
+  reader.onload = () => {
+    screenshotDataUrl = String(reader.result || '');
+    info.textContent = `已选择截图：${file.name} (${Math.round(file.size / 1024)} KB)`;
+  };
+  reader.readAsDataURL(file);
+});
+
+document.getElementById('btnSuggest').addEventListener('click', async () => {
+  const btn = document.getElementById('btnSuggest');
+  const box = document.getElementById('suggestResult');
+  btn.disabled = true;
+  btn.textContent = '拟稿中…';
+  try {
+    const r = await fetch(`/api/companions/${encodeURIComponent(companionId)}/social/reply-suggest`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        inbound_kind: document.getElementById('replyKind').value,
+        inbound_text: document.getElementById('replyInbound').value.trim(),
+        screenshot_base64: screenshotDataUrl || undefined,
+        screenshot_mime: screenshotMime,
+      }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error(j.error || '拟稿失败');
+    const d = j.data || {};
+    box.innerHTML = '';
+    box.classList.remove('hidden');
+
+    if (d.extracted_text) {
+      const ext = document.createElement('div');
+      ext.className = 'text-xs text-mute bg-cloud p-2.5 rounded-lg border border-line';
+      ext.textContent = `📷 截图识读：${d.extracted_text}`;
+      box.appendChild(ext);
+    }
+
+    if (d.advisory === 'ignore_or_block') {
+      const warn = document.createElement('div');
+      warn.className = 'p-3 rounded-xl bg-red-50 border border-red-200 text-sm text-red-700 font-medium';
+      warn.textContent = `🛡️ ${d.warning || '检测到可疑内容，建议忽略或拉黑。'}`;
+      box.appendChild(warn);
+      return;
+    }
+
+    for (const s of (d.suggestions || [])) {
+      const row = document.createElement('div');
+      row.className = 'flex items-center justify-between gap-3 p-3 rounded-xl bg-cloud border border-line';
+      const left = document.createElement('div');
+      const tag = document.createElement('span');
+      tag.className = 'pill bg-sakura-soft text-sakura-deep mr-2';
+      tag.textContent = s.label || s.tone;
+      const txt = document.createElement('span');
+      txt.className = 'text-sm text-ink';
+      txt.textContent = s.text;
+      left.append(tag, txt);
+
+      const copy = document.createElement('button');
+      copy.type = 'button';
+      copy.className = 'px-3 py-1 text-xs rounded-full bg-white border border-line hover:border-sakura whitespace-nowrap';
+      copy.textContent = '复制';
+      copy.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(s.text);
+          copy.textContent = '已复制 ✓';
+          setTimeout(() => { copy.textContent = '复制'; }, 1500);
+        } catch {}
+      });
+      row.append(left, copy);
+      box.appendChild(row);
+    }
+
+    if (d.log_id) {
+      const bfBtn = document.createElement('button');
+      bfBtn.type = 'button';
+      bfBtn.className = 'mt-1 px-4 py-1.5 text-xs rounded-full border border-sakura text-sakura-deep hover:bg-sakura-soft/40';
+      bfBtn.textContent = '📌 把这条有趣互动单向记入她的今日生活';
+      bfBtn.addEventListener('click', async () => {
+        bfBtn.disabled = true;
+        const br = await fetch(`/api/companions/${encodeURIComponent(companionId)}/social/replies/${d.log_id}/backflow`, {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({}),
+        });
+        const bj = await br.json().catch(() => ({}));
+        if (br.ok && bj.ok) {
+          bfBtn.textContent = '✅ 已回流到她的今日生活记忆';
+        } else {
+          bfBtn.disabled = false;
+          showMsg(bj.error || '回流失败', 'err');
+        }
+      });
+      box.appendChild(bfBtn);
+    }
+  } catch (e) {
+    showMsg(e.message || '拟稿失败', 'err');
+  } finally {
+    btn.disabled = !studioAllowed;
+    btn.textContent = '💬 生成 3 档候选回复';
+  }
+});
+
+loadStudio();
+</script>
+</body>
+</html>

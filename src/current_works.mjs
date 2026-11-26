@@ -40,10 +40,21 @@ export function worksConfig(env = process.env) {
 
 function stripBrackets(s) { return String(s || '').replace(/[《》]/g, '').trim(); }
 
+function normalizeCandidate(candidate) {
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return null;
+  const kind = typeof candidate.kind === 'string' ? candidate.kind.trim().toLowerCase() : '';
+  if ((!VERIFIABLE.has(kind) && kind !== 'craft')
+    || typeof candidate.title !== 'string' || !stripBrackets(candidate.title)
+    || (candidate.creator != null && typeof candidate.creator !== 'string')) return null;
+  return { ...candidate, kind, title: candidate.title.trim(), creator: candidate.creator?.trim() || null,
+    progressNote: typeof candidate.progressNote === 'string' ? candidate.progressNote.trim() : null };
+}
+
 /** 闸1：是否必须按作品类验证。title 含《》→ 强制（确定性兜底，不靠 LLM 自报 kind）。 */
 export function requiresVerification(kind, title) {
   if (/《[^》]+》/.test(String(title || ''))) return true;
-  return VERIFIABLE.has(String(kind || '').toLowerCase());
+  // Only an explicitly recognized handcraft is exempt; unknown model output is not trusted.
+  return String(kind || '').trim().toLowerCase() !== 'craft';
 }
 
 /** 闸2：搜索结果里有没有"同时含作品名与作者"的证据。返回命中 snippet（≤300）或 null。 */
@@ -62,12 +73,14 @@ export function evidenceFromResults(results, title, creator) {
 
 /**
  * 单候选验证（§6 双闸）。
- * @returns {{status:'verified'|'generic'|'retry'|'skip', evidence:string|null}}
+ * @returns {{status:'verified'|'generic'|'retry'|'skip', evidence:string|null, reason?:string}}
  *   verified=入档具体名 / skip=craft 免验 / retry=无证据换一部 / generic=降级泛读态
  * deps（全注入，纯逻辑可测）：{ search, findCached, dailyUsed, dailyCap }
  */
 export async function verifyWorkCandidate(candidate, deps = {}) {
-  const { kind, title, creator } = candidate || {};
+  const normalized = normalizeCandidate(candidate);
+  if (!normalized) return { status: 'generic', evidence: null, reason: 'invalid_candidate' };
+  const { kind, title, creator } = normalized;
   const search = deps.search || ((q) => webSearch(q));
   const findCached = deps.findCached || findVerifiedWork;
   const dailyCap = deps.dailyCap ?? worksConfig().verifyDailyCap;
@@ -83,7 +96,7 @@ export async function verifyWorkCandidate(candidate, deps = {}) {
   // 日上限：异常循环防烧 Tavily 配额
   if (dailyUsed >= dailyCap) {
     log('warn', `[CurrentWorks] 作品验证日上限 ${dailyCap} 到顶 → 降级 generic`);
-    return { status: 'generic', evidence: null };
+    return { status: 'generic', evidence: null, reason: 'daily_cap' };
   }
 
   let res;
@@ -92,12 +105,12 @@ export async function verifyWorkCandidate(candidate, deps = {}) {
     res = await search(q);
   } catch (e) {
     log('warn', `[CurrentWorks] 作品验证失败（异常 ${e.message}）→ 降级 generic`);
-    return { status: 'generic', evidence: null };
+    return { status: 'generic', evidence: null, reason: 'provider_error' };
   }
   // provider 故障 ≠ 书是假的：降级 generic、不计作品失败、不重试
   if (!res || res.ok === false) {
     log('warn', `[CurrentWorks] 作品验证失败（provider ${res?.error || 'down'}）→ 降级 generic（不判真书为假）`);
-    return { status: 'generic', evidence: null };
+    return { status: 'generic', evidence: null, reason: res?.error === 'no_provider' ? 'no_provider' : 'provider_error' };
   }
   const evidence = evidenceFromResults(res.results, title, creator);
   if (evidence) return { status: 'verified', evidence };
@@ -153,10 +166,32 @@ export function progressStageNote(kind, ratio) {
   return stages[idx];
 }
 
-/** 该 work 当前应处的进度文案；与现 progress_note 不同才返回（跨阶段才推进，否则 null=不写库）。 */
+// generic 只保留活动类别，不把未验证的题材/名称当成作品。
+const GENERIC_LABELS = { book: '书', series: '剧集', anime: '动画', game: '游戏', craft: '手工' };
+const GENERIC_PROGRESS = {
+  book: ['刚开始闲时翻翻', '最近有空会接着读', '这阵子还在读', '最近偶尔翻翻'],
+  series: ['刚开始闲时看看剧', '最近有空会接着追剧', '这阵子还在追剧', '最近偶尔看看剧'],
+  anime: ['刚开始闲时看看动画', '最近有空会接着看动画', '这阵子还在看动画', '最近偶尔看看动画'],
+  game: ['刚开始闲时玩一会儿', '最近有空会接着玩', '这阵子还在玩', '最近偶尔玩一会儿'],
+  craft: ['刚开始闲时做点手工', '最近有空会接着做手工', '这阵子还在做手工', '最近偶尔做点手工'],
+};
+
+function genericSubject(work) {
+  const kind = String(work?.kind || '').toLowerCase();
+  // 新 generic 档案只存类别占位；兼容旧泛读题材记录，不把它包成作品名。
+  if (kind === 'book') return '一本' + (stripBrackets(work.title) || '书');
+  return { series: '一部剧', anime: '一部动画', game: '一款游戏', craft: '一些手工' }[kind] || '一本书';
+}
+
+/** 当前活动文案；同阶段返回 null，避免重复写库。 */
 export function advanceWorkProgress(work, now = new Date(), cfg = worksConfig()) {
-  if (!work || work.verify_status === 'generic') return null;   // generic 泛读态不指名进度
-  const note = progressStageNote(work.kind, workProgressRatio(work, now, cfg));
+  if (!work) return null;
+  const ratio = workProgressRatio(work, now, cfg);
+  const stages = GENERIC_PROGRESS[String(work.kind || '').toLowerCase()] || GENERIC_PROGRESS.book;
+  // generic 只描述普通活动的延续，不推断具体章节、关卡、集数或通关。
+  const note = work.verify_status === 'generic'
+    ? stages[ratio < 0.2 ? 0 : ratio < 0.5 ? 1 : ratio < 0.8 ? 2 : 3]
+    : progressStageNote(work.kind, ratio);
   return (note && note !== work.progress_note) ? note : null;
 }
 
@@ -172,14 +207,14 @@ export function buildScheduleWorksHint(works) {
   const verb = (k) => { const x = String(k || '').toLowerCase();
     return (x === 'series' || x === 'anime') ? '在追' : x === 'game' ? '在玩' : x === 'craft' ? '在做' : '在看'; };
   const lines = list.map(w => {
-    const t = w.verify_status === 'generic' ? `一本${stripBrackets(w.title)}`
+    const t = w.verify_status === 'generic' ? genericSubject(w)
       : String(w.kind || '').toLowerCase() === 'craft' ? stripBrackets(w.title)
         : `《${stripBrackets(w.title)}》`;
     return `${verb(w.kind)}${t}${w.progress_note ? `（${w.progress_note}）` : ''}`;
   });
   return `
-【她正在进行的事（来自档案 · 必须用真实条目）】她${lines.join('；')}。
-今天日程里「读书/看剧/看番/打游戏/做手工」类活动**必须引用上面这些真实条目的原名**（她在看哪本就写哪本），**绝不另编新书名/剧名**；进度自然延续（昨天看到一半→今天接着看）。
+【她正在进行的事（来自档案 · 注意验证状态）】她${lines.join('；')}。
+今天日程里「读书/看剧/看番/打游戏/做手工」类活动优先延续上面的档案；已验证作品可以引用原名，generic 只是未验证的普通活动，不能把类别或题材当作真实作品名，也不能声称搜索验证成功。**绝不另编新书名/剧名/游戏名**；generic 可以接着读、追剧或玩一会儿，不能编造章节、集数、关卡、剧情或通关。
 （★ 结构预留：未来 life_state 身体状态——生病/疲惫/生理期——同样作为"影响今日日程的状态源"在此并列注入，本任务先落 works。）`;
 }
 
@@ -200,8 +235,8 @@ function renderWork(w) {
   const kind = String(w?.kind || '').toLowerCase();
   const prog = w?.progress_note ? `（${clipNote(w.progress_note)}）` : '';
   if (status === 'generic') {
-    // generic 的 title 存的是题材（"推理小说"），绝不指名——模糊但不虚构（§8）
-    return `最近在看一本${stripBrackets(w.title) || '书'}${prog || '（还没看进去）'}`;
+    const verb = (kind === 'series' || kind === 'anime') ? '在追' : kind === 'game' ? '在玩' : kind === 'craft' ? '在做' : '在看';
+    return `${verb}${genericSubject(w)}${prog}`;
   }
   if (kind === 'craft' || status === 'skip') {
     return `手上在${stripBrackets(w.title)}${prog}`;       // "给外婆织围巾（快收尾了）"
@@ -213,25 +248,39 @@ function renderWork(w) {
 /**
  * 注入段（§8）：active works 事实行 + 三条行为约束。
  * 约束①他问起永放行（对话召回不挂冷却）②她别每条自荐（克制；冷却的语义侧）
- * ③存量虚构退场——问起档案外旧作品名按"看完了"接，不展开内容、不否认（§7 + 红验④）。
+ * ③档案外旧作品状态未确认，不凭空宣称完成，也不沿用未证实的进度/剧情。
  * works 为空 → 返回 ''（不注入）。纯函数，零 IO。
  */
 export function buildWorksPromptHint(works) {
   const list = (Array.isArray(works) ? works : []).filter(w => w && w.title);
   if (!list.length) return '';
   const line = list.map(renderWork).join('；');
-  // 退场约束做成"档案即唯一事实源"（W1 同philosophy）——否则旧虚构名还在最近对话里时，
-  // LLM 会顺着上下文继续编进度/剧情（沙箱实测：问《转角》她接着说"女主刚发现…"）。
-  // 必须让档案权威性压过近 16 轮上下文：上面列的才是"现在"，别的都已完结。
-  return `\n【手头的事】你最近${line}。**这就是你现在手头在看/在做的全部**。
+  // 当前档案提供可用活动，缺席不等于已完成；旧对话里的作品也不能据此续编。
+  return `\n【手头的事】你最近${line}。这是当前档案中记录的活动，不代表你全部的过往经历。
 - 他问起这些（"那本书看到哪了""最近在看啥"）你**永远正常接、聊得起来**——这是你的生活，不是不能说的秘密。
 - 但别每条消息都自己往上贴这些书/剧，尤其最近刚主动提过的就先放一放（真人不会逮着一本书天天念）。
-- **别的作品名——哪怕你前面对话里提到过——现在都当已经看完/翻完了**：他问起那些旧名，就自然带过（"啊那本早看完啦"），**绝不接着说它的进度或剧情**（接着编=继续虚构），也别否认说自己没提过。要聊新书只从上面这些里出。`;
+- generic 是未验证的普通活动，允许自然延续读书、追剧、玩游戏；类别/题材不是作品名，不要编造具体名称、章节、关卡、集数、剧情或验证成功。
+- 档案外的作品状态未确认，不能仅因不在当前档案就声称已完成或看完。他问起旧名时，结合可靠记录回答；没有依据就自然说明记不准具体进度，不续编剧情，也不否认确实说过的话。`;
+}
+
+/** 主动话题复用对话中的类别/验证状态表达，避免消费者自行按书拼接。 */
+export function buildProactiveWorkHint(work) {
+  if (!work) return '';
+  const sample = { book: '闲时翻了会儿书', series: '闲时看了会儿剧', anime: '闲时看了会儿动画', game: '闲时玩了一会儿', craft: '闲时做了点手工' }[String(work.kind || '').toLowerCase()] || '最近有空还在接着做';
+  const genericGuard = work.verify_status === 'generic'
+    ? '这只是未验证的普通活动，不要编造作品名、章节、集数、关卡、剧情或通关。' : '';
+  return `\n\n【★ 可选话题 · 手头的事】这次**可以**很自然地聊一句你最近${renderWork(work)}（随口说说活动近况，像"${sample}"），也可以不聊、说你更想说的。${genericGuard}别硬贴、一句带过就好。`;
+}
+
+/** generic 没有已确认实物，不能占照片槽位或替换原场景。 */
+export function isWorkPhotoEligible(work) {
+  return Boolean(work && work.verify_status !== 'generic'
+    && (work.verify_status === 'verified' || String(work.kind || '').toLowerCase() === 'craft'));
 }
 
 /** 照片 activity_pov 品类的 works sceneSeed（无脸 POV 拍手头的事；复用既有品类，不另起 kind）。 */
 export function worksSceneSeed(work) {
-  if (!work) return '';
+  if (!work || work.verify_status === 'generic') return '';
   const kind = String(work.kind || '').toLowerCase();
   const t = stripBrackets(work.title);
   const prog = work.progress_note ? `，可顺带一句进度/感想（${clipNote(work.progress_note, 24)}）` : '';
@@ -278,11 +327,15 @@ export function buildWorkArchiveMemory(work, dropped, now = new Date()) {
   const note = work?.progress_note ? `，${clipNote(work.progress_note, 24)}` : '';
   let content;
   if (status === 'generic') {
-    const genre = stripBrackets(work?.title) || '书';
-    content = dropped ? `${monthLabel}有本${genre}看了一半弃了，看不下去` : `${monthLabel}看完了一本${genre}${note}`;
+    const kind = String(work?.kind || '').toLowerCase();
+    const verb = kind === 'game' ? '玩过' : kind === 'craft' ? '做过' : '看过';
+    content = `${monthLabel}${verb}${genericSubject(work)}，${dropped ? '暂时放下了' : '这阵子的活动告一段落'}${note}`;
   } else if (String(work?.kind || '').toLowerCase() === 'craft' || status === 'skip') {
     const t = stripBrackets(work?.title);
     content = dropped ? `${monthLabel}${t}做了一半放下了` : `${monthLabel}${t}做完了${note}`;
+  } else if (String(work?.kind || '').toLowerCase() === 'game') {
+    const t = stripBrackets(work?.title);
+    content = `${monthLabel}玩过《${t}》，${dropped ? '暂时放下了' : '这阵子的游玩告一段落'}${note}`;
   } else {
     const t = stripBrackets(work?.title);
     content = dropped ? `${monthLabel}《${t}》看了一半弃了，看不下去` : `${monthLabel}看完了《${t}》${note}`;
@@ -304,7 +357,7 @@ export async function ensureCurrentWorks(companion, deps = {}) {
   const getActive = deps.getActive;     // (companionId) => rows
   const insert = deps.insert;           // ({...}) => id
   const setStatus = deps.setStatus;     // (workId, status)
-  const out = { finished: 0, dropped: 0, added: 0, progressed: 0, statusOfAdded: null };
+  const out = { finished: 0, dropped: 0, added: 0, progressed: 0, statusOfAdded: null, fallbackReason: null };
   if (!getActive || !insert || !setStatus) throw new Error('ensureCurrentWorks 缺 db 注入');
 
   let active = getActive(companion.id) || [];
@@ -323,11 +376,14 @@ export async function ensureCurrentWorks(companion, deps = {}) {
   if (active.length < cfg.maxActive && typeof deps.generate === 'function') {
     const existing = active.map(w => w.title);
     const recentTitles = deps.recentTitles || [];   // #1 多样性：他人近期已选（降权避雷同）
-    let chosen = null, evidence = null, statusFinal = 'generic', genre = null;
+    let chosen = null, evidence = null, statusFinal = 'generic', fallbackKind = 'book';
+    let fallbackReason = 'generation_failed';
     for (let attempt = 0; attempt <= cfg.verifyRetries; attempt++) {
-      const cand = await deps.generate(companion, existing, { recentTitles });
-      if (!cand || !cand.title) break;
-      genre = cand.genre || genre;
+      const generated = await deps.generate(companion, existing, { recentTitles });
+      if (!generated) break;
+      const cand = normalizeCandidate(generated);
+      if (!cand) { fallbackReason = 'invalid_candidate'; break; }
+      fallbackKind = cand.kind;
       const v = await verifyWorkCandidate(cand, {
         search: deps.search, findCached: deps.findCached,
         dailyUsed: deps.dailyUsed, dailyCap: cfg.verifyDailyCap,
@@ -335,7 +391,8 @@ export async function ensureCurrentWorks(companion, deps = {}) {
       if (v.status === 'verified' || v.status === 'skip') {
         chosen = cand; evidence = v.evidence; statusFinal = v.status; break;
       }
-      if (v.status === 'generic') { statusFinal = 'generic'; break; }   // provider 故障/日上限：止损
+      if (v.status === 'generic') { fallbackReason = v.reason; break; }   // provider 故障/日上限：止损
+      fallbackReason = 'insufficient_evidence';
       existing.push(stripBrackets(cand.title));   // retry：换一部（剥《》与入库口径一致）
     }
     if (chosen) {
@@ -348,13 +405,14 @@ export async function ensureCurrentWorks(companion, deps = {}) {
       });
       out.statusOfAdded = statusFinal;
     } else {
-      // 重试耗尽或生成器没出 → 降级泛读态入档（不指名，绝不虚构）
-      const g = genre || '推理小说';
+      // 保留候选类别；title 必填但只存类别占位，不存未验证名称或题材。
+      const g = GENERIC_LABELS[fallbackKind];
       insert(companion.id, {
-        kind: 'book', title: g, creator: null, verifyStatus: 'generic',
+        kind: fallbackKind, title: g, creator: null, verifyStatus: 'generic',
         verifyEvidence: null, progressNote: null, startedAt: now.toISOString(),
       });
       out.statusOfAdded = 'generic';
+      out.fallbackReason = fallbackReason;
     }
     out.added++;
   }
