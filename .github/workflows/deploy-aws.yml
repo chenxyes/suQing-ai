@@ -19,8 +19,8 @@ jobs:
     outputs:
       sha: ${{ steps.gate.outputs.sha }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/github-script@v7
+      - uses: actions/checkout@v6
+      - uses: actions/github-script@v8
         id: gate
         with:
           script: |
@@ -36,12 +36,12 @@ jobs:
     outputs:
       image: ${{ steps.reference.outputs.image }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.sha }}
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -51,7 +51,7 @@ jobs:
         env:
           REPOSITORY: ${{ github.repository }}
         run: echo "name=ghcr.io/${REPOSITORY,,}" >> "$GITHUB_OUTPUT"
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         id: build
         with:
           context: .
@@ -73,11 +73,11 @@ jobs:
     timeout-minutes: 15
     environment: production
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.sha }}
       - name: Recheck approval configuration and CI
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const { verifyReleaseGate } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/release_gate.mjs`);
