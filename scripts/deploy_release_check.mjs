@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -40,6 +40,9 @@ function runCase(extra = {}, ref = image) {
   const bin = path.join(dir, 'bin'); mkdirSync(bin);
   writeFileSync(path.join(bin, 'docker'), fakeDocker, { mode: 0o755 });
   writeFileSync(path.join(dir, 'docker-compose.yml'), 'services:\n  xiyu-ai:\n    image: existing\n');
+  mkdirSync(path.join(dir, 'data'), { recursive: true });
+  writeFileSync(path.join(dir, 'data/bot.db'), 'fake-sqlite-db');
+  writeFileSync(path.join(dir, '.env'), 'CHAT_PROVIDER=deepseek\n');
   writeFileSync(path.join(dir, 'state.json'), '{}');
   const result = spawnSync('bash', [path.join(root, 'deploy/release.sh'), dir, ref], {
     env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_STATE: path.join(dir, 'state.json'),
@@ -47,15 +50,19 @@ function runCase(extra = {}, ref = image) {
       RELEASE_HEALTH_ATTEMPTS: '1', RELEASE_HEALTH_INTERVAL: '0', ...extra }, encoding: 'utf8', timeout: 10_000,
   });
   let override = ''; try { override = readFileSync(path.join(dir, '.release/compose.image.yml'), 'utf8'); } catch {}
+  let backupDir = ''; try { backupDir = readFileSync(path.join(dir, '.release/last-backup'), 'utf8').trim(); } catch {}
+  const backupHasDb = Boolean(backupDir && existsSync(path.join(backupDir, 'bot.db')));
+  const backupHasEnv = Boolean(backupDir && existsSync(path.join(backupDir, '.env')));
   const state = JSON.parse(readFileSync(path.join(dir, 'state.json'), 'utf8'));
   let calls = []; try { calls = readFileSync(path.join(dir, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse); } catch {}
   rmSync(dir, { recursive: true, force: true });
-  return { ...result, state, calls, override };
+  return { ...result, state, calls, override, backupDir, backupHasDb, backupHasEnv };
 }
 const success = runCase();
 assert.equal(success.status, 0, success.stderr);
 assert.equal(success.state.image, image);
 assert.ok(success.calls.some(a => a.includes('--no-build') && a.includes('--no-deps')));
+assert.ok(success.backupHasDb && success.backupHasEnv, 'release must snapshot data/bot.db and .env before replacing container');
 for (const mode of ['UNHEALTHY', 'FAIL_UP']) {
   const r = runCase({ [mode]: '1' });
   assert.notEqual(r.status, 0);

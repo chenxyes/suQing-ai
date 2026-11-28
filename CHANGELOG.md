@@ -4,6 +4,12 @@
 
 ---
 
+## [Unreleased] - 2026-11-28
+
+### Added
+- **生产部署前自动备份数据库与配置（`deploy/release.sh`、`scripts/deploy_release_check.mjs`）**：
+  - 在替换运行中的容器之前，自动将服务器 `data/bot.db`（优先 `sqlite3 .backup` 一致性快照，否则连同 `-wal/-shm` 一并保留）、`.env` 与 `docker-compose.yml` 以 `0700` 权限快照备份到 `.release/backups/<UTC时间戳>/`（自动保留最近 5 份），叠加原有的旧镜像自动回滚机制，确保升级失败可无损恢复。
+
 ## [1.23.0] - 2026-11-28
 
 ### Fixed
