@@ -1712,6 +1712,17 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
   const togglePresetsBtn = document.getElementById('btn-wardrobe-toggle-presets');
   const closePresetsBtn = document.getElementById('btn-wardrobe-close-presets');
   const presetDrawer = document.getElementById('wardrobe-preset-drawer');
+  const storageBadgeEl = document.getElementById('wardrobe-storage-badge');
+  const toggleExtractBtn = document.getElementById('btn-wardrobe-toggle-extract');
+  const extractBoxEl = document.getElementById('wardrobe-extract-box');
+  const extractFileInput = document.getElementById('extract-file-input');
+  const extractStatusMsg = document.getElementById('extract-status-msg');
+  const extractPreviewWrap = document.getElementById('extract-preview-wrap');
+  const extractSourceThumb = document.getElementById('extract-source-thumb');
+  const extractItemsListEl = document.getElementById('extract-items-list');
+  const extractAlsoWearEl = document.getElementById('extract-also-wear');
+  const extractSaveBtn = document.getElementById('btn-extract-save');
+  const soloPoseUploadInput = document.getElementById('input-upload-solo-pose');
   const presetFiltersEl = document.getElementById('wardrobe-preset-filters');
   const presetGridEl = document.getElementById('wardrobe-preset-grid');
   const poseBarEl = document.getElementById('wardrobe-pose-bar');
@@ -1729,6 +1740,8 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
   if (!listEl) return;
 
   let pendingImageDataUrl = '';
+  let pendingExtractDataUrl = '';
+  let detectedExtractItems = [];
   let cachedItems = [];
   let activeShelf = 'all';
   let selectedSoloPoseId = '';
@@ -1737,9 +1750,13 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
   const blobUrlCache = new Map();
   const cellViewMode = new Map(); // itemId -> 'tryon' | 'source'
 
-  // 共享姿势库与精选服装预设目录加载器（供衣橱与约会剧场复用）
+  // 共享姿势库与精选服装预设目录加载器（供衣橱与约会剧场复用；force=true 时强制拉最新）
   let catalogPromise = null;
-  window.__loadPoseOutfitCatalog = function loadPoseOutfitCatalog() {
+  window.__loadPoseOutfitCatalog = function loadPoseOutfitCatalog(force = false) {
+    if (force) {
+      catalogCache = null;
+      catalogPromise = null;
+    }
     if (catalogCache) return Promise.resolve(catalogCache);
     if (!catalogPromise) {
       catalogPromise = fetch('/api/wardrobe/catalog', {
@@ -1991,7 +2008,7 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
     });
   }
 
-  function buildPosePreviewCard(p, isActive, kind, onPick) {
+  function buildPosePreviewCard(p, isActive, kind, onPick, onDelete) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'pose-card' + (kind === 'couple' ? ' is-couple' : '') + (isActive ? ' is-active' : '');
@@ -1999,7 +2016,7 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
     btn.setAttribute('aria-checked', isActive ? 'true' : 'false');
     btn.title = p.descZh || p.tag || p.label;
     const previewHtml = p.previewUrl
-      ? '<img src="' + escHtml(p.previewUrl) + '" alt="' + escHtml(p.label) + '" loading="lazy" />'
+      ? '<img data-role="pose-img" alt="' + escHtml(p.label) + '" loading="lazy" ' + (p.authRequired ? 'class="hidden"' : 'src="' + escHtml(p.previewUrl) + '"') + ' />'
       : (typeof window.renderPosePreviewSvg === 'function'
           ? window.renderPosePreviewSvg(p.id, kind)
           : '<span class="text-[24px]">' + escHtml(p.emoji || '✨') + '</span>');
@@ -2007,6 +2024,7 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
     btn.innerHTML =
       '<div class="pose-card-stage">' +
         '<span class="pose-card-check" aria-hidden="true">✓</span>' +
+        (p.isCustom ? '<span class="custom-asset-del" data-del-pose="' + escHtml(p.id) + '" title="删除此自定义姿势">×</span>' : '') +
         (badge ? '<span class="pose-card-badge">' + escHtml(badge) + '</span>' : '') +
         previewHtml +
       '</div>' +
@@ -2014,6 +2032,16 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
         '<div class="pose-card-name">' + escHtml(p.label) + '</div>' +
         '<div class="pose-card-tag">' + escHtml(p.tag || '') + '</div>' +
       '</div>';
+    if (p.previewUrl && p.authRequired) {
+      const imgEl = btn.querySelector('img[data-role="pose-img"]');
+      fetchAuthedBlobUrl(p.previewUrl).then(blobUrl => {
+        if (blobUrl && imgEl) { imgEl.src = blobUrl; imgEl.classList.remove('hidden'); }
+      });
+    }
+    btn.querySelector('[data-del-pose]')?.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      if (typeof onDelete === 'function') onDelete(p);
+    });
     btn.addEventListener('click', onPick);
     return btn;
   }
@@ -2036,12 +2064,33 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
       poseBarEl.appendChild(buildPosePreviewCard(p, selectedSoloPoseId === p.id, 'solo', () => {
         selectedSoloPoseId = p.id;
         renderSoloPoseBar();
+      }, async (target) => {
+        try {
+          const r = await fetch('/api/wardrobe/catalog/poses/' + encodeURIComponent(target.id), {
+            method: 'DELETE',
+            headers: { Authorization: 'Bearer ' + token },
+          });
+          if (r.ok) {
+            if (selectedSoloPoseId === target.id) selectedSoloPoseId = '';
+            msgEl.textContent = '已删除自定义姿势「' + target.label + '」';
+            await window.__loadPoseOutfitCatalog(true);
+            renderSoloPoseBar();
+          }
+        } catch (e) {
+          msgEl.textContent = '删除失败：' + e.message;
+        }
       }));
     }
   }
 
   function renderPresetDrawer() {
     if (!presetGridEl || !presetFiltersEl || !catalogCache?.outfitPresets) return;
+    if (storageBadgeEl) {
+      const st = catalogCache.storage || {};
+      storageBadgeEl.textContent = st.driver === 'r2'
+        ? '☁️ Cloudflare R2 · ' + (st.bucket || '已连接')
+        : '💾 本地存储（配置 R2 即可自动上云）';
+    }
     const presets = catalogCache.outfitPresets;
     const filterTabs = [
       { key: 'all', label: '全部 (' + presets.length + ')' },
@@ -2074,13 +2123,15 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
       const card = document.createElement('div');
       card.className = 'preset-card';
       const garmentVisual = p.previewUrl
-        ? '<img src="' + escHtml(p.previewUrl) + '" alt="' + escHtml(p.name) + '" loading="lazy" />'
+        ? '<img data-role="preset-img" alt="' + escHtml(p.name) + '" loading="lazy" ' + (p.authRequired ? 'class="hidden"' : 'src="' + escHtml(p.previewUrl) + '"') + ' />'
         : (typeof window.renderOutfitPresetSvg === 'function'
             ? window.renderOutfitPresetSvg(p.id, p.slot)
             : '<span class="text-[30px]">' + escHtml(p.emoji || '👗') + '</span>');
+      const slotBadgeText = (p.isCustom && p.extractedMode === 'flatlay' ? '✨平铺 · ' : '') + (SLOT_TEXT[p.slot] || p.category);
       card.innerHTML =
         '<div class="preset-stage">' +
-          '<span class="preset-stage-slot">' + escHtml(SLOT_TEXT[p.slot] || p.category) + '</span>' +
+          (p.isCustom ? '<button type="button" class="custom-asset-del" data-del-preset="' + escHtml(p.id) + '" title="删除此收藏预设">×</button>' : '') +
+          '<span class="preset-stage-slot">' + escHtml(slotBadgeText) + '</span>' +
           '<span class="preset-swatch-dot" style="background:' + escHtml(p.swatch || '#FFF0F7') + '" title="' + escHtml(p.color || '') + '"></span>' +
           garmentVisual +
         '</div>' +
@@ -2099,27 +2150,80 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
           '</div>' +
         '</div>';
 
+      if (p.previewUrl && p.authRequired) {
+        const imgEl = card.querySelector('img[data-role="preset-img"]');
+        fetchAuthedBlobUrl(p.previewUrl).then(blobUrl => {
+          if (blobUrl && imgEl) { imgEl.src = blobUrl; imgEl.classList.remove('hidden'); }
+        });
+      }
+
+      card.querySelector('[data-del-preset]')?.addEventListener('click', async () => {
+        try {
+          const r = await fetch('/api/wardrobe/catalog/presets/' + encodeURIComponent(p.id), {
+            method: 'DELETE',
+            headers: { Authorization: 'Bearer ' + token },
+          });
+          if (r.ok) {
+            msgEl.textContent = '已从服装灵感库移除「' + p.name + '」';
+            await window.__loadPoseOutfitCatalog(true);
+            renderPresetDrawer();
+          }
+        } catch (e) {
+          msgEl.textContent = '移除失败：' + e.message;
+        }
+      });
+
       card.querySelectorAll('button[data-preset-status]').forEach(btn => {
         btn.addEventListener('click', async () => {
           if (!companionId) return;
           const st = btn.dataset.presetStatus || 'wearing';
           btn.disabled = true;
           const prevText = btn.textContent;
-          btn.textContent = '入柜中…';
-          msgEl.textContent = '正在将精选灵感「' + p.name + '」放入展示柜…';
+          btn.textContent = st === 'wearing' ? '换装中…' : '入柜中…';
+          msgEl.textContent = st === 'wearing'
+            ? '正在为她换上「' + p.name + '」…'
+            : '正在将精选灵感「' + p.name + '」收入展示柜…';
           try {
             const resp = await fetch('/api/companions/' + companionId + '/wardrobe/preset', {
               method: 'POST',
               headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ preset_id: p.id, status: st }),
+              body: JSON.stringify({
+                preset_id: p.id,
+                status: st,
+                replace_wearing: st === 'wearing' ? true : undefined,
+              }),
             });
             const d = await resp.json().catch(() => ({}));
             if (!resp.ok || !d.ok) throw new Error(d.error || d.message || ('HTTP ' + resp.status));
+            const createdItem = d.data?.item || null;
             activeShelf = 'all';
-            msgEl.textContent = st === 'wearing'
-              ? '✓ 已为她换上「' + p.name + '」（可继续选姿势点「拍今日穿搭照」或叠穿其他部位！）'
-              : '✓ 已将「' + p.name + '」收入展柜珍藏！';
             await loadWardrobe();
+
+            if (st === 'wearing' && createdItem?.id) {
+              const activePose = (catalogCache?.soloPoses || []).find(x => x.id === selectedSoloPoseId);
+              const poseTip = activePose ? ' · 姿势「' + activePose.label + '」' : '';
+              btn.textContent = '拍试穿中…';
+              msgEl.textContent = '✓ 旧穿搭已自动脱下并换上「' + p.name + '」，正在自动拍摄试穿大片' + poseTip + '（约 30-90 秒）…';
+              try {
+                const tryResp = await fetch('/api/companions/' + companionId + '/wardrobe/' + createdItem.id + '/tryon', {
+                  method: 'POST',
+                  headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    compose_with_wearing: true,
+                    pose_id: selectedSoloPoseId || undefined,
+                  }),
+                });
+                const tryOut = await tryResp.json().catch(() => ({}));
+                if (!tryResp.ok || !tryOut.ok) throw new Error(tryOut.error || tryOut.message || ('HTTP ' + tryResp.status));
+                cellViewMode.set(createdItem.id, 'tryon');
+                msgEl.textContent = '✓ 「' + p.name + '」试穿买家秀' + poseTip + '已生成并同步到左侧人物舞台！';
+                await loadWardrobe();
+              } catch (tryErr) {
+                msgEl.textContent = '✓ 已换上「' + p.name + '」，但自动试穿生图失败：' + tryErr.message + '（可在展柜点「📸 试穿」重试）';
+              }
+            } else {
+              msgEl.textContent = '✓ 已将「' + p.name + '」收入展柜珍藏！';
+            }
           } catch (e) {
             msgEl.textContent = '添加预设失败：' + e.message;
           } finally {
@@ -2379,6 +2483,125 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
     }
   });
   closePresetsBtn?.addEventListener('click', () => presetDrawer?.classList.add('hidden'));
+  toggleExtractBtn?.addEventListener('click', () => extractBoxEl?.classList.toggle('hidden'));
+
+  // ── 上传自定义单人姿势参考图 ────────────────────────────────────────────────
+  soloPoseUploadInput?.addEventListener('change', async () => {
+    const file = soloPoseUploadInput.files && soloPoseUploadInput.files[0];
+    if (!file) return;
+    msgEl.textContent = '正在解析姿势参考图并上传至存储库…';
+    try {
+      const dataUrl = await fileToCompressedDataUrl(file, 1024);
+      const r = await fetch('/api/wardrobe/catalog/poses', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: 'solo', image: dataUrl }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) throw new Error(d.error || d.message || ('HTTP ' + r.status));
+      const newPose = d.data?.pose;
+      if (newPose?.id) selectedSoloPoseId = newPose.id;
+      await window.__loadPoseOutfitCatalog(true);
+      renderSoloPoseBar();
+      msgEl.textContent = '✓ 已收藏姿势参考图「' + (newPose?.label || '自定义姿势') + '」（' + (d.data?.storageDriver === 'r2' ? '已存 R2 云端' : '已存本地') + '），拍试穿照时将直接按该图摆拍！';
+    } catch (e) {
+      msgEl.textContent = '上传姿势参考图失败：' + e.message;
+    } finally {
+      soloPoseUploadInput.value = '';
+    }
+  });
+
+  // ── 截图一键扒同款：Step 1 拆解识别 ─────────────────────────────────────────
+  extractFileInput?.addEventListener('change', async () => {
+    const file = extractFileInput.files && extractFileInput.files[0];
+    if (!file) return;
+    if (extractStatusMsg) extractStatusMsg.textContent = '正在用视觉模型拆解截图中的全部单品（零生图费）…';
+    extractPreviewWrap?.classList.add('hidden');
+    try {
+      pendingExtractDataUrl = await fileToCompressedDataUrl(file, 1280);
+      if (extractSourceThumb) extractSourceThumb.src = pendingExtractDataUrl;
+      const r = await fetch('/api/wardrobe/catalog/extract-preview', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: pendingExtractDataUrl }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) throw new Error(d.error || d.message || ('HTTP ' + r.status));
+      detectedExtractItems = Array.isArray(d.data?.items) ? d.data.items : [];
+      if (extractItemsListEl) {
+        extractItemsListEl.innerHTML = detectedExtractItems.map((it, idx) =>
+          '<label class="flex items-center gap-2 rounded-xl border border-line bg-white/80 dark:bg-white/10 px-2.5 py-1.5 cursor-pointer">' +
+            '<input type="checkbox" data-ex-idx="' + idx + '" checked />' +
+            '<span class="w-3 h-3 rounded-full shrink-0 border border-black/15" style="background:' + escHtml(it.swatch || '#F5D8E6') + '"></span>' +
+            '<span class="text-[11px] font-semibold text-ink truncate flex-1">' + escHtml((SLOT_EMOJI[it.slot] || '👗') + ' ' + it.name) + '</span>' +
+            '<span class="text-[10px] text-mute shrink-0">' + escHtml(SLOT_TEXT[it.slot] || it.category) + '</span>' +
+          '</label>'
+        ).join('');
+      }
+      extractPreviewWrap?.classList.remove('hidden');
+      if (extractStatusMsg) {
+        extractStatusMsg.textContent = '✓ 已识别 ' + detectedExtractItems.length + ' 件单品！勾选想扒的单品，选择「原图直存」或「去人去背景平铺图」入库：';
+      }
+    } catch (e) {
+      pendingExtractDataUrl = '';
+      if (extractStatusMsg) extractStatusMsg.textContent = '识别截图失败：' + e.message;
+    } finally {
+      extractFileInput.value = '';
+    }
+  });
+
+  // ── 截图一键扒同款：Step 2 提取并存入 R2/灵感库 ──────────────────────────────
+  extractSaveBtn?.addEventListener('click', async () => {
+    if (!pendingExtractDataUrl || !detectedExtractItems.length) return;
+    const checkedIndices = Array.from(extractItemsListEl?.querySelectorAll('input[data-ex-idx]:checked') || [])
+      .map(el => Number(el.dataset.exIdx))
+      .filter(n => Number.isInteger(n) && detectedExtractItems[n]);
+    if (!checkedIndices.length) {
+      if (extractStatusMsg) extractStatusMsg.textContent = '请至少勾选一件要提取的单品';
+      return;
+    }
+    const chosenItems = checkedIndices.map(i => detectedExtractItems[i]);
+    const mode = document.querySelector('input[name="extract-mode"]:checked')?.value === 'flatlay' ? 'flatlay' : 'raw';
+    const alsoWear = Boolean(extractAlsoWearEl?.checked && companionId);
+
+    extractSaveBtn.disabled = true;
+    extractSaveBtn.textContent = mode === 'flatlay' ? '正在去人去背景生成平铺图…' : '正在入库…';
+    if (extractStatusMsg) {
+      extractStatusMsg.textContent = mode === 'flatlay'
+        ? '正在逐件去除人物与背景生成纯白底电商平铺图（每件约 15-35 秒）…'
+        : '正在快速入库服装灵感库并上传云端…';
+    }
+    try {
+      const r = await fetch('/api/wardrobe/catalog/extract-save', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          image: pendingExtractDataUrl,
+          items: chosenItems,
+          mode,
+          companion_id: alsoWear ? companionId : undefined,
+          also_add_to_wardrobe: alsoWear,
+          wardrobe_status: 'wearing',
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) throw new Error(d.error || d.message || ('HTTP ' + r.status));
+      const cnt = (d.data?.presets || []).length;
+      pendingExtractDataUrl = '';
+      detectedExtractItems = [];
+      extractPreviewWrap?.classList.add('hidden');
+      extractBoxEl?.classList.add('hidden');
+      await window.__loadPoseOutfitCatalog(true);
+      renderPresetDrawer();
+      msgEl.textContent = '✓ 已成功提取并入库 ' + cnt + ' 件单品到精选服装库' + (alsoWear ? '，并同步为苏晴换上！' : '！');
+      if (alsoWear) await loadWardrobe();
+    } catch (e) {
+      if (extractStatusMsg) extractStatusMsg.textContent = '提取入库失败：' + e.message;
+    } finally {
+      extractSaveBtn.disabled = false;
+      extractSaveBtn.textContent = '✨ 确认提取入库';
+    }
+  });
 
   refInput?.addEventListener('change', async () => {
     const file = refInput.files && refInput.files[0];
@@ -2496,6 +2719,7 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
   const userRefThumb = document.getElementById('user-ref-thumb');
   const couplePoseBar = document.getElementById('datemode-pose-bar');
   const couplePoseHint = document.getElementById('datemode-pose-hint');
+  const couplePoseUploadInput = document.getElementById('input-upload-couple-pose');
 
   const PMODE_DESC = {
     ldr: '异地恋日常（推荐）：保留校园/生活烟火气，自然接受平时不在同一座城市，不把物理距离当爽约；想沉浸约会时再开剧场。',
@@ -2530,7 +2754,7 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
       btn.setAttribute('aria-checked', isActive ? 'true' : 'false');
       btn.title = p.descZh || p.tag || p.label;
       const previewHtml = p.previewUrl
-        ? '<img src="' + escHtml(p.previewUrl) + '" alt="' + escHtml(p.label) + '" loading="lazy" />'
+        ? '<img data-role="cpose-img" alt="' + escHtml(p.label) + '" loading="lazy" ' + (p.authRequired ? 'class="hidden"' : 'src="' + escHtml(p.previewUrl) + '"') + ' />'
         : (typeof window.renderPosePreviewSvg === 'function'
             ? window.renderPosePreviewSvg(p.id, 'couple')
             : '<span class="text-[24px]">' + escHtml(p.emoji || '💕') + '</span>');
@@ -2538,6 +2762,7 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
       btn.innerHTML =
         '<div class="pose-card-stage">' +
           '<span class="pose-card-check" aria-hidden="true">✓</span>' +
+          (p.isCustom ? '<span class="custom-asset-del" data-del-cpose="' + escHtml(p.id) + '" title="删除此自定义双人姿势">×</span>' : '') +
           (badge ? '<span class="pose-card-badge">' + escHtml(badge) + '</span>' : '') +
           previewHtml +
         '</div>' +
@@ -2545,6 +2770,25 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
           '<div class="pose-card-name">' + escHtml(p.label) + '</div>' +
           '<div class="pose-card-tag">' + escHtml(p.tag || '') + '</div>' +
         '</div>';
+      if (p.previewUrl && p.authRequired) {
+        const imgEl = btn.querySelector('img[data-role="cpose-img"]');
+        if (imgEl) loadAuthedDateImg(imgEl, null, p.previewUrl);
+      }
+      btn.querySelector('[data-del-cpose]')?.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        try {
+          const r = await fetch('/api/wardrobe/catalog/poses/' + encodeURIComponent(p.id), {
+            method: 'DELETE',
+            headers: { Authorization: 'Bearer ' + token },
+          });
+          if (r.ok && typeof window.__loadPoseOutfitCatalog === 'function') {
+            if (selectedCouplePoseId === p.id) selectedCouplePoseId = '';
+            const cat = await window.__loadPoseOutfitCatalog(true);
+            couplePosesList = cat?.couplePoses || [];
+            renderCouplePoseBar();
+          }
+        } catch { /* ignore */ }
+      });
       btn.addEventListener('click', () => {
         selectedCouplePoseId = p.id;
         renderCouplePoseBar();
@@ -2552,6 +2796,34 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
       couplePoseBar.appendChild(btn);
     }
   }
+
+  couplePoseUploadInput?.addEventListener('change', async () => {
+    const file = couplePoseUploadInput.files && couplePoseUploadInput.files[0];
+    if (!file) return;
+    statusMsg.textContent = '正在解析双人合影姿势图并上传存储…';
+    try {
+      const dataUrl = await compressImageToDataUrl(file, 1024);
+      const r = await fetch('/api/wardrobe/catalog/poses', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: 'couple', image: dataUrl }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) throw new Error(d.error || d.message || ('HTTP ' + r.status));
+      const newPose = d.data?.pose;
+      if (newPose?.id) selectedCouplePoseId = newPose.id;
+      if (typeof window.__loadPoseOutfitCatalog === 'function') {
+        const cat = await window.__loadPoseOutfitCatalog(true);
+        couplePosesList = cat?.couplePoses || [];
+        renderCouplePoseBar();
+      }
+      statusMsg.textContent = '✓ 已收藏双人姿势图「' + (newPose?.label || '自定义双人姿势') + '」（' + (d.data?.storageDriver === 'r2' ? '已存 R2 云端' : '已存本地') + '）！';
+    } catch (e) {
+      statusMsg.textContent = '上传双人姿势图失败：' + e.message;
+    } finally {
+      couplePoseUploadInput.value = '';
+    }
+  });
 
   async function loadAuthedDateImg(imgEl, linkEl, url) {
     try {

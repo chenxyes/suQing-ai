@@ -1578,6 +1578,57 @@ html[data-theme="dark"] .dash-hero-stage {
 .pose-card.is-active .pose-card-name {
   color: #E0578A;
 }
+.pose-upload-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2.5px 9px;
+  border-radius: 9999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #E0578A;
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px dashed rgba(244, 106, 160, 0.55);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+.pose-upload-btn:hover {
+  background: #FFF0F7;
+  border-style: solid;
+}
+.custom-asset-del {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  z-index: 3;
+  width: 17px;
+  height: 17px;
+  border-radius: 9999px;
+  background: rgba(20, 20, 28, 0.62);
+  color: #fff;
+  font-size: 10px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0.78;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+.custom-asset-del:hover {
+  opacity: 1;
+  background: #E11D48;
+}
+.pose-card.is-active .custom-asset-del {
+  left: 22px;
+}
+html[data-theme="dark"] .pose-upload-btn {
+  background: rgba(255, 143, 184, 0.14);
+  color: #FFB6D9;
+  border-color: rgba(255, 143, 184, 0.45);
+}
 
 .preset-drawer {
   border-radius: 16px;

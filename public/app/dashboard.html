@@ -14,9 +14,9 @@
   <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
   <link rel="manifest" href="/manifest.webmanifest" />
-  <link rel="stylesheet" href="/app/tailwind.css?v=42" />
-  <link rel="stylesheet" href="/app/glass.css?v=42" />
-  <link rel="stylesheet" href="/app/dashboard.css?v=42" />
+  <link rel="stylesheet" href="/app/tailwind.css?v=43" />
+  <link rel="stylesheet" href="/app/glass.css?v=43" />
+  <link rel="stylesheet" href="/app/dashboard.css?v=43" />
   <link rel="stylesheet" href="/app/stickers.css?v=35" />
   <script src="/app/theme.js" defer></script>
   <script src="/app/shared.js" defer></script>
@@ -631,15 +631,58 @@
                     </div>
                   </div>
 
-                  <!-- 可折叠：精选服装灵感预设库（免找图，一键穿上/收藏） -->
+                  <!-- 可折叠：精选服装灵感预设库（内置 + 截图一键扒同款实图库） -->
                   <div id="wardrobe-preset-drawer" class="preset-drawer hidden mb-3">
-                    <div class="flex items-center justify-between gap-2 mb-2">
-                      <div class="min-w-0">
-                        <span class="text-[12px] font-bold text-ink">✨ 精选服装灵感预设库</span>
-                        <span class="text-[10.5px] text-mute ml-1.5">免找商品图 · 一键收入展柜试穿或自由叠穿</span>
+                    <div class="flex items-center justify-between gap-2 mb-2 flex-wrap">
+                      <div class="flex items-center gap-1.5 flex-wrap min-w-0">
+                        <span class="text-[12px] font-bold text-ink">✨ 精选服装灵感库</span>
+                        <span id="wardrobe-storage-badge" class="text-[10px] px-2 py-0.5 rounded-full bg-white/80 border border-line text-mute">存储检测中…</span>
                       </div>
-                      <button id="btn-wardrobe-close-presets" type="button" class="text-[11px] text-mute hover:text-ink shrink-0">收起</button>
+                      <div class="flex items-center gap-1.5 shrink-0">
+                        <button id="btn-wardrobe-toggle-extract" type="button" class="text-[11px] font-semibold text-white bg-gradient-to-r from-sakura to-sakura-deep rounded-full px-3 py-1 hover:shadow-sakura transition-all">
+                          ✂️ 截图扒同款
+                        </button>
+                        <button id="btn-wardrobe-close-presets" type="button" class="text-[11px] text-mute hover:text-ink px-1">收起</button>
+                      </div>
                     </div>
+
+                    <!-- ✂️ 截图一键扒同款工作区（去人去背景平铺图 / 零费用原图直存双模式） -->
+                    <div id="wardrobe-extract-box" class="hidden rounded-2xl border border-sakura/45 bg-white/85 dark:bg-white/5 p-3 mb-2.5 space-y-2.5">
+                      <div class="flex items-center justify-between gap-2 flex-wrap">
+                        <span class="text-[11.5px] font-bold text-ink">✂️ 上传别人穿搭截图 · 自动拆解单品并入库</span>
+                        <label class="text-[11px] font-semibold rounded-full border border-dashed border-sakura-deep/60 bg-white dark:bg-white/10 text-sakura-deep px-3 py-1 cursor-pointer hover:bg-sakura-soft/40">
+                          🖼️ 选择穿搭截图
+                          <input id="extract-file-input" type="file" accept="image/*" class="sr-only" />
+                        </label>
+                      </div>
+                      <div id="extract-status-msg" class="text-[11px] text-mute">支持小红书 / 抖音 / 淘宝穿搭截图，自动拆出上衣、外套、裙装、鞋包与配饰。</div>
+                      <div id="extract-preview-wrap" class="hidden space-y-2.5">
+                        <div class="flex items-start gap-3">
+                          <img id="extract-source-thumb" alt="穿搭原截图" class="w-16 h-20 rounded-xl object-cover border border-line shrink-0" />
+                          <div id="extract-items-list" class="flex-1 min-w-0 space-y-1.5"></div>
+                        </div>
+                        <div class="flex items-center gap-3 flex-wrap text-[11px]">
+                          <label class="inline-flex items-center gap-1 cursor-pointer font-medium text-ink">
+                            <input type="radio" name="extract-mode" value="raw" checked />
+                            <span>⚡ 原图快速入库（零生图费）</span>
+                          </label>
+                          <label class="inline-flex items-center gap-1 cursor-pointer font-medium text-sakura-deep">
+                            <input type="radio" name="extract-mode" value="flatlay" />
+                            <span>✨ 去人去背景平铺图（更稳防串脸）</span>
+                          </label>
+                        </div>
+                        <div class="flex items-center justify-between gap-2 flex-wrap pt-1 border-t border-line/60">
+                          <label class="inline-flex items-center gap-1.5 text-[11px] text-mute cursor-pointer">
+                            <input id="extract-also-wear" type="checkbox" checked />
+                            <span>入库后同时给苏晴穿上</span>
+                          </label>
+                          <button id="btn-extract-save" type="button" class="text-[11.5px] font-semibold text-white bg-gradient-to-r from-sakura to-sakura-deep rounded-full px-4 py-1.5 hover:shadow-sakura transition-all">
+                            ✨ 确认提取入库
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
                     <div id="wardrobe-preset-filters" class="preset-filter-bar mb-2.5"></div>
                     <div id="wardrobe-preset-grid" class="preset-grid"></div>
                   </div>
@@ -696,8 +739,14 @@
                   <!-- 试穿姿势选择器（同时作用于单品试穿与整套叠穿大片） -->
                   <div id="wardrobe-pose-wrap" class="pose-strip mb-2.5">
                     <div class="pose-strip-head">
-                      <span class="text-[11px] font-bold text-ink">✨ 试穿姿势库</span>
-                      <span id="wardrobe-pose-hint" class="text-[10.5px] text-mute">当前：随机自然（按心情与款式自动发挥）</span>
+                      <div class="flex items-center gap-2 min-w-0 flex-wrap">
+                        <span class="text-[11px] font-bold text-ink">✨ 试穿姿势库</span>
+                        <span id="wardrobe-pose-hint" class="text-[10.5px] text-mute">当前：随机自然（按心情与款式自动发挥）</span>
+                      </div>
+                      <label class="pose-upload-btn" title="上传自己收藏的穿搭姿势实图，生图时按该图动作与构图摆拍">
+                        ＋ 上传姿势图
+                        <input id="input-upload-solo-pose" type="file" accept="image/*" class="sr-only" />
+                      </label>
                     </div>
                     <div id="wardrobe-pose-bar" class="pose-pill-bar" role="radiogroup" aria-label="试穿姿势选择"></div>
                   </div>
@@ -809,8 +858,14 @@
                 <!-- 双人合影姿势库（同时作用于约会打卡照与赛博同框合影） -->
                 <div class="pose-strip mb-3">
                   <div class="pose-strip-head">
-                    <span class="text-[11px] font-bold text-ink">💕 双人约会合影姿势</span>
-                    <span id="datemode-pose-hint" class="text-[10.5px] text-mute">当前：自动自然（按场景发挥）</span>
+                    <div class="flex items-center gap-2 min-w-0 flex-wrap">
+                      <span class="text-[11px] font-bold text-ink">💕 双人约会合影姿势</span>
+                      <span id="datemode-pose-hint" class="text-[10.5px] text-mute">当前：自动自然（按场景发挥）</span>
+                    </div>
+                    <label class="pose-upload-btn" title="上传自己收藏的双人合影姿势参考图">
+                      ＋ 上传双人姿势图
+                      <input id="input-upload-couple-pose" type="file" accept="image/*" class="sr-only" />
+                    </label>
                   </div>
                   <div id="datemode-pose-bar" class="pose-pill-bar" role="radiogroup" aria-label="双人约会合影姿势选择"></div>
                 </div>
@@ -1321,8 +1376,8 @@
 
   <div id="silent-orb" role="button" tabindex="0" aria-label="退出沉默陪伴模式" title="沉默陪伴模式开启中 · 点击退出"></div>
   <script src="/vendor/lucide.min.js" defer></script>
-  <script src="/app/pose-previews.js?v=42" defer></script>
-  <script src="/app/dashboard.js?v=42" defer></script>
+  <script src="/app/pose-previews.js?v=43" defer></script>
+  <script src="/app/dashboard.js?v=44" defer></script>
   <script src="/app/dashboard-model-drawer.js?v=35" defer></script>
   <script src="/app/stickers.js?v=35" defer></script>
 </body>

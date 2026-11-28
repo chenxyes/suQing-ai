@@ -37,6 +37,7 @@ import { ensureVisualIdentity, buildIdentityPrompt } from './visual_identity.mjs
 import { ANTI_COLLAGE_PROMPT } from './photo_sender.mjs';
 import { resolveWardrobeImagePath } from './wardrobe.mjs';
 import { getPoseById } from './pose_outfit_library.mjs';
+import { readAssetBuffer, mirrorBufferToR2Quietly } from './storage.mjs';
 import { log } from './logger.mjs';
 
 export const PRESENCE_MODES = ['local', 'ldr', 'digital'];
@@ -518,6 +519,7 @@ export function buildDatePhotoPrompt({
   hasUserRef = false,
   sceneRefIndex = null,
   outfitRefIndex = null,
+  poseRefIndex = null,
   fallbackCharPrompt = '',
   outfitPrompt = '',
   presetScenePrompt = '',
@@ -536,11 +538,17 @@ export function buildDatePhotoPrompt({
     parts.push(`SUBJECT: ${fallbackCharPrompt}.`);
   }
 
-  parts.push(
-    chosenPose?.posePrompt
-      ? `POSE & EXPRESSION (${chosenPose.label}): ${chosenPose.posePrompt}. Expression: ${expressionCue}; fresh light everyday date makeup with natural glow.`
-      : `EXPRESSION & DATE MAKEUP: ${expressionCue}; fresh light everyday date makeup with natural glow and soft rosy tint.`,
-  );
+  if (poseRefIndex) {
+    parts.push(
+      `POSE & FRAMING REFERENCE ONLY (Image ${poseRefIndex}): Replicate ONLY the body posture, hand gestures, couple spacing, and camera framing from Image ${poseRefIndex}${chosenPose?.posePrompt ? ` (${chosenPose.posePrompt})` : ''}. STRICTLY IGNORE and NEVER copy any person's face, hair, identity, or outfit from Image ${poseRefIndex}. Expression: ${expressionCue}; fresh light everyday date makeup with natural glow.`,
+    );
+  } else {
+    parts.push(
+      chosenPose?.posePrompt
+        ? `POSE & EXPRESSION (${chosenPose.label}): ${chosenPose.posePrompt}. Expression: ${expressionCue}; fresh light everyday date makeup with natural glow.`
+        : `EXPRESSION & DATE MAKEUP: ${expressionCue}; fresh light everyday date makeup with natural glow and soft rosy tint.`,
+    );
+  }
 
   if (hasUserRef) {
     parts.push(
@@ -666,6 +674,20 @@ export async function generateDatePhoto(companion, session = null, {
     }
   }
 
+  let poseRefIndex = null;
+  const chosenPose = poseId ? getPoseById(poseId) : null;
+  if (chosenPose?.imageRef && refDataUrls.length < 4) {
+    try {
+      const poseAsset = await readAssetBuffer(chosenPose.imageRef);
+      if (poseAsset?.buffer?.length) {
+        refDataUrls.push(`data:${poseAsset.contentType || 'image/jpeg'};base64,${poseAsset.buffer.toString('base64')}`);
+        poseRefIndex = refDataUrls.length;
+      }
+    } catch (e) {
+      log('warn', `[DateMode] read pose ref failed pose=${chosenPose.id}: ${e.message}`);
+    }
+  }
+
   const preset = DATE_PRESETS[session?.activity_type] || DATE_PRESETS.custom;
   const prompt = buildDatePhotoPrompt({
     mode,
@@ -673,6 +695,7 @@ export async function generateDatePhoto(companion, session = null, {
     hasUserRef,
     sceneRefIndex,
     outfitRefIndex,
+    poseRefIndex,
     fallbackCharPrompt: hasCompanionRef ? '' : (buildIdentityPrompt(visual?.identity) || `a ${companion.age || 20}-year-old East Asian young woman`),
     outfitPrompt,
     presetScenePrompt: preset.scenePrompt,
@@ -697,6 +720,9 @@ export async function generateDatePhoto(companion, session = null, {
     decoded.mime || 'image/png',
     hasUserRef ? 'couple' : (mode === 'cyber_group' ? 'cyber' : 'date'),
   );
+  if (saved?.fileName) {
+    mirrorBufferToR2Quietly(`companions/${companion.id}/dates/${saved.fileName}`, decoded.buffer, decoded.mime || 'image/png').catch(() => {});
+  }
   if (session?.id && saved?.fileName) {
     appendDateSessionPhoto(companion.id, session.id, saved.fileName);
   }

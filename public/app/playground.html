@@ -14,8 +14,8 @@
   <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
 
-  <link rel="stylesheet" href="/app/tailwind.css?v=41" />
-  <link rel="stylesheet" href="/app/glass.css?v=41" />
+  <link rel="stylesheet" href="/app/tailwind.css?v=43" />
+  <link rel="stylesheet" href="/app/glass.css?v=43" />
   <style>
     /* 清透极光玻璃（默认浅色） + 暗夜液态玻璃（深色）双主题 */
     body {
@@ -142,6 +142,7 @@
     }
     .pg-pose-card.is-active .pg-pose-stage { background: linear-gradient(180deg, #FFF0F7 0%, #FFE6F1 100%); }
     .pg-pose-stage .pose-preview-svg { width: 68px; height: 58px; display: block; }
+    .pg-pose-stage img { width: 100%; height: 100%; object-fit: cover; display: block; }
     .pg-pose-badge {
       position: absolute; top: 3px; right: 3px; font-size: 8.5px; font-weight: 700; padding: 1px 4px;
       border-radius: 9999px; background: rgba(255,255,255,0.88); color: #7A7585;
@@ -406,16 +407,24 @@
         btn.type = 'button';
         btn.className = 'pg-pose-card' + (active ? ' is-active' : '');
         btn.title = p.descZh || p.tag || p.label;
-        const svgHtml = typeof window.renderPosePreviewSvg === 'function'
-          ? window.renderPosePreviewSvg(p.id, 'couple')
-          : '<span class="text-[22px]">' + (p.emoji || '💕') + '</span>';
+        const visualHtml = p.previewUrl
+          ? '<img data-role="pose-img" alt="' + p.label + '" class="' + (p.authRequired ? 'hidden' : '') + '" ' + (p.authRequired ? '' : 'src="' + p.previewUrl + '"') + ' />'
+          : (typeof window.renderPosePreviewSvg === 'function'
+              ? window.renderPosePreviewSvg(p.id, 'couple')
+              : '<span class="text-[22px]">' + (p.emoji || '💕') + '</span>');
         const badge = p.framingLabel || p.tag || '';
         btn.innerHTML =
           '<div class="pg-pose-stage">' +
             (badge ? '<span class="pg-pose-badge">' + badge + '</span>' : '') +
-            svgHtml +
+            visualHtml +
           '</div>' +
           '<div class="pg-pose-name">' + p.label + '</div>';
+        if (p.previewUrl && p.authRequired) {
+          const imgEl = btn.querySelector('img[data-role="pose-img"]');
+          fetchAuthedBlob(p.previewUrl).then(blobUrl => {
+            if (blobUrl && imgEl) { imgEl.src = blobUrl; imgEl.classList.remove('hidden'); }
+          });
+        }
         btn.addEventListener('click', () => {
           pgSelectedCouplePoseId = p.id;
           renderPgCouplePoseBar();

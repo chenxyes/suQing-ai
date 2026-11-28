@@ -265,6 +265,29 @@ try {
   assert.equal(database.getWardrobeItem(1, presetItem.id).status, 'wearing', '预设服装一键穿上应正常落库并生效');
   assert.equal(database.getWardrobeItem(1, topLayer.id).status, 'wearing', '穿上外套预设不应覆盖其他在穿部位');
 
+  // 整套穿搭换装：replaceAllWearing=true 应自动脱下之前所有在穿单品，并生成 FULL OUTFIT TRANSFER Prompt
+  const fullOutfitItem = database.createWardrobeItem({
+    companionId: 1,
+    slot: 'outerwear',
+    category: '外套',
+    name: '大衣 + 荷叶边针织牛仔短裙',
+    visualPrompt: 'spring outfit, ivory frill knit denim mini skirt, coat, socks, white sneakers',
+    giftedBy: 'user',
+    giftedNote: '精选服装库 · 整套穿搭 · 大衣 + 荷叶边针织牛仔短裙',
+    status: 'wearing',
+    replaceAllWearing: true,
+  });
+  assert.equal(database.getWardrobeItem(1, fullOutfitItem.id).status, 'wearing');
+  assert.equal(database.getWardrobeItem(1, presetItem.id).status, 'owned', '整套换装应自动脱下旧外套');
+  assert.equal(database.getWardrobeItem(1, topLayer.id).status, 'owned', '整套换装应自动脱下旧上衣');
+  const fullPrompt = wardrobe.buildLayeredTryonPrompt({
+    items: [fullOutfitItem],
+    hasFaceRef: true,
+    imageBindings: [{ imageIndex: 2, item: fullOutfitItem }],
+    singlePartPreserveRest: true,
+  });
+  assert.ok(fullPrompt.prompt.includes('FULL OUTFIT TRANSFER RULE'), '整套穿搭应使用整套迁移规则而非单部位替换');
+
   console.log('wardrobe_tryon_check: all wardrobe, try-on, delivery, face-lock, layering and Phase 4-A pose/preset assertions passed');
 } finally {
   server?.close();
