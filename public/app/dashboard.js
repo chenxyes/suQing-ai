@@ -2092,6 +2092,27 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
     }
   }
 
+  function findCabinetItemForPreset(preset) {
+    if (!preset || !Array.isArray(cachedItems) || !cachedItems.length) return null;
+    const pid = String(preset.id || '').trim();
+    const pname = String(preset.name || '').trim();
+    const pslot = String(preset.slot || '').trim();
+    const pprompt = String(preset.visualPrompt || '').trim().slice(0, 500);
+    return cachedItems.find(it => {
+      if (!it || it.status === 'archived') return false;
+      const itemPid = String(it.preset_id || '').trim();
+      // 藏品已绑定 preset_id 时，严格只按 preset_id 精确匹配，绝不按名称模糊撞车
+      if (itemPid) return Boolean(pid && itemPid === pid);
+      // 迁移前的旧藏品（preset_id 为空）：必须 slot + name + visual_prompt 全一致
+      return Boolean(
+        pname && pslot && pprompt &&
+        String(it.name || '').trim() === pname &&
+        String(it.slot || '').trim() === pslot &&
+        String(it.visual_prompt || '').trim().slice(0, 500) === pprompt
+      );
+    }) || null;
+  }
+
   function renderPresetDrawer() {
     if (!presetGridEl || !presetFiltersEl || !catalogCache?.outfitPresets) return;
     if (storageBadgeEl) {
@@ -2137,6 +2158,9 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
             ? window.renderOutfitPresetSvg(p.id, p.slot)
             : '<span class="text-[30px]">' + escHtml(p.emoji || '👗') + '</span>');
       const slotBadgeText = (p.isCustom && p.extractedMode === 'flatlay' ? '✨平铺 · ' : '') + (SLOT_TEXT[p.slot] || p.category);
+      const existingCabinetItem = findCabinetItemForPreset(p);
+      const isInCabinet = Boolean(existingCabinetItem);
+      const isWearingNow = existingCabinetItem?.status === 'wearing';
       card.innerHTML =
         '<div class="preset-stage">' +
           (p.isCustom ? '<button type="button" class="custom-asset-del" data-del-preset="' + escHtml(p.id) + '" title="删除此收藏预设">×</button>' : '') +
@@ -2154,8 +2178,12 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
             (p.styleTags || []).slice(0, 3).map(t => '<span class="preset-tag">' + escHtml(t) + '</span>').join('') +
           '</div>' +
           '<div class="flex items-center gap-1.5 mt-auto pt-1">' +
-            '<button type="button" data-preset-status="wearing" class="wardrobe-mini-btn is-primary">👗 立即穿上</button>' +
-            '<button type="button" data-preset-status="owned" class="wardrobe-mini-btn is-ghost">💎 收入展柜</button>' +
+            (isWearingNow
+              ? '<button type="button" disabled class="wardrobe-mini-btn is-wearing-now" title="苏晴正在穿这件，换其他款式或脱下后可再次选择">✨ 穿着中</button>'
+              : '<button type="button" data-preset-status="wearing" class="wardrobe-mini-btn is-primary">👗 立即穿上</button>') +
+            (isInCabinet
+              ? '<button type="button" disabled class="wardrobe-mini-btn is-done" title="已收入玻璃展柜，从展柜移除后可重新收入">✓ 已入展柜</button>'
+              : '<button type="button" data-preset-status="owned" class="wardrobe-mini-btn is-ghost">💎 收入展柜</button>') +
           '</div>' +
         '</div>';
 
@@ -2231,13 +2259,17 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
                 msgEl.textContent = '✓ 已换上「' + p.name + '」，但自动试穿生图失败：' + tryErr.message + '（可在展柜点「📸 试穿」重试）';
               }
             } else {
-              msgEl.textContent = '✓ 已将「' + p.name + '」收入展柜珍藏！';
+              msgEl.textContent = d.data?.already_in_cabinet
+                ? '✓ 「' + p.name + '」已经在展柜珍藏里啦！'
+                : '✓ 已将「' + p.name + '」收入展柜珍藏！';
             }
           } catch (e) {
             msgEl.textContent = '添加预设失败：' + e.message;
           } finally {
-            btn.disabled = false;
-            btn.textContent = prevText;
+            if (btn.isConnected) {
+              btn.disabled = false;
+              btn.textContent = prevText;
+            }
           }
         });
       });
@@ -2466,6 +2498,7 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
       cachedItems = (d.data && d.data.items) || [];
       cachedStylistNote = (d.data && d.data.stylist_note) || null;
       renderCabinet();
+      if (catalogCache?.outfitPresets) renderPresetDrawer();
       if (typeof window.__refreshHeroStage === 'function') window.__refreshHeroStage();
     } catch (e) {
       listEl.innerHTML = '<div class="wardrobe-empty-slot text-red-600">加载展示柜失败：' + escHtml(e.message) + '</div>';

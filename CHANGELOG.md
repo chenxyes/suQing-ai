@@ -6,6 +6,11 @@
 
 ## [Unreleased] - 2026-11-28
 
+### Fixed
+- **精选服装灵感库「收入展柜 / 穿着中」唯一绑定、防重复与置灰态同步（`src/db.mjs`、`src/api.mjs`、`src/pose_outfit_library.mjs`、`src/wardrobe_stylist.mjs`、`public/app/dashboard.js`、`public/app/dashboard.css`）**：
+  - `companion_wardrobe` 增量补齐 `preset_id` 字段并在迁移时按 `slot + name + visual_prompt` 自动为历史藏品精确回填唯一 `preset_id`；`findWardrobeItemByPreset()` 严格按 `preset_id` 唯一匹配（无 `preset_id` 的旧数据仅按 `slot + name + visual_prompt` 三重精确匹配），彻底避免多款同名预设（如多条“短款连衣裙”）互相撞车。
+  - `POST /api/companions/:id/wardrobe/preset` 改为幂等去重，已入柜单品不重复建档，点「立即穿上」时直接复用已有藏品；灵感库卡片与展柜状态实时联动，已入柜按钮置灰禁用为「✓ 已入展柜」，正在穿着显示「✨ 穿着中」，移出展柜后自动恢复可点击。
+
 ### Added
 
 #### Phase 4-A++ · 真透明背景抠图平铺修复 + 苏晴「衣橱主理人」自主搭配与选姿势

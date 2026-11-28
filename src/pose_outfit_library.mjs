@@ -467,6 +467,7 @@ function serializePresetForCatalog(p) {
     material: p.material,
     styleTags: p.styleTags,
     descZh: p.descZh,
+    visualPrompt: p.visualPrompt || '',
     emoji: p.emoji,
     swatch: p.swatch,
     previewUrl,

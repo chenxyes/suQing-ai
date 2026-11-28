@@ -170,7 +170,7 @@ import {
   saveImageReaction,
   getConversationContext, clearConversationContext,
   GIFT_CATALOG, getGiftById, saveCompanionGift, getCompanionGifts,
-  createWardrobeItem, getWardrobeItem, listWardrobeItems, wearWardrobeItem, updateWardrobeItem, deleteWardrobeItem,
+  createWardrobeItem, getWardrobeItem, listWardrobeItems, wearWardrobeItem, updateWardrobeItem, deleteWardrobeItem, findWardrobeItemByPreset,
   getReminders, createReminder, updateReminder, deleteReminder, getDueReminders,
   getUserProfile, getUserProfileForRecall, upsertUserProfile, softClearMemories,
   getDb, // BILLING_DISABLED: 保留 db helper 以便 18 岁后恢复
@@ -4057,6 +4057,7 @@ router.post('/wardrobe/catalog/extract-save', requireAuth, async (req, res) => {
           styleTags: presetRow.styleTags,
           visualPrompt: presetRow.visualPrompt,
           sourceImagePath: localProdPath,
+          presetId: presetRow.id,
           giftedBy: 'user',
           giftedNote: `截图扒同款 · ${presetRow.name}`,
           status: addStatus,
@@ -4096,6 +4097,30 @@ router.post('/companions/:id/wardrobe/preset', requireAuth, async (req, res) => 
   if (!preset) return err(res, '服装预设不存在', 404);
   const status = ['wearing', 'owned', 'tryon_only'].includes(req.body?.status) ? req.body.status : 'wearing';
 
+  const { isFullOutfitItem } = await import('./wardrobe.mjs');
+  const isFullOutfit = isFullOutfitItem(preset);
+  const isDress = /连衣裙|茶歇裙|礼服/.test(String(preset.name || ''));
+  const replaceAllWearing = status === 'wearing' && (req.body?.replace_wearing === true || isFullOutfit);
+  const replaceSlots = status === 'wearing' && !replaceAllWearing && isDress
+    ? ['bottom_or_dress', 'top']
+    : null;
+
+  // 幂等去重：展柜里已有同一预设单品时不重复建档；点「立即穿上」则直接穿上已有单品
+  const existing = findWardrobeItemByPreset(id, preset);
+  if (existing) {
+    let targetItem = existing;
+    if (!existing.preset_id) {
+      targetItem = updateWardrobeItem(id, existing.id, { presetId: preset.id }) || existing;
+    }
+    if (status === 'wearing') {
+      targetItem = wearWardrobeItem(id, targetItem.id, { replaceAllWearing, replaceSlots }) || targetItem;
+      log('info', `[API] wardrobe preset reused & worn companion=${id} preset=${preset.id} item=#${targetItem.id} replaceAll=${replaceAllWearing}`);
+      return ok(res, { item: targetItem, preset, already_in_cabinet: true, replaced_all: replaceAllWearing }, 200);
+    }
+    log('info', `[API] wardrobe preset already in cabinet companion=${id} preset=${preset.id} item=#${targetItem.id}`);
+    return ok(res, { item: targetItem, preset, already_in_cabinet: true, replaced_all: false }, 200);
+  }
+
   let sourceImagePath = null;
   if (preset.imageRef) {
     try {
@@ -4110,14 +4135,6 @@ router.post('/companions/:id/wardrobe/preset', requireAuth, async (req, res) => 
     }
   }
 
-  const { isFullOutfitItem } = await import('./wardrobe.mjs');
-  const isFullOutfit = isFullOutfitItem(preset);
-  const isDress = /连衣裙|茶歇裙|礼服/.test(String(preset.name || ''));
-  const replaceAllWearing = status === 'wearing' && (req.body?.replace_wearing === true || isFullOutfit);
-  const replaceSlots = status === 'wearing' && !replaceAllWearing && isDress
-    ? ['bottom_or_dress', 'top']
-    : null;
-
   const item = createWardrobeItem({
     companionId: id,
     slot: preset.slot,
@@ -4128,6 +4145,7 @@ router.post('/companions/:id/wardrobe/preset', requireAuth, async (req, res) => 
     styleTags: preset.styleTags,
     visualPrompt: preset.visualPrompt,
     sourceImagePath,
+    presetId: preset.id,
     giftedBy: 'user',
     giftedNote: isFullOutfit ? `精选服装库 · 整套穿搭 · ${preset.name}` : `精选服装库 · ${preset.name}`,
     status,
@@ -4135,7 +4153,7 @@ router.post('/companions/:id/wardrobe/preset', requireAuth, async (req, res) => 
     replaceSlots,
   });
   log('info', `[API] wardrobe preset added companion=${id} preset=${preset.id} item=#${item.id} status=${item.status} replaceAll=${replaceAllWearing} hasSource=${Boolean(sourceImagePath)}`);
-  return ok(res, { item, preset, replaced_all: replaceAllWearing }, 201);
+  return ok(res, { item, preset, already_in_cabinet: false, replaced_all: replaceAllWearing }, 201);
 });
 
 // POST /api/companions/:id/wardrobe/outfit-tryon
