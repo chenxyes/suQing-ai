@@ -36,6 +36,7 @@ import { generateImage } from './ai.mjs';
 import { ensureVisualIdentity, buildIdentityPrompt } from './visual_identity.mjs';
 import { ANTI_COLLAGE_PROMPT } from './photo_sender.mjs';
 import { resolveWardrobeImagePath } from './wardrobe.mjs';
+import { getPoseById } from './pose_outfit_library.mjs';
 import { log } from './logger.mjs';
 
 export const PRESENCE_MODES = ['local', 'ldr', 'digital'];
@@ -521,8 +522,11 @@ export function buildDatePhotoPrompt({
   outfitPrompt = '',
   presetScenePrompt = '',
   userText = '',
+  poseId = null,
 } = {}) {
-  const expressionCue = DATE_EXPRESSION_POOL[Math.floor(Math.random() * DATE_EXPRESSION_POOL.length)];
+  const chosenPose = poseId ? getPoseById(poseId) : null;
+  const expressionCue = chosenPose?.expressionPrompt
+    || DATE_EXPRESSION_POOL[Math.floor(Math.random() * DATE_EXPRESSION_POOL.length)];
   const parts = [];
   if (hasCompanionRef) {
     parts.push(
@@ -532,7 +536,11 @@ export function buildDatePhotoPrompt({
     parts.push(`SUBJECT: ${fallbackCharPrompt}.`);
   }
 
-  parts.push(`EXPRESSION & DATE MAKEUP: ${expressionCue}; fresh light everyday date makeup with natural glow and soft rosy tint.`);
+  parts.push(
+    chosenPose?.posePrompt
+      ? `POSE & EXPRESSION (${chosenPose.label}): ${chosenPose.posePrompt}. Expression: ${expressionCue}; fresh light everyday date makeup with natural glow.`
+      : `EXPRESSION & DATE MAKEUP: ${expressionCue}; fresh light everyday date makeup with natural glow and soft rosy tint.`,
+  );
 
   if (hasUserRef) {
     parts.push(
@@ -582,6 +590,7 @@ export async function generateDatePhoto(companion, session = null, {
   sceneMime = 'image/jpeg',
   includeUser = true,
   userText = '',
+  poseId = null,
 } = {}, deps = {}) {
   if (!companion?.id) return { ok: false, error: 'companion_missing' };
 
@@ -668,6 +677,7 @@ export async function generateDatePhoto(companion, session = null, {
     outfitPrompt,
     presetScenePrompt: preset.scenePrompt,
     userText,
+    poseId,
   });
 
   const referenceImage = refDataUrls.length > 1 ? refDataUrls : (refDataUrls[0] || null);

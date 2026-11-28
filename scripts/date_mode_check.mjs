@@ -236,11 +236,13 @@ const couplePrompt = buildDatePhotoPrompt({
   outfitRefIndex: 4,
   outfitPrompt: 'black puffer jacket',
   userText: '湖边一起合影',
+  poseId: 'couple_cheek_peace',
 });
 assert.ok(couplePrompt.includes('WOMAN IDENTITY LOCK') && couplePrompt.includes('Image 1'), '应强锁伴侣 Image 1 身份');
 assert.ok(couplePrompt.includes('PARTNER IDENTITY LOCK') && couplePrompt.includes('Image 2'), '应强锁本人 Image 2 身份实现双人同框');
 assert.ok(couplePrompt.includes('Image 3') && couplePrompt.includes('BACKGROUND SCENE BINDING'), '应绑定现实背景图 Image 3');
 assert.ok(couplePrompt.includes('Image 4') && couplePrompt.includes('OUTFIT BINDING'), '应绑定衣橱穿搭图 Image 4');
+assert.ok(couplePrompt.includes('flashing relaxed peace signs'), '指定双人 pose_id 必须将对应合影姿势注入 Prompt');
 assert.ok(!couplePrompt.includes('soft round full cheeks'), '有人物定妆参考图时绝不能注入通用脸部文本');
 assert.equal(clearUserPortraitReference(comp.id), true);
 assert.equal(getUserPortraitReference(comp.id), null);

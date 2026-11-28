@@ -217,7 +217,55 @@ try {
   const afterUnwear = database.listWardrobeItems(1, { status: 'wearing' });
   assert.ok(!afterUnwear.some(i => i.id === bagLayer.id) && afterUnwear.some(i => i.id === topLayer.id) && afterUnwear.some(i => i.id === coat1.id), '脱下单部位不应影响其他在穿部位');
 
-  console.log('wardrobe_tryon_check: all wardrobe, try-on, delivery, face-lock and layering assertions passed');
+  // ── 9. Phase 4-A：姿势库（10 单人 + 6 双人）与精选服装灵感预设库（12 件跨 6 槽位） ──
+  const catalogLib = await import('../src/pose_outfit_library.mjs');
+  const catalog = catalogLib.getPoseAndOutfitCatalog();
+  assert.equal(catalog.soloPoses.length, 10, '应内置 10 款单人试穿姿势');
+  assert.equal(catalog.couplePoses.length, 6, '应内置 6 款双人约会合影姿势');
+  assert.equal(catalog.outfitPresets.length, 12, '应内置 12 款精选服装灵感预设');
+  for (const p of [...catalog.soloPoses, ...catalog.couplePoses]) {
+    assert.ok(p.framingLabel && p.descZh, `姿势 ${p.id} 必须提供景别标签与中文动作预览说明`);
+  }
+  for (const item of catalog.outfitPresets) {
+    assert.ok(item.descZh && item.swatch, `服装预设 ${item.id} 必须提供中文款式说明与色块预览`);
+  }
+  const coveredSlots = new Set(catalog.outfitPresets.map(p => p.slot));
+  for (const s of ['top', 'outerwear', 'bottom_or_dress', 'shoes', 'bag', 'accessory']) {
+    assert.ok(coveredSlots.has(s), `精选服装预设库必须覆盖槽位 ${s}`);
+  }
+  assert.ok(!JSON.stringify(catalog).includes('用户'), '姿势库与服装预设库严禁出现禁用称谓');
+
+  const posePrompt = wardrobe.buildLayeredTryonPrompt({
+    items: [topLayer, coat1],
+    hasFaceRef: true,
+    poseId: 'pocket_cool',
+    singlePartPreserveRest: false,
+  });
+  const pocketPose = catalogLib.getPoseById('pocket_cool', 'solo');
+  assert.equal(posePrompt.shotMode, pocketPose.shotMode, '指定 pose_id 后应采纳对应机位 shotMode');
+  assert.ok(posePrompt.prompt.includes(pocketPose.posePrompt), '指定 pose_id 必须将对应姿势动作注入 Prompt');
+  assert.ok(posePrompt.prompt.includes(pocketPose.expressionPrompt), '指定 pose_id 必须将对应表情注入 Prompt');
+
+  const presetDef = catalogLib.getOutfitPresetById('preset_camel_coat');
+  assert.ok(presetDef && presetDef.slot === 'outerwear');
+  const presetItem = database.createWardrobeItem({
+    companionId: 1,
+    slot: presetDef.slot,
+    category: presetDef.category,
+    name: presetDef.name,
+    color: presetDef.color,
+    material: presetDef.material,
+    styleTags: presetDef.styleTags,
+    visualPrompt: presetDef.visualPrompt,
+    giftedBy: 'preset',
+    giftedNote: '精选服装灵感库一键加入',
+    status: 'wearing',
+  });
+  assert.equal(presetItem.name, presetDef.name);
+  assert.equal(database.getWardrobeItem(1, presetItem.id).status, 'wearing', '预设服装一键穿上应正常落库并生效');
+  assert.equal(database.getWardrobeItem(1, topLayer.id).status, 'wearing', '穿上外套预设不应覆盖其他在穿部位');
+
+  console.log('wardrobe_tryon_check: all wardrobe, try-on, delivery, face-lock, layering and Phase 4-A pose/preset assertions passed');
 } finally {
   server?.close();
   db?.close();

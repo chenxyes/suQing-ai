@@ -14,8 +14,8 @@
   <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
 
-  <link rel="stylesheet" href="/app/tailwind.css?v=38" />
-  <link rel="stylesheet" href="/app/glass.css?v=38" />
+  <link rel="stylesheet" href="/app/tailwind.css?v=41" />
+  <link rel="stylesheet" href="/app/glass.css?v=41" />
   <style>
     /* 清透极光玻璃（默认浅色） + 暗夜液态玻璃（深色）双主题 */
     body {
@@ -127,8 +127,41 @@
     }
     .pg-lightbox.hidden { display: none; }
     .pg-lightbox img { max-width: 92vw; max-height: 86vh; border-radius: 16px; box-shadow: 0 24px 64px rgba(0,0,0,0.55); }
+    .pg-pose-card {
+      position: relative; display: flex; flex-direction: column; width: 88px; flex-shrink: 0;
+      border-radius: 12px; overflow: hidden; background: rgba(255,255,255,0.88);
+      border: 1.5px solid rgba(226,224,232,0.9); cursor: pointer; padding: 0; text-align: left;
+      transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .pg-pose-card:hover { transform: translateY(-2px); border-color: #FF8FB8; }
+    .pg-pose-card.is-active { border-color: #F46AA0; box-shadow: 0 0 0 2px rgba(244,106,160,0.24); }
+    .pg-pose-stage {
+      position: relative; height: 64px; display: flex; align-items: center; justify-content: center;
+      background: linear-gradient(180deg, #FFF9FC 0%, #F4F6FB 100%);
+      border-bottom: 1px solid rgba(226,224,232,0.65);
+    }
+    .pg-pose-card.is-active .pg-pose-stage { background: linear-gradient(180deg, #FFF0F7 0%, #FFE6F1 100%); }
+    .pg-pose-stage .pose-preview-svg { width: 68px; height: 58px; display: block; }
+    .pg-pose-badge {
+      position: absolute; top: 3px; right: 3px; font-size: 8.5px; font-weight: 700; padding: 1px 4px;
+      border-radius: 9999px; background: rgba(255,255,255,0.88); color: #7A7585;
+    }
+    .pg-pose-card.is-active .pg-pose-badge { background: linear-gradient(135deg,#FF9BC2,#F46AA0); color: #fff; }
+    .pg-pose-name { font-size: 10px; font-weight: 700; padding: 4px 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #2A2730; }
+    .pg-pose-card.is-active .pg-pose-name { color: #E0578A; }
+    html[data-theme="dark"] .pg-pose-card {
+      background: rgba(34,34,46,0.92); border-color: rgba(255,255,255,0.1);
+      --pose-her: #FF94BC; --pose-her-fill: rgba(255,148,188,0.22);
+      --pose-him: #89A6FF; --pose-him-fill: rgba(137,166,255,0.22);
+      --pose-prop: rgba(196,196,214,0.52); --pose-prop-soft: rgba(255,255,255,0.06); --pose-accent: #FBBF24;
+    }
+    html[data-theme="dark"] .pg-pose-stage { background: linear-gradient(180deg, #252432 0%, #1C1C27 100%); border-bottom-color: rgba(255,255,255,0.08); }
+    html[data-theme="dark"] .pg-pose-badge { background: rgba(20,20,28,0.82); color: #C4C4D2; }
+    html[data-theme="dark"] .pg-pose-name { color: #F2F2F7; }
+    html[data-theme="dark"] .pg-pose-card.is-active .pg-pose-name { color: #FFB6D9; }
   </style>
   <script src="/app/theme.js" defer></script>
+  <script src="/app/pose-previews.js?v=41" defer></script>
   <script src="/app/i18n.js" defer></script>
 </head>
 <body class="font-sans text-ink min-h-screen">
@@ -187,7 +220,7 @@
     </div>
 
     <!-- 本人形象照状态（用于双人同框合影） -->
-    <div class="rounded-xl border border-sakura-soft/70 bg-white/50 dark:bg-white/5 p-2.5 mb-2.5 flex items-center justify-between gap-2 flex-wrap">
+    <div class="rounded-xl border border-sakura-soft/70 bg-white/50 dark:bg-white/5 p-2.5 mb-2 flex items-center justify-between gap-2 flex-wrap">
       <div class="text-[11.5px]">
         <span class="font-semibold">🧑 我的形象照（双人合影同框用）：</span>
         <span id="pg-user-ref-status" class="text-mute">检测中…</span>
@@ -196,6 +229,15 @@
         📷 上传我的照片
         <input id="pg-user-ref-input" type="file" accept="image/*" class="sr-only" />
       </label>
+    </div>
+
+    <!-- 双人合影姿势选择条 -->
+    <div class="rounded-xl border border-sakura-soft/60 bg-white/45 dark:bg-white/5 px-2.5 py-2 mb-2.5">
+      <div class="flex items-center justify-between gap-2 mb-1.5">
+        <span class="text-[11px] font-semibold">💕 合影姿势选择</span>
+        <span id="pg-couple-pose-hint" class="text-[10.5px] text-mute">当前：自动自然</span>
+      </div>
+      <div id="pg-couple-pose-bar" class="flex items-center gap-1.5 overflow-x-auto pb-0.5" style="scrollbar-width:none;"></div>
     </div>
 
     <div id="pg-sheet-idle" class="space-y-2">
@@ -340,6 +382,58 @@
     // ─── Companion & Date Mode 状态同步 ────────────────────────────────────
     let activeDateSession = null;
     let hasUserPortrait = false;
+    let pgCouplePoses = [];
+    let pgSelectedCouplePoseId = '';
+
+    function renderPgCouplePoseBar() {
+      const bar = document.getElementById('pg-couple-pose-bar');
+      const hint = document.getElementById('pg-couple-pose-hint');
+      if (!bar || !pgCouplePoses.length) return;
+      const cur = pgCouplePoses.find(p => p.id === pgSelectedCouplePoseId) || null;
+      if (hint) {
+        hint.textContent = cur
+          ? '已选「' + cur.label + '」· ' + (cur.descZh || cur.tag)
+          : '当前：自动自然（按约会场景自由构图）';
+      }
+      bar.innerHTML = '';
+      const opts = [
+        { id: '', emoji: '🎲', label: '自动自然', framingLabel: '自动', descZh: '根据约会场景自由构图' },
+        ...pgCouplePoses,
+      ];
+      for (const p of opts) {
+        const btn = document.createElement('button');
+        const active = pgSelectedCouplePoseId === p.id;
+        btn.type = 'button';
+        btn.className = 'pg-pose-card' + (active ? ' is-active' : '');
+        btn.title = p.descZh || p.tag || p.label;
+        const svgHtml = typeof window.renderPosePreviewSvg === 'function'
+          ? window.renderPosePreviewSvg(p.id, 'couple')
+          : '<span class="text-[22px]">' + (p.emoji || '💕') + '</span>';
+        const badge = p.framingLabel || p.tag || '';
+        btn.innerHTML =
+          '<div class="pg-pose-stage">' +
+            (badge ? '<span class="pg-pose-badge">' + badge + '</span>' : '') +
+            svgHtml +
+          '</div>' +
+          '<div class="pg-pose-name">' + p.label + '</div>';
+        btn.addEventListener('click', () => {
+          pgSelectedCouplePoseId = p.id;
+          renderPgCouplePoseBar();
+        });
+        bar.appendChild(btn);
+      }
+    }
+
+    async function loadPgPoseCatalog() {
+      try {
+        const r = await fetch('/api/wardrobe/catalog', { headers: authHeaders() });
+        const d = await r.json();
+        if (r.ok && d.ok && Array.isArray(d.data?.couplePoses)) {
+          pgCouplePoses = d.data.couplePoses;
+          renderPgCouplePoseBar();
+        }
+      } catch {}
+    }
 
     async function loadCompanion() {
       try {
@@ -604,20 +698,22 @@
 
     async function triggerDatePhotoInChat(bgDataUrl = '', note = '') {
       dateSheet?.classList.add('hidden');
-      const card = appendDevelopingCard(hasUserPortrait ? '正在拍摄双人同框约会合影' : '正在拍摄约会打卡照');
+      const curPose = pgCouplePoses.find(p => p.id === pgSelectedCouplePoseId);
+      const poseTip = curPose ? ' · ' + curPose.label : '';
+      const card = appendDevelopingCard((hasUserPortrait ? '正在拍摄双人同框约会合影' : '正在拍摄约会打卡照') + poseTip);
       try {
         const endpoint = bgDataUrl
           ? '/api/companions/' + companionId + '/date-mode/cyber-photo'
           : '/api/companions/' + companionId + '/date-mode/photo';
         const body = bgDataUrl
-          ? { image: bgDataUrl, note, include_user: true }
-          : { note, include_user: true };
+          ? { image: bgDataUrl, note, include_user: true, pose_id: pgSelectedCouplePoseId || undefined }
+          : { note, include_user: true, pose_id: pgSelectedCouplePoseId || undefined };
         const r = await fetch(endpoint, { method: 'POST', headers: authHeaders(), body: JSON.stringify(body) });
         const d = await r.json().catch(() => ({}));
         if (!r.ok || !d.ok) throw new Error(d.error || '拍照失败');
         const cap = d.data?.has_user_ref
-          ? '💕 我们的双人约会合影（点击可放大）'
-          : '📷 约会打卡照（点「💕 约会剧场 → 上传我的照片」即可拍双人同框合影）';
+          ? '💕 我们的双人约会合影' + poseTip + '（点击可放大）'
+          : '📷 约会打卡照' + poseTip + '（点「💕 约会剧场 → 上传我的照片」即可拍双人同框合影）';
         await resolveDevelopingCard(card, d.data.image_url, cap);
       } catch (e) {
         card.remove();
@@ -840,7 +936,7 @@
     fetch('/api/me/capabilities', { headers: { Authorization: 'Bearer ' + token } })
       .then(r => r.json()).then(d => { if (d?.ok) window.__CAPS = d.data || window.__CAPS; })
       .catch(() => {})
-      .finally(() => Promise.all([loadCompanion(), loadDateOverview()]).then(() => loadHistory()));
+      .finally(() => Promise.all([loadCompanion(), loadDateOverview(), loadPgPoseCatalog()]).then(() => loadHistory()));
   </script>
 </body>
 </html>

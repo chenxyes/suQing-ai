@@ -14,9 +14,9 @@
   <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
   <link rel="manifest" href="/manifest.webmanifest" />
-  <link rel="stylesheet" href="/app/tailwind.css?v=38" />
-  <link rel="stylesheet" href="/app/glass.css?v=38" />
-  <link rel="stylesheet" href="/app/dashboard.css?v=38" />
+  <link rel="stylesheet" href="/app/tailwind.css?v=42" />
+  <link rel="stylesheet" href="/app/glass.css?v=42" />
+  <link rel="stylesheet" href="/app/dashboard.css?v=42" />
   <link rel="stylesheet" href="/app/stickers.css?v=35" />
   <script src="/app/theme.js" defer></script>
   <script src="/app/shared.js" defer></script>
@@ -620,12 +620,28 @@
                       <span class="text-sakura-deep">更换</span>
                       <input id="input-upload-ref-portrait" type="file" accept="image/*" class="sr-only" />
                     </label>
-                    <div class="flex items-center gap-1.5">
+                    <div class="flex items-center gap-1.5 flex-wrap">
+                      <button id="btn-wardrobe-toggle-presets" type="button" class="text-[11.5px] font-semibold text-sakura-deep bg-white/85 border border-sakura/50 rounded-full px-3 py-1.5 hover:bg-sakura-soft/50 transition-all">
+                        ✨ 服装灵感库
+                      </button>
                       <button id="btn-wardrobe-toggle-add" type="button" class="text-[11.5px] font-semibold text-white bg-gradient-to-r from-sakura to-sakura-deep rounded-full px-3.5 py-1.5 hover:shadow-sakura transition-all">
                         ＋ 放入新礼物
                       </button>
                       <button id="btn-wardrobe-refresh" type="button" class="text-[11px] text-mute hover:text-sakura-deep px-2 py-1" title="刷新展示柜">↻</button>
                     </div>
+                  </div>
+
+                  <!-- 可折叠：精选服装灵感预设库（免找图，一键穿上/收藏） -->
+                  <div id="wardrobe-preset-drawer" class="preset-drawer hidden mb-3">
+                    <div class="flex items-center justify-between gap-2 mb-2">
+                      <div class="min-w-0">
+                        <span class="text-[12px] font-bold text-ink">✨ 精选服装灵感预设库</span>
+                        <span class="text-[10.5px] text-mute ml-1.5">免找商品图 · 一键收入展柜试穿或自由叠穿</span>
+                      </div>
+                      <button id="btn-wardrobe-close-presets" type="button" class="text-[11px] text-mute hover:text-ink shrink-0">收起</button>
+                    </div>
+                    <div id="wardrobe-preset-filters" class="preset-filter-bar mb-2.5"></div>
+                    <div id="wardrobe-preset-grid" class="preset-grid"></div>
                   </div>
 
                   <!-- 可折叠：送礼/入库抽屉（默认收起，不遮挡展柜视野） -->
@@ -676,6 +692,15 @@
 
                   <!-- 今日上身陈列台（有在穿单品时自动点亮） -->
                   <div id="wardrobe-ootd-stage" class="wardrobe-ootd hidden"></div>
+
+                  <!-- 试穿姿势选择器（同时作用于单品试穿与整套叠穿大片） -->
+                  <div id="wardrobe-pose-wrap" class="pose-strip mb-2.5">
+                    <div class="pose-strip-head">
+                      <span class="text-[11px] font-bold text-ink">✨ 试穿姿势库</span>
+                      <span id="wardrobe-pose-hint" class="text-[10.5px] text-mute">当前：随机自然（按心情与款式自动发挥）</span>
+                    </div>
+                    <div id="wardrobe-pose-bar" class="pose-pill-bar" role="radiogroup" aria-label="试穿姿势选择"></div>
+                  </div>
 
                   <!-- 分层展示架筛选条 -->
                   <div id="wardrobe-shelf-bar" class="wardrobe-shelf-bar" role="tablist" aria-label="衣橱分类展架"></div>
@@ -779,6 +804,15 @@
                     </div>
                   </div>
                   <p id="datemode-status-msg" class="text-[11px] text-mute"></p>
+                </div>
+
+                <!-- 双人合影姿势库（同时作用于约会打卡照与赛博同框合影） -->
+                <div class="pose-strip mb-3">
+                  <div class="pose-strip-head">
+                    <span class="text-[11px] font-bold text-ink">💕 双人约会合影姿势</span>
+                    <span id="datemode-pose-hint" class="text-[10.5px] text-mute">当前：自动自然（按场景发挥）</span>
+                  </div>
+                  <div id="datemode-pose-bar" class="pose-pill-bar" role="radiogroup" aria-label="双人约会合影姿势选择"></div>
                 </div>
 
                 <!-- Layer 2：本人形象照 & 双人赛博合影 -->
@@ -1287,7 +1321,8 @@
 
   <div id="silent-orb" role="button" tabindex="0" aria-label="退出沉默陪伴模式" title="沉默陪伴模式开启中 · 点击退出"></div>
   <script src="/vendor/lucide.min.js" defer></script>
-  <script src="/app/dashboard.js?v=39" defer></script>
+  <script src="/app/pose-previews.js?v=42" defer></script>
+  <script src="/app/dashboard.js?v=42" defer></script>
   <script src="/app/dashboard-model-drawer.js?v=35" defer></script>
   <script src="/app/stickers.js?v=35" defer></script>
 </body>
