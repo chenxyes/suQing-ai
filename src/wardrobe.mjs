@@ -566,8 +566,8 @@ async function persistGeneratedImage(urlOrDataUrl, companionId, filePrefix, visu
   if (!buf || buf.length < 128) throw new Error('generated image too small');
   const outPath = path.join(dir, `${filePrefix}_${Date.now()}.${ext}`);
   writeFileSync(outPath, buf);
-  mirrorBufferToR2Quietly(`companions/${companionId}/wardrobe/${path.basename(outPath)}`, buf, mimeFromFilePath(outPath)).catch(() => {});
-  return outPath;
+  const mirrored = await mirrorBufferToR2Quietly(`companions/${companionId}/wardrobe/${path.basename(outPath)}`, buf, mimeFromFilePath(outPath));
+  return { filePath: outPath, publicUrl: mirrored?.publicUrl || null };
 }
 
 const SLOT_ORDER = ['top', 'bottom_or_dress', 'outerwear', 'shoes', 'bag', 'accessory'];
@@ -851,12 +851,17 @@ export async function generateOutfitTryonImage(companion, targetItems = [], opti
     inputFidelity: 'high',
   });
   const filePrefix = options.filePrefix || (ordered.length > 1 ? 'outfit' : `tryon_${ordered[0].id}`);
-  const filePath = await persistGeneratedImage(rawUrl, companion.id, filePrefix, visualRoot);
+  const persisted = await persistGeneratedImage(rawUrl, companion.id, filePrefix, visualRoot);
+  const filePath = persisted.filePath;
+  const tryonPublicUrl = persisted.publicUrl;
 
   const primaryItem = ordered.find(it => it.id === primaryId) || ordered[0];
   let updatedPrimary = primaryItem;
   if (primaryItem?.id && options.persistToPrimary !== false) {
-    updatedPrimary = updateWardrobeItem(companion.id, primaryItem.id, { tryonImagePath: filePath }) || primaryItem;
+    updatedPrimary = updateWardrobeItem(companion.id, primaryItem.id, {
+      tryonImagePath: filePath,
+      ...(tryonPublicUrl ? { tryonPublicUrl } : {}),
+    }) || primaryItem;
   }
 
   const caption = ordered.length > 1
@@ -869,6 +874,7 @@ export async function generateOutfitTryonImage(companion, targetItems = [], opti
     items: ordered,
     filePath,
     fileName: path.basename(filePath),
+    publicUrl: tryonPublicUrl,
     caption,
     shotMode,
     refCount: refs.length,

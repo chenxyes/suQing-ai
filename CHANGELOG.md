@@ -6,6 +6,12 @@
 
 ## [Unreleased] - 2026-11-28
 
+### Fixed
+- **线上衣橱商品图/试穿照直连 R2 CDN 加速 + 修复展柜加载裂图 Bug（`src/db.mjs`、`src/wardrobe.mjs`、`src/api.mjs`、`src/wardrobe_stylist.mjs`、`public/app/dashboard.*`、`src/auth.mjs`）**：
+  - `companion_wardrobe` 增量新增 `source_public_url` 与 `tryon_public_url` 字段并自动回填预设 CDN 链；试穿照与商品图上传 R2 时持久化公开直链，展柜/今日上身台/灯箱/左侧人物主舞台优先直出 Cloudflare R2 CDN（异常时自动回退鉴权代理），解决跨洋 SSH 隧道拉取大 PNG 超慢卡住的问题。
+  - 修复 `dashboard.css` 中 `.wardrobe-stage-img { display: block }` 覆盖 Tailwind `.hidden` 导致图片加载期间显示裂图图标的样式优先级问题。
+  - 修复 Docker 容器内 `src/auth.mjs` 将 `.auth-secret` 写入只读 `/app/.auth-secret` 报 `EACCES` 的问题，改为优先持久化到可写数据目录 `XIYU_DATA_DIR`。
+
 ### Added
 - **生产部署前自动备份数据库与配置（`deploy/release.sh`、`scripts/deploy_release_check.mjs`）**：
   - 在替换运行中的容器之前，自动将服务器 `data/bot.db`（优先 `sqlite3 .backup` 一致性快照，否则连同 `-wal/-shm` 一并保留）、`.env` 与 `docker-compose.yml` 以 `0700` 权限快照备份到 `.release/backups/<UTC时间戳>/`（自动保留最近 5 份），叠加原有的旧镜像自动回滚机制，确保升级失败可无损恢复。

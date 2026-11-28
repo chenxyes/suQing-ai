@@ -17,11 +17,14 @@ import { fileURLToPath } from 'node:url';
 import { log } from './logger.mjs';
 import { isAccountBanned } from './db.mjs';
 
-const SECRET_FILE = path.resolve(
+const LEGACY_SECRET_FILE = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '..',
   '.auth-secret',
 );
+const SECRET_FILE = process.env.XIYU_DATA_DIR
+  ? path.resolve(process.env.XIYU_DATA_DIR, '.auth-secret')
+  : LEGACY_SECRET_FILE;
 const TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 let SECRET = null;
@@ -31,9 +34,14 @@ function getSecret() {
     SECRET = process.env.AUTH_SECRET;
     return SECRET;
   }
-  if (existsSync(SECRET_FILE)) {
-    SECRET = readFileSync(SECRET_FILE, 'utf-8').trim();
-    if (SECRET.length >= 32) return SECRET;
+  for (const candidate of [SECRET_FILE, LEGACY_SECRET_FILE]) {
+    if (existsSync(candidate)) {
+      const val = readFileSync(candidate, 'utf-8').trim();
+      if (val.length >= 32) {
+        SECRET = val;
+        return SECRET;
+      }
+    }
   }
   // 第一次启动时生成
   SECRET = crypto.randomBytes(48).toString('hex');

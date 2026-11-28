@@ -254,6 +254,7 @@ export async function decideSuQingOutfitAndPose(companion, {
           styleTags: preset.styleTags,
           visualPrompt: preset.visualPrompt,
           sourceImagePath,
+          sourcePublicUrl: preset.publicUrl || null,
           presetId: preset.id,
           giftedBy: 'self',
           giftedNote: `${companion.name || '苏晴'}自己挑的今日穿搭`,

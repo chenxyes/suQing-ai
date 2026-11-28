@@ -1841,10 +1841,13 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
 
   async function fetchAuthedBlobUrl(url) {
     if (!url) return '';
+    if (/^https?:\/\//i.test(url)) return url;
     if (blobUrlCache.has(url)) return blobUrlCache.get(url);
     try {
       const r = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
       if (!r.ok) return '';
+      const ct = String(r.headers.get('content-type') || '').toLowerCase();
+      if (ct && !ct.startsWith('image/') && !ct.includes('octet-stream')) return '';
       const blob = await r.blob();
       if (blob.size < 64) return '';
       const objUrl = URL.createObjectURL(blob);
@@ -1855,12 +1858,22 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
     }
   }
 
-  function itemImageUrl(it, kind) {
-    if (kind === 'tryon' && it.tryon_image_path) {
-      return '/api/companions/' + companionId + '/wardrobe/' + it.id + '/image?kind=tryon&t=' + encodeURIComponent(it.updated_at || '');
+  function itemImageUrl(it, kind, { forceProxy = false } = {}) {
+    if (kind === 'tryon' && (it.tryon_public_url || it.tryon_image_path)) {
+      if (!forceProxy && it.tryon_public_url && /^https?:\/\//i.test(it.tryon_public_url)) {
+        return it.tryon_public_url;
+      }
+      if (it.tryon_image_path) {
+        return '/api/companions/' + companionId + '/wardrobe/' + it.id + '/image?kind=tryon&t=' + encodeURIComponent(it.updated_at || '');
+      }
     }
-    if (kind === 'source' && it.source_image_path) {
-      return '/api/companions/' + companionId + '/wardrobe/' + it.id + '/image?kind=source';
+    if (kind === 'source' && (it.source_public_url || it.source_image_path)) {
+      if (!forceProxy && it.source_public_url && /^https?:\/\//i.test(it.source_public_url)) {
+        return it.source_public_url;
+      }
+      if (it.source_image_path) {
+        return '/api/companions/' + companionId + '/wardrobe/' + it.id + '/image?kind=source';
+      }
     }
     return '';
   }
@@ -2385,12 +2398,26 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
       const placeholder = cell.querySelector('[data-role="placeholder"]');
       const mainUrl = itemImageUrl(it, curMode);
       if (mainImg && mainUrl) {
-        fetchAuthedBlobUrl(mainUrl).then(blobUrl => {
-          if (blobUrl) {
-            mainImg.src = blobUrl;
+        const bindDisplay = (srcUrl, allowFallback) => {
+          mainImg.onload = () => {
             mainImg.classList.remove('hidden');
             placeholder?.classList.add('hidden');
-          }
+          };
+          mainImg.onerror = () => {
+            if (allowFallback) {
+              const proxyUrl = itemImageUrl(it, curMode, { forceProxy: true });
+              if (proxyUrl && proxyUrl !== srcUrl) {
+                fetchAuthedBlobUrl(proxyUrl).then(fb => { if (fb) bindDisplay(fb, false); });
+                return;
+              }
+            }
+            mainImg.classList.add('hidden');
+            placeholder?.classList.remove('hidden');
+          };
+          mainImg.src = srcUrl;
+        };
+        fetchAuthedBlobUrl(mainUrl).then(resolvedUrl => {
+          if (resolvedUrl) bindDisplay(resolvedUrl, /^https?:\/\//i.test(resolvedUrl));
         });
         mainImg.addEventListener('click', () => openLightbox(it, curMode));
       }
@@ -3286,26 +3313,38 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
         || null;
       const activeDate = (dJson.ok && dJson.data && dJson.data.activeSession) || null;
 
+      let directCdnUrl = '';
       let imgUrl = '';
-      if (heroItem && heroItem.tryon_image_path) {
+      if (heroItem && (heroItem.tryon_public_url || heroItem.tryon_image_path)) {
+        if (heroItem.tryon_public_url && /^https?:\/\//i.test(heroItem.tryon_public_url)) {
+          directCdnUrl = heroItem.tryon_public_url;
+        }
         imgUrl = '/api/companions/' + companionId + '/wardrobe/' + heroItem.id + '/image?kind=tryon&t=' + Date.now();
-      } else if (heroItem && heroItem.source_image_path) {
+      } else if (heroItem && (heroItem.source_public_url || heroItem.source_image_path)) {
+        if (heroItem.source_public_url && /^https?:\/\//i.test(heroItem.source_public_url)) {
+          directCdnUrl = heroItem.source_public_url;
+        }
         imgUrl = '/api/companions/' + companionId + '/wardrobe/' + heroItem.id + '/image?kind=source&t=' + Date.now();
       } else {
         imgUrl = '/api/companions/' + companionId + '/visual-identity/reference-image?t=' + Date.now();
       }
 
-      const imgResp = await fetch(imgUrl, { headers: { Authorization: 'Bearer ' + token } });
-      if (!imgResp.ok) return;
-      const blob = await imgResp.blob();
-      if (blob.size < 64) return;
-      if (imgEl.dataset.blobUrl) {
-        try { URL.revokeObjectURL(imgEl.dataset.blobUrl); } catch {}
+      if (directCdnUrl) {
+        imgEl.src = directCdnUrl;
+        stage.classList.remove('hidden');
+      } else {
+        const imgResp = await fetch(imgUrl, { headers: { Authorization: 'Bearer ' + token } });
+        if (!imgResp.ok) return;
+        const blob = await imgResp.blob();
+        if (blob.size < 64) return;
+        if (imgEl.dataset.blobUrl) {
+          try { URL.revokeObjectURL(imgEl.dataset.blobUrl); } catch {}
+        }
+        const nextBlobUrl = URL.createObjectURL(blob);
+        imgEl.dataset.blobUrl = nextBlobUrl;
+        imgEl.src = nextBlobUrl;
+        stage.classList.remove('hidden');
       }
-      const nextBlobUrl = URL.createObjectURL(blob);
-      imgEl.dataset.blobUrl = nextBlobUrl;
-      imgEl.src = nextBlobUrl;
-      stage.classList.remove('hidden');
 
       if (badgeEl) {
         if (activeDate) {
