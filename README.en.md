@@ -287,7 +287,7 @@ npm run check:imports && npm run check:field-drift && npm run check:release
 
 See [`CHANGELOG.md`](./CHANGELOG.md) for the complete changelog and [`TODO.md`](./TODO.md) for the active roadmap.
 
-- **v1.23 dev track (Digital Wardrobe × Virtual Dating × Stylist Autonomy × Cloudflare R2)**:
+- **v1.23.0 (2026-11-28 · Digital Wardrobe × Virtual Dating × Stylist Autonomy × Cloudflare R2)**:
   - **Digital Wardrobe & Glass Showcase**: 6-slot layering, full uncropped face-lock try-on, WeChat image-burst merging, scheduled parcel unboxing, and weekend wear callbacks.
   - **Three-Layer Virtual Dating & Two-Person Couple Photos**: LDR/Digital presence baselines, cloud dining/shopping, settleable date theater (`importance=8` memories + open-loop resolution), two-person couple photos, and full WeChat/Web parity.
   - **Pose/Outfit Library, Transparent PNG Extraction & R2 Storage**: 10 solo + 6 couple visual pose cards with custom photo uploads, screenshot garment extraction to true transparent PNGs, zero-dependency Cloudflare R2 SigV4 storage + CDN, and Aurora Light / Obsidian Dark Liquid Glass UI.
