@@ -1227,6 +1227,8 @@ function initSchema() {
       visual_prompt TEXT NOT NULL,
       source_image_path TEXT DEFAULT NULL,
       tryon_image_path TEXT DEFAULT NULL,
+      source_public_url TEXT DEFAULT NULL,
+      tryon_public_url TEXT DEFAULT NULL,
       preset_id TEXT DEFAULT NULL,
       gifted_by TEXT DEFAULT 'user',
       gifted_note TEXT DEFAULT '',
@@ -1443,8 +1445,10 @@ function migrateUsers() {
 
 function migrateWardrobePresetId() {
   addColIfMissing('companion_wardrobe', 'preset_id', 'TEXT DEFAULT NULL');
+  addColIfMissing('companion_wardrobe', 'source_public_url', 'TEXT DEFAULT NULL');
+  addColIfMissing('companion_wardrobe', 'tryon_public_url', 'TEXT DEFAULT NULL');
   db.exec('CREATE INDEX IF NOT EXISTS idx_wardrobe_comp_preset ON companion_wardrobe(companion_id, preset_id)');
-  // 幂等回填：对迁移前已入柜的自定义灵感预设单品，按 slot + name + visual_prompt 精确回填唯一 preset_id
+  // 幂等回填：对迁移前已入柜的自定义灵感预设单品，按 slot + name + visual_prompt 精确回填唯一 preset_id 与 R2 CDN 直链
   try {
     db.exec(`
       UPDATE companion_wardrobe
@@ -1461,6 +1465,20 @@ function migrateWardrobePresetId() {
           WHERE p.slot = companion_wardrobe.slot
             AND p.name = companion_wardrobe.name
             AND p.visual_prompt = companion_wardrobe.visual_prompt
+        );
+      UPDATE companion_wardrobe
+      SET source_public_url = (
+        SELECT p.public_url FROM custom_outfit_presets p
+        WHERE p.id = companion_wardrobe.preset_id
+          AND p.public_url IS NOT NULL AND p.public_url != ''
+        LIMIT 1
+      )
+      WHERE (source_public_url IS NULL OR source_public_url = '')
+        AND preset_id IS NOT NULL AND preset_id != ''
+        AND EXISTS (
+          SELECT 1 FROM custom_outfit_presets p
+          WHERE p.id = companion_wardrobe.preset_id
+            AND p.public_url IS NOT NULL AND p.public_url != ''
         );
     `);
   } catch { /* ignore if custom_outfit_presets not ready */ }
@@ -4564,6 +4582,8 @@ export function createWardrobeItem({
   visualPrompt = '',
   sourceImagePath = null,
   tryonImagePath = null,
+  sourcePublicUrl = null,
+  tryonPublicUrl = null,
   presetId = null,
   giftedBy = 'user',
   giftedNote = '',
@@ -4610,9 +4630,9 @@ export function createWardrobeItem({
     const info = db.prepare(`
       INSERT INTO companion_wardrobe
         (companion_id, slot, category, name, color, material, style_tags, visual_prompt,
-         source_image_path, tryon_image_path, preset_id, gifted_by, gifted_note, status, eta_at,
-         wear_count, last_worn_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         source_image_path, tryon_image_path, source_public_url, tryon_public_url, preset_id,
+         gifted_by, gifted_note, status, eta_at, wear_count, last_worn_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       companionId,
       safeSlot,
@@ -4624,6 +4644,8 @@ export function createWardrobeItem({
       safeVisual,
       sourceImagePath ? String(sourceImagePath).slice(0, 300) : null,
       tryonImagePath ? String(tryonImagePath).slice(0, 300) : null,
+      sourcePublicUrl ? String(sourcePublicUrl).trim().slice(0, 500) : null,
+      tryonPublicUrl ? String(tryonPublicUrl).trim().slice(0, 500) : null,
       safePresetId,
       giftedBy === 'self' ? 'self' : 'user',
       safeNote,
@@ -4763,6 +4785,8 @@ export function updateWardrobeItem(companionId, itemId, fields = {}) {
   if (fields.material !== undefined) { sets.push('material = ?'); params.push(String(fields.material).trim().slice(0, 40)); }
   if (fields.visualPrompt !== undefined) { sets.push('visual_prompt = ?'); params.push(String(fields.visualPrompt).trim().slice(0, 500)); }
   if (fields.tryonImagePath !== undefined) { sets.push('tryon_image_path = ?'); params.push(fields.tryonImagePath ? String(fields.tryonImagePath).slice(0, 300) : null); }
+  if (fields.sourcePublicUrl !== undefined) { sets.push('source_public_url = ?'); params.push(fields.sourcePublicUrl ? String(fields.sourcePublicUrl).trim().slice(0, 500) : null); }
+  if (fields.tryonPublicUrl !== undefined) { sets.push('tryon_public_url = ?'); params.push(fields.tryonPublicUrl ? String(fields.tryonPublicUrl).trim().slice(0, 500) : null); }
   if (fields.giftedNote !== undefined) { sets.push('gifted_note = ?'); params.push(replaceUserWording(String(fields.giftedNote).trim().slice(0, 240))); }
   if (fields.presetId !== undefined) { sets.push('preset_id = ?'); params.push(fields.presetId ? String(fields.presetId).trim().slice(0, 120) : null); }
   if (fields.status !== undefined && fields.status !== 'wearing' && WARDROBE_STATUSES.includes(fields.status)) {

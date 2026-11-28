@@ -1035,6 +1035,11 @@ html[data-theme="dark"] .dash-info-strip strong {
   cursor: zoom-in;
   transition: transform 0.35s cubic-bezier(.16, 1, .3, 1);
 }
+.wardrobe-stage-img.hidden,
+.wardrobe-stage-placeholder.hidden,
+.wardrobe-ootd-thumb img.hidden {
+  display: none !important;
+}
 .wardrobe-cell:hover .wardrobe-stage-img {
   transform: scale(1.03);
 }

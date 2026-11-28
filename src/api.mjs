@@ -3755,6 +3755,7 @@ router.post('/companions/:id/wardrobe', express.json({ limit: '10mb' }), require
     } = await import('./wardrobe.mjs');
     const body = req.body || {};
     let sourceImagePath = null;
+    let sourcePublicUrl = null;
     let analyzed = null;
 
     if (typeof body.image === 'string' && body.image.trim()) {
@@ -3763,6 +3764,11 @@ router.post('/companions/:id/wardrobe', express.json({ limit: '10mb' }), require
       const buf = Buffer.from(m ? m[2] : body.image.trim(), 'base64');
       if (buf.length >= 64) {
         sourceImagePath = saveWardrobeProductImage(id, buf, mime);
+        if (sourceImagePath) {
+          const { mirrorBufferToR2Quietly } = await import('./storage.mjs');
+          const mirrored = await mirrorBufferToR2Quietly(`companions/${id}/wardrobe/${path.basename(sourceImagePath)}`, buf, mime);
+          sourcePublicUrl = mirrored?.publicUrl || null;
+        }
         if (body.auto_analyze !== false && !body.name) {
           analyzed = await analyzeWardrobeItem(buf, mime, String(body.gifted_note || body.category || ''));
         }
@@ -3786,6 +3792,7 @@ router.post('/companions/:id/wardrobe', express.json({ limit: '10mb' }), require
       styleTags: Array.isArray(body.style_tags) ? body.style_tags : (analyzed?.styleTags || []),
       visualPrompt: body.visual_prompt || analyzed?.visualPrompt || name,
       sourceImagePath,
+      sourcePublicUrl,
       giftedBy: body.gifted_by === 'self' ? 'self' : 'user',
       giftedNote: body.gifted_note || '',
       status,
@@ -4057,6 +4064,7 @@ router.post('/wardrobe/catalog/extract-save', requireAuth, async (req, res) => {
           styleTags: presetRow.styleTags,
           visualPrompt: presetRow.visualPrompt,
           sourceImagePath: localProdPath,
+          sourcePublicUrl: presetRow.publicUrl || null,
           presetId: presetRow.id,
           giftedBy: 'user',
           giftedNote: `截图扒同款 · ${presetRow.name}`,
@@ -4109,8 +4117,11 @@ router.post('/companions/:id/wardrobe/preset', requireAuth, async (req, res) => 
   const existing = findWardrobeItemByPreset(id, preset);
   if (existing) {
     let targetItem = existing;
-    if (!existing.preset_id) {
-      targetItem = updateWardrobeItem(id, existing.id, { presetId: preset.id }) || existing;
+    const backfill = {};
+    if (!existing.preset_id) backfill.presetId = preset.id;
+    if (!existing.source_public_url && preset.publicUrl) backfill.sourcePublicUrl = preset.publicUrl;
+    if (Object.keys(backfill).length) {
+      targetItem = updateWardrobeItem(id, existing.id, backfill) || existing;
     }
     if (status === 'wearing') {
       targetItem = wearWardrobeItem(id, targetItem.id, { replaceAllWearing, replaceSlots }) || targetItem;
@@ -4145,6 +4156,7 @@ router.post('/companions/:id/wardrobe/preset', requireAuth, async (req, res) => 
     styleTags: preset.styleTags,
     visualPrompt: preset.visualPrompt,
     sourceImagePath,
+    sourcePublicUrl: preset.publicUrl || null,
     presetId: preset.id,
     giftedBy: 'user',
     giftedNote: isFullOutfit ? `精选服装库 · 整套穿搭 · ${preset.name}` : `精选服装库 · ${preset.name}`,
