@@ -3750,13 +3750,17 @@ router.post('/companions/:id/wardrobe', express.json({ limit: '10mb' }), require
 });
 
 // PATCH /api/companions/:id/wardrobe/:itemId
-router.patch('/companions/:id/wardrobe/:itemId', requireAuth, (req, res) => {
+router.patch('/companions/:id/wardrobe/:itemId', requireAuth, async (req, res) => {
   const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
   const itemId = intId(req.params.itemId); if (!itemId) return err(res, 'itemId 无效');
   const c = requireOwnedCompanion(req, res, id); if (!c) return;
   const body = req.body || {};
+  const existing = getWardrobeItem(id, itemId);
+  if (!existing) return err(res, '衣橱单品不存在', 404);
+  const { isFullOutfitItem } = await import('./wardrobe.mjs');
+  const isFull = isFullOutfitItem(existing);
   const updated = body.action === 'wear'
-    ? wearWardrobeItem(id, itemId)
+    ? wearWardrobeItem(id, itemId, { replaceAllWearing: isFull || body.replace_wearing === true })
     : body.action === 'unwear'
       ? updateWardrobeItem(id, itemId, { status: 'owned' })
       : updateWardrobeItem(id, itemId, {
@@ -3784,13 +3788,253 @@ router.delete('/companions/:id/wardrobe/:itemId', requireAuth, (req, res) => {
   return ok(res, { deleted: true, item_id: itemId });
 });
 
-// GET /api/wardrobe/catalog — 姿势库（单人试穿 + 双人约会）与精选服装预设库
+function decodeCatalogDataUrl(raw) {
+  if (typeof raw !== 'string') return null;
+  const m = raw.trim().match(/^data:(image\/(?:png|jpeg|jpg|webp));base64,([A-Za-z0-9+/=\s]+)$/i);
+  if (!m) return null;
+  const mime = m[1].toLowerCase() === 'image/jpg' ? 'image/jpeg' : m[1].toLowerCase();
+  const buffer = Buffer.from(m[2].replace(/\s+/g, ''), 'base64');
+  if (!buffer.length || buffer.length > 8 * 1024 * 1024) return null;
+  const ext = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
+  return { buffer, mime, ext };
+}
+
+// GET /api/storage/status — 查看对象存储状态（Cloudflare R2 或本地磁盘，不暴露任何密钥）
+router.get('/storage/status', requireAuth, async (_req, res) => {
+  const { getStorageStatus } = await import('./storage.mjs');
+  return ok(res, getStorageStatus());
+});
+
+// POST /api/storage/test-r2 — 实时测试 Cloudflare R2 读写连通性
+router.post('/storage/test-r2', requireAuth, async (_req, res) => {
+  const { testR2Connection } = await import('./storage.mjs');
+  const result = await testR2Connection();
+  return result.ok ? ok(res, result) : err(res, result.error || 'R2 连通性测试失败', 502);
+});
+
+// GET /api/wardrobe/catalog — 姿势库（内置 + 自定义实图）与精选服装预设库（内置 + 截图提取实图）
 router.get('/wardrobe/catalog', requireAuth, async (_req, res) => {
   const { getPoseAndOutfitCatalog } = await import('./pose_outfit_library.mjs');
   return ok(res, getPoseAndOutfitCatalog());
 });
 
-// POST /api/companions/:id/wardrobe/preset — 从精选服装灵感库一键加入展示柜
+// GET /api/wardrobe/catalog/asset/:kind/:assetId — 鉴权代理读取自定义姿势图 / 服装平铺图（支持 R2 与本地）
+router.get('/wardrobe/catalog/asset/:kind/:assetId', requireAuth, async (req, res) => {
+  const kind = req.params.kind === 'pose' ? 'pose' : req.params.kind === 'preset' ? 'preset' : null;
+  if (!kind) return err(res, '资源类型无效', 400);
+  const assetId = String(req.params.assetId || '').trim();
+  if (!assetId || !/^[a-zA-Z0-9._-]+$/.test(assetId)) return err(res, '资源 ID 无效', 400);
+  const { getCustomPoseById, getCustomOutfitPresetById } = await import('./db.mjs');
+  const row = kind === 'pose' ? getCustomPoseById(assetId) : getCustomOutfitPresetById(assetId);
+  if (!row?.imageRef) return err(res, '资源不存在', 404);
+  try {
+    const { readAssetBuffer } = await import('./storage.mjs');
+    const data = await readAssetBuffer(row.imageRef);
+    if (!data?.buffer?.length) return err(res, '图片不存在', 404);
+    res.setHeader('Content-Type', data.contentType || 'image/jpeg');
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    return res.send(data.buffer);
+  } catch (e) {
+    log('warn', `[API] catalog asset read failed kind=${kind} id=${assetId}: ${e.message}`);
+    return err(res, '读取图片失败', 404);
+  }
+});
+
+// POST /api/wardrobe/catalog/poses — 上传自定义单人/双人姿势参考实图（Vision 自动解析 + R2/本地存储）
+router.post('/wardrobe/catalog/poses', requireAuth, async (req, res) => {
+  const img = decodeCatalogDataUrl(req.body?.image);
+  if (!img) return err(res, '请上传有效的姿势参考图片（PNG/JPG/WebP，≤8MB）', 400);
+  const kind = req.body?.kind === 'couple' ? 'couple' : 'solo';
+  const rawLabel = typeof req.body?.label === 'string' ? req.body.label.trim() : '';
+  const rawTag = typeof req.body?.tag === 'string' ? req.body.tag.trim() : '';
+  const rawDesc = typeof req.body?.desc_zh === 'string' ? req.body.desc_zh.trim() : '';
+  try {
+    const { analyzePoseReferencePhoto } = await import('./garment_extractor.mjs');
+    const { storeAssetBuffer } = await import('./storage.mjs');
+    const { createCustomPose } = await import('./db.mjs');
+    const analyzed = await analyzePoseReferencePhoto(img.buffer, img.mime, {
+      kind,
+      label: rawLabel,
+      tag: rawTag,
+      descZh: rawDesc,
+    });
+    const poseId = `cpose_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const stored = await storeAssetBuffer(`presets/poses/${kind}/${poseId}.${img.ext}`, img.buffer, {
+      contentType: img.mime,
+    });
+    const created = createCustomPose({
+      id: poseId,
+      kind,
+      label: analyzed.label,
+      tag: analyzed.tag,
+      framingLabel: analyzed.framingLabel,
+      descZh: analyzed.descZh,
+      shotMode: analyzed.shotMode,
+      posePrompt: analyzed.posePrompt,
+      expressionPrompt: analyzed.expressionPrompt,
+      imageRef: stored.imageRef,
+      publicUrl: stored.publicUrl,
+    });
+    log('info', `[API] custom pose uploaded id=${created.id} kind=${kind} driver=${stored.driver}`);
+    return ok(res, {
+      pose: {
+        ...created,
+        previewUrl: created.publicUrl || `/api/wardrobe/catalog/asset/pose/${encodeURIComponent(created.id)}`,
+        authRequired: !created.publicUrl,
+      },
+      storageDriver: stored.driver,
+    }, 201);
+  } catch (e) {
+    log('error', `[API] custom pose upload failed: ${e.message}`);
+    return err(res, e.message || '上传姿势参考图失败', 500);
+  }
+});
+
+// DELETE /api/wardrobe/catalog/poses/:poseId — 删除自定义姿势（同步清理 R2/本地）
+router.delete('/wardrobe/catalog/poses/:poseId', requireAuth, async (req, res) => {
+  const poseId = String(req.params.poseId || '').trim();
+  const { deleteCustomPose } = await import('./db.mjs');
+  const removed = deleteCustomPose(poseId);
+  if (!removed) return err(res, '自定义姿势不存在', 404);
+  if (removed.imageRef) {
+    const { deleteAsset } = await import('./storage.mjs');
+    deleteAsset(removed.imageRef).catch(() => {});
+  }
+  return ok(res, { deleted: true, id: removed.id });
+});
+
+// POST /api/wardrobe/catalog/extract-preview — 截图一键扒同款 Step 1：Vision 拆解截图中的所有单品（零生图费）
+router.post('/wardrobe/catalog/extract-preview', requireAuth, async (req, res) => {
+  const img = decodeCatalogDataUrl(req.body?.image);
+  if (!img) return err(res, '请先上传一张穿搭截图（PNG/JPG/WebP，≤8MB）', 400);
+  try {
+    const { detectOutfitsInScreenshot } = await import('./garment_extractor.mjs');
+    const items = await detectOutfitsInScreenshot(img.buffer, img.mime);
+    return ok(res, { items });
+  } catch (e) {
+    log('error', `[API] extract-preview failed: ${e.message}`);
+    return err(res, e.message || '识别穿搭截图失败', 500);
+  }
+});
+
+// POST /api/wardrobe/catalog/extract-save — 截图一键扒同款 Step 2：
+// 支持 raw（零生图费快速入库）与 flatlay（去人去背景重构纯白底电商平铺图）双模式，自动存 R2/本地并可选直接加入伴侣展示柜
+router.post('/wardrobe/catalog/extract-save', requireAuth, async (req, res) => {
+  const img = decodeCatalogDataUrl(req.body?.image);
+  if (!img) return err(res, '请先上传穿搭截图', 400);
+  const rawItems = Array.isArray(req.body?.items) ? req.body.items.slice(0, 5) : [];
+  if (!rawItems.length) return err(res, '请至少勾选一件要提取的单品', 400);
+  const mode = req.body?.mode === 'flatlay' ? 'flatlay' : 'raw';
+  const companionId = intId(req.body?.companion_id);
+  const alsoAdd = Boolean(req.body?.also_add_to_wardrobe && companionId);
+  const addStatus = ['wearing', 'owned', 'tryon_only'].includes(req.body?.wardrobe_status)
+    ? req.body.wardrobe_status
+    : 'wearing';
+
+  let ownedComp = null;
+  if (alsoAdd) {
+    ownedComp = requireOwnedCompanion(req, res, companionId);
+    if (!ownedComp) return;
+  }
+
+  try {
+    const { extractGarmentFlatlayImage } = await import('./garment_extractor.mjs');
+    const { storeAssetBuffer } = await import('./storage.mjs');
+    const { createCustomOutfitPreset } = await import('./db.mjs');
+    const { saveWardrobeProductImage, normalizeWardrobeSlot } = await import('./wardrobe.mjs');
+
+    const savedPresets = [];
+    const savedWardrobeItems = [];
+    for (const rawIt of rawItems) {
+      const slot = normalizeWardrobeSlot(rawIt.slot, rawIt.category, rawIt.name);
+      const spec = {
+        slot,
+        category: String(rawIt.category || '穿搭').trim().slice(0, 16),
+        name: String(rawIt.name || '精选单品').trim().slice(0, 48),
+        color: String(rawIt.color || '').trim().slice(0, 20),
+        material: String(rawIt.material || '').trim().slice(0, 20),
+        styleTags: Array.isArray(rawIt.styleTags) ? rawIt.styleTags : (Array.isArray(rawIt.style_tags) ? rawIt.style_tags : []),
+        descZh: String(rawIt.descZh || rawIt.desc_zh || '').trim().slice(0, 120),
+        visualPrompt: String(rawIt.visualPrompt || rawIt.visual_prompt || rawIt.name || 'fashion item').trim().slice(0, 400),
+        swatch: String(rawIt.swatch || '#F5D8E6').trim().slice(0, 16),
+      };
+
+      let finalBuf = img.buffer;
+      let finalMime = img.mime;
+      let finalExt = img.ext;
+      let effectiveMode = mode;
+      if (mode === 'flatlay') {
+        try {
+          const flat = await extractGarmentFlatlayImage(img.buffer, img.mime, spec);
+          finalBuf = flat.buffer;
+          finalMime = flat.contentType || 'image/jpeg';
+          finalExt = flat.ext || 'jpg';
+        } catch (ex) {
+          log('warn', `[API] flatlay 提取降级原图 name=${spec.name}: ${ex.message}`);
+          effectiveMode = 'raw';
+        }
+      }
+
+      const presetId = `coutfit_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      const stored = await storeAssetBuffer(`presets/garments/${slot}/${presetId}.${finalExt}`, finalBuf, {
+        contentType: finalMime,
+      });
+      const presetRow = createCustomOutfitPreset({
+        id: presetId,
+        ...spec,
+        imageRef: stored.imageRef,
+        publicUrl: stored.publicUrl,
+        extractedMode: effectiveMode,
+      });
+      savedPresets.push({
+        ...presetRow,
+        previewUrl: presetRow.publicUrl || `/api/wardrobe/catalog/asset/preset/${encodeURIComponent(presetRow.id)}`,
+        authRequired: !presetRow.publicUrl,
+        storageDriver: stored.driver,
+      });
+
+      if (ownedComp) {
+        const localProdPath = saveWardrobeProductImage(ownedComp.id, finalBuf, finalMime);
+        const wItem = createWardrobeItem({
+          companionId: ownedComp.id,
+          slot: presetRow.slot,
+          category: presetRow.category,
+          name: presetRow.name,
+          color: presetRow.color,
+          material: presetRow.material,
+          styleTags: presetRow.styleTags,
+          visualPrompt: presetRow.visualPrompt,
+          sourceImagePath: localProdPath,
+          giftedBy: 'user',
+          giftedNote: `截图扒同款 · ${presetRow.name}`,
+          status: addStatus,
+        });
+        savedWardrobeItems.push(wItem);
+      }
+    }
+
+    log('info', `[API] extract-save completed count=${savedPresets.length} mode=${mode} wardrobeAdded=${savedWardrobeItems.length}`);
+    return ok(res, { presets: savedPresets, wardrobeItems: savedWardrobeItems }, 201);
+  } catch (e) {
+    log('error', `[API] extract-save failed: ${e.message}`);
+    return err(res, e.message || '提取入库失败', 500);
+  }
+});
+
+// DELETE /api/wardrobe/catalog/presets/:presetId — 删除自定义服装预设（同步清理 R2/本地）
+router.delete('/wardrobe/catalog/presets/:presetId', requireAuth, async (req, res) => {
+  const presetId = String(req.params.presetId || '').trim();
+  const { deleteCustomOutfitPreset } = await import('./db.mjs');
+  const removed = deleteCustomOutfitPreset(presetId);
+  if (!removed) return err(res, '自定义服装预设不存在', 404);
+  if (removed.imageRef) {
+    const { deleteAsset } = await import('./storage.mjs');
+    deleteAsset(removed.imageRef).catch(() => {});
+  }
+  return ok(res, { deleted: true, id: removed.id });
+});
+
+// POST /api/companions/:id/wardrobe/preset — 从精选服装灵感库一键加入展示柜（自定义实图预设自动携带商品原图）
 router.post('/companions/:id/wardrobe/preset', requireAuth, async (req, res) => {
   const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
   const c = requireOwnedCompanion(req, res, id); if (!c) return;
@@ -3799,6 +4043,29 @@ router.post('/companions/:id/wardrobe/preset', requireAuth, async (req, res) => 
   const preset = getOutfitPresetById(presetId);
   if (!preset) return err(res, '服装预设不存在', 404);
   const status = ['wearing', 'owned', 'tryon_only'].includes(req.body?.status) ? req.body.status : 'wearing';
+
+  let sourceImagePath = null;
+  if (preset.imageRef) {
+    try {
+      const { readAssetBuffer } = await import('./storage.mjs');
+      const { saveWardrobeProductImage } = await import('./wardrobe.mjs');
+      const asset = await readAssetBuffer(preset.imageRef);
+      if (asset?.buffer?.length) {
+        sourceImagePath = saveWardrobeProductImage(id, asset.buffer, asset.contentType || 'image/jpeg');
+      }
+    } catch (e) {
+      log('warn', `[API] preset image attach failed preset=${preset.id}: ${e.message}`);
+    }
+  }
+
+  const { isFullOutfitItem } = await import('./wardrobe.mjs');
+  const isFullOutfit = isFullOutfitItem(preset);
+  const isDress = /连衣裙|茶歇裙|礼服/.test(String(preset.name || ''));
+  const replaceAllWearing = status === 'wearing' && (req.body?.replace_wearing === true || isFullOutfit);
+  const replaceSlots = status === 'wearing' && !replaceAllWearing && isDress
+    ? ['bottom_or_dress', 'top']
+    : null;
+
   const item = createWardrobeItem({
     companionId: id,
     slot: preset.slot,
@@ -3808,12 +4075,15 @@ router.post('/companions/:id/wardrobe/preset', requireAuth, async (req, res) => 
     material: preset.material,
     styleTags: preset.styleTags,
     visualPrompt: preset.visualPrompt,
+    sourceImagePath,
     giftedBy: 'user',
-    giftedNote: `精选服装库 · ${preset.name}`,
+    giftedNote: isFullOutfit ? `精选服装库 · 整套穿搭 · ${preset.name}` : `精选服装库 · ${preset.name}`,
     status,
+    replaceAllWearing,
+    replaceSlots,
   });
-  log('info', `[API] wardrobe preset added companion=${id} preset=${preset.id} item=#${item.id} status=${item.status}`);
-  return ok(res, { item, preset }, 201);
+  log('info', `[API] wardrobe preset added companion=${id} preset=${preset.id} item=#${item.id} status=${item.status} replaceAll=${replaceAllWearing} hasSource=${Boolean(sourceImagePath)}`);
+  return ok(res, { item, preset, replaced_all: replaceAllWearing }, 201);
 });
 
 // POST /api/companions/:id/wardrobe/outfit-tryon
@@ -5556,6 +5826,9 @@ export function startApiServer() {
   app.post('/api/companions/:id/user-visual-reference', requireAuth, express.json({ limit: '10mb' }));
   app.post('/api/companions/:id/date-mode/cyber-photo', requireAuth, express.json({ limit: '10mb' }));
   app.post('/api/companions/:id/playground-chat', requireAuth, express.json({ limit: '10mb' }));
+  app.post('/api/wardrobe/catalog/poses', requireAuth, express.json({ limit: '10mb' }));
+  app.post('/api/wardrobe/catalog/extract-preview', requireAuth, express.json({ limit: '10mb' }));
+  app.post('/api/wardrobe/catalog/extract-save', requireAuth, express.json({ limit: '10mb' }));
 
   // Full memory migrations may exceed the ordinary chat/config body size.
   // Authenticate before allocating the larger import body; the default stays bounded.

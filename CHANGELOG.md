@@ -8,6 +8,22 @@
 
 ### Added
 
+#### Phase 4-A+ · Cloudflare R2 云图床 + 截图一键扒同款 + 自定义实图姿势/服装库
+- **零依赖 Cloudflare R2 / 本地双模对象存储（`src/storage.mjs`）**：
+  - 基于 Node 原生 `crypto` 实现标准 AWS SigV4（`PUT / GET / DELETE`）S3 协议客户端，自动兼容 `R2_ENDPOINT` 末尾带或不带 `/<bucket>` 的写法，支持 `R2_PUBLIC_URL` 自定义域 CDN 直链（如 `https://assets.charlexys.com`）与后端私密鉴权代理双模式，未配置 R2 时自动回落本地磁盘。
+  - 试穿大片与双人约会合影落盘后自动静默镜像备份至 R2（`companions/<id>/wardrobe/` 与 `companions/<id>/dates/`）。
+- **截图一键扒同款 & 姿势实图智能解析（`src/garment_extractor.mjs`、`src/providers/custom.mjs`、`src/providers/image.mjs`）**：
+  - 支持上传任意穿搭截图 → Vision 自动拆解出多件分槽位单品清单（勾选单件或整套）；
+  - 提供「⚡ 原图快速入库（零生图费）」与「✨ 去人去背景生成纯白底电商平铺图（Ghost Mannequin，消除模特人脸干扰）」双模式；支持独立低价环境变量 `GARMENT_EXTRACT_MODEL`（默认使用 `1024x1024` 轻量档并跳过人像美颜滤镜）。
+- **自定义实图姿势库 & 服装库（`src/db.mjs`、`src/pose_outfit_library.mjs`、`src/wardrobe.mjs`、`src/date_mode.mjs`、`src/api.mjs`）**：
+  - 新增 `custom_pose_library` 与 `custom_outfit_presets` 表及完整 CRUD，与内置目录自动合并（用户收藏实图置顶展示）。
+  - 选中带实图的自定义姿势时，试穿大片与双人约会合影将实图作为独立编号参考图传入 `/images/edits`，注入严格的「仅借鉴动作与构图、绝不复制原图人物与衣物」指令；一键穿上自定义服装预设时自动携带高清商品原图参与试穿。
+  - 新增 `/api/storage/{status,test-r2}`、`/api/wardrobe/catalog/asset/:kind/:assetId`、`/api/wardrobe/catalog/poses`、`/api/wardrobe/catalog/extract-{preview,save}` 与删除接口。
+- **前端界面、一键换装联动与自动化回归（`public/app/dashboard.*`、`public/app/playground.html`、`scripts/phase4_assets_check.mjs`、`.github/workflows/ci.yml`）**：
+  - 控制台服装灵感库新增 R2 状态标识与「✂️ 截图扒同款」折叠面板；单人试穿与双人约会姿势条均新增「＋ 上传姿势图」与自定义卡片删除能力；网页聊天室同步展示自定义双人姿势实图。
+  - 修复服装灵感库点击「👗 立即穿上」时旧穿着衣物未自动脱下且不自动生图的问题：`createWardrobeItem` / `wearWardrobeItem` 支持原子脱下旧在穿衣物（`replaceAllWearing`），整套穿搭自动走 `FULL OUTFIT TRANSFER RULE` 全身迁移指令，点击「👗 立即穿上」后自动脱下旧装、触发高保真试穿图生成并实时刷新展示柜与左侧人物舞台。
+  - 新增 `scripts/phase4_assets_check.mjs` 离线回归测试并接入 CI；新增 `scripts/sync_posewear_r2.mjs` 可复用同步工具，支持按严格安全（SFW）过滤将姿势图、四季/礼服穿搭图与完整中英提示词目录低并发同步至用户自有 Cloudflare R2 并幂等导入本地 SQLite。
+
 #### Phase 4-A · 姿势库（单人试穿 + 双人约会合影）+ 精选服装灵感预设库
 - **姿势与服装灵感目录（`src/pose_outfit_library.mjs`）**：
   - 内置 10 款单人试穿/叠穿姿势（对镜比耶、回眸轻笑、插兜酷girl、轻撩碎发、侧身秀包、窗边托腮、咖啡馆坐姿、街头抓拍、慵懒靠墙、俏皮眨眼），每款附带专属机位（`shotMode`）、英文取景/动作/表情/轻妆容描述。

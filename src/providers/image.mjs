@@ -293,13 +293,23 @@ const REGISTRY = {
  * 统一生图接口。返回图片 URL（或 base64 data URL）。
  * v1.10.52: 所有 provider 输出后自动过 beautify 滤镜（可 IMAGE_BEAUTIFY_ENABLED=false 关）。
  */
-export async function imageGenerate(prompt, { size = '1024x1024', referenceImage = null } = {}) {
+export async function imageGenerate(prompt, {
+  size = '1024x1024',
+  referenceImage = null,
+  model = null,
+  inputFidelity = null,
+  skipBeautify = false,
+} = {}) {
   const ACTIVE = active();
   const fn = REGISTRY[ACTIVE];
   if (!fn) throw new Error(`未知 IMAGE_PROVIDER=${ACTIVE}。可选：${Object.keys(REGISTRY).join(', ')}`);
-  log('debug', `[image] provider=${ACTIVE} size=${size}${referenceImage ? ' (i2i)' : ''}`);
-  // v1.10.53: 第三参 referenceImage 仅 openrouter 消费，其它 provider 忽略
-  const rawUrl = await fn(prompt, size, referenceImage);
+  log('debug', `[image] provider=${ACTIVE} size=${size}${model ? ` model=${model}` : ''}${referenceImage ? ' (i2i)' : ''}`);
+  // custom 支持完整 options 对象（referenceImage / model / inputFidelity），其他 provider 维持第三参 referenceImage
+  const thirdArg = ACTIVE === 'custom'
+    ? { referenceImage, ...(model ? { model } : {}), ...(inputFidelity ? { inputFidelity } : {}) }
+    : referenceImage;
+  const rawUrl = await fn(prompt, size, thirdArg);
+  if (skipBeautify) return rawUrl;
   // v1.10.52: 全局美颜后处理。失败时静默返回原 url。
   try {
     const { beautifyImageUrl } = await import('../image_beautify.mjs');

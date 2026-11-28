@@ -1,13 +1,20 @@
 /**
- * Pose Library & Curated Outfit Preset Lookbook (Phase 4-A)
+ * Pose Library & Curated Outfit Preset Lookbook (Phase 4-A & 4-A+)
  *
  * 借鉴社区 posewear 思路：
- *   - 10 款单人试穿/叠穿姿势（含机位、动作、表情、妆容氛围）
- *   - 6 款双人约会同框合影姿势（自然恋爱互动构图）
- *   - 12 款跨 6 大槽位的精选服装预设（免找图、一键入柜试穿与自由叠穿）
+ *   - 10 款单人试穿/叠穿姿势 + 无限扩展自定义实图姿势（SQLite + Cloudflare R2/本地）
+ *   - 6 款双人约会同框合影姿势 + 无限扩展自定义实图姿势
+ *   - 12 款跨 6 大槽位的精选服装预设 + 截图一键扒同款平铺图库
  *
  * 约束：零禁用词，所有描述均为安全日常服饰与自然姿势。
  */
+import {
+  listCustomPoses,
+  getCustomPoseById,
+  listCustomOutfitPresets,
+  getCustomOutfitPresetById,
+} from './db.mjs';
+import { getStorageStatus } from './storage.mjs';
 
 export const SOLO_POSES = Object.freeze([
   {
@@ -384,36 +391,105 @@ const POSE_BY_ID = new Map([...SOLO_POSES, ...COUPLE_POSES].map(p => [p.id, p]))
 const PRESET_BY_ID = new Map(OUTFIT_PRESETS.map(p => [p.id, p]));
 
 export function listPoses({ kind = 'all' } = {}) {
-  if (kind === 'solo') return [...SOLO_POSES];
-  if (kind === 'couple') return [...COUPLE_POSES];
-  return [...SOLO_POSES, ...COUPLE_POSES];
+  let custom = [];
+  try {
+    custom = listCustomPoses(kind === 'solo' || kind === 'couple' ? kind : null);
+  } catch { /* db may not be initialized in pure unit tests */ }
+  if (kind === 'solo') return [...custom, ...SOLO_POSES];
+  if (kind === 'couple') return [...custom, ...COUPLE_POSES];
+  return [...custom, ...SOLO_POSES, ...COUPLE_POSES];
 }
 
 export function getPoseById(poseId) {
   if (!poseId || typeof poseId !== 'string') return null;
-  return POSE_BY_ID.get(poseId.trim()) || null;
+  const clean = poseId.trim();
+  const builtIn = POSE_BY_ID.get(clean);
+  if (builtIn) return builtIn;
+  try {
+    return getCustomPoseById(clean);
+  } catch {
+    return null;
+  }
 }
 
 export function listOutfitPresets({ slot = null } = {}) {
-  if (!slot) return [...OUTFIT_PRESETS];
-  return OUTFIT_PRESETS.filter(p => p.slot === slot);
+  let custom = [];
+  try {
+    custom = listCustomOutfitPresets(slot || null);
+  } catch { /* db may not be initialized */ }
+  const builtIn = slot ? OUTFIT_PRESETS.filter(p => p.slot === slot) : [...OUTFIT_PRESETS];
+  return [...custom, ...builtIn];
 }
 
 export function getOutfitPresetById(presetId) {
   if (!presetId || typeof presetId !== 'string') return null;
-  return PRESET_BY_ID.get(presetId.trim()) || null;
+  const clean = presetId.trim();
+  const builtIn = PRESET_BY_ID.get(clean);
+  if (builtIn) return builtIn;
+  try {
+    return getCustomOutfitPresetById(clean);
+  } catch {
+    return null;
+  }
+}
+
+function serializePoseForCatalog(p) {
+  const isCustom = Boolean(p.isCustom);
+  const previewUrl = isCustom
+    ? (p.publicUrl || `/api/wardrobe/catalog/asset/pose/${encodeURIComponent(p.id)}`)
+    : (p.previewUrl || null);
+  return {
+    id: p.id,
+    kind: p.kind,
+    emoji: p.emoji,
+    label: p.label,
+    tag: p.tag,
+    framingLabel: p.framingLabel,
+    descZh: p.descZh,
+    shotMode: p.shotMode || undefined,
+    previewUrl,
+    authRequired: Boolean(isCustom && !p.publicUrl),
+    isCustom,
+  };
+}
+
+function serializePresetForCatalog(p) {
+  const isCustom = Boolean(p.isCustom);
+  const previewUrl = isCustom
+    ? (p.publicUrl || `/api/wardrobe/catalog/asset/preset/${encodeURIComponent(p.id)}`)
+    : (p.previewUrl || null);
+  return {
+    id: p.id,
+    slot: p.slot,
+    category: p.category,
+    name: p.name,
+    color: p.color,
+    material: p.material,
+    styleTags: p.styleTags,
+    descZh: p.descZh,
+    emoji: p.emoji,
+    swatch: p.swatch,
+    previewUrl,
+    authRequired: Boolean(isCustom && !p.publicUrl),
+    extractedMode: p.extractedMode || null,
+    isCustom,
+  };
 }
 
 export function getPoseAndOutfitCatalog() {
+  let customSolo = [];
+  let customCouple = [];
+  let customPresets = [];
+  try {
+    customSolo = listCustomPoses('solo');
+    customCouple = listCustomPoses('couple');
+    customPresets = listCustomOutfitPresets();
+  } catch { /* fail-open when db not initialized */ }
+
   return {
-    soloPoses: SOLO_POSES.map(({ id, emoji, label, tag, framingLabel, descZh, shotMode, previewUrl }) => ({
-      id, emoji, label, tag, framingLabel, descZh, shotMode, previewUrl: previewUrl || null,
-    })),
-    couplePoses: COUPLE_POSES.map(({ id, emoji, label, tag, framingLabel, descZh, previewUrl }) => ({
-      id, emoji, label, tag, framingLabel, descZh, previewUrl: previewUrl || null,
-    })),
-    outfitPresets: OUTFIT_PRESETS.map(({ id, slot, category, name, color, material, styleTags, descZh, emoji, swatch, previewUrl }) => ({
-      id, slot, category, name, color, material, styleTags, descZh, emoji, swatch, previewUrl: previewUrl || null,
-    })),
+    soloPoses: [...customSolo, ...SOLO_POSES].map(serializePoseForCatalog),
+    couplePoses: [...customCouple, ...COUPLE_POSES].map(serializePoseForCatalog),
+    outfitPresets: [...customPresets, ...OUTFIT_PRESETS].map(serializePresetForCatalog),
+    storage: getStorageStatus(),
   };
 }

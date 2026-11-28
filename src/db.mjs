@@ -1238,6 +1238,42 @@ function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_wardrobe_comp_status ON companion_wardrobe(companion_id, status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_wardrobe_comp_slot ON companion_wardrobe(companion_id, slot, status);
 
+    -- 自定义图文姿势库（支持实图参考控姿，图片可存 Cloudflare R2 或本地磁盘）
+    CREATE TABLE IF NOT EXISTS custom_pose_library (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL CHECK(kind IN ('solo', 'couple')),
+      label TEXT NOT NULL,
+      tag TEXT DEFAULT '',
+      framing_label TEXT DEFAULT '实图姿势',
+      desc_zh TEXT DEFAULT '',
+      shot_mode TEXT DEFAULT 'MIRROR_SELFIE',
+      pose_prompt TEXT NOT NULL,
+      expression_prompt TEXT DEFAULT '',
+      image_ref TEXT NOT NULL,
+      public_url TEXT DEFAULT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_custom_pose_kind ON custom_pose_library(kind, created_at DESC);
+
+    -- 自定义服装灵感预设库（支持截图一键扒同款平铺图或快速原图，图片可存 R2 或本地磁盘）
+    CREATE TABLE IF NOT EXISTS custom_outfit_presets (
+      id TEXT PRIMARY KEY,
+      slot TEXT NOT NULL,
+      category TEXT NOT NULL,
+      name TEXT NOT NULL,
+      color TEXT DEFAULT '',
+      material TEXT DEFAULT '',
+      style_tags TEXT DEFAULT '[]',
+      desc_zh TEXT DEFAULT '',
+      visual_prompt TEXT NOT NULL,
+      swatch TEXT DEFAULT '#F5D8E6',
+      image_ref TEXT NOT NULL,
+      public_url TEXT DEFAULT NULL,
+      extracted_mode TEXT DEFAULT 'raw',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_custom_preset_slot ON custom_outfit_presets(slot, created_at DESC);
+
     -- 约会剧场会话表（可开关、可关联数字衣橱穿搭快照、结束可结算记忆并核销 open_loops）
     CREATE TABLE IF NOT EXISTS companion_date_sessions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -4505,6 +4541,8 @@ export function createWardrobeItem({
   giftedNote = '',
   status = 'owned',
   etaAt = null,
+  replaceAllWearing = false,
+  replaceSlots = null,
 } = {}) {
   const db = getDb();
   const safeSlot = WARDROBE_SLOTS.includes(slot) ? slot : 'top';
@@ -4517,11 +4555,28 @@ export function createWardrobeItem({
 
   const tx = db.transaction(() => {
     if (safeStatus === 'wearing') {
-      db.prepare(`
-        UPDATE companion_wardrobe
-        SET status = 'owned', updated_at = CURRENT_TIMESTAMP
-        WHERE companion_id = ? AND slot = ? AND status = 'wearing'
-      `).run(companionId, safeSlot);
+      if (replaceAllWearing) {
+        db.prepare(`
+          UPDATE companion_wardrobe
+          SET status = 'owned', updated_at = CURRENT_TIMESTAMP
+          WHERE companion_id = ? AND status = 'wearing'
+        `).run(companionId);
+      } else if (Array.isArray(replaceSlots) && replaceSlots.length) {
+        const validSlots = replaceSlots.filter(s => WARDROBE_SLOTS.includes(s));
+        if (validSlots.length) {
+          db.prepare(`
+            UPDATE companion_wardrobe
+            SET status = 'owned', updated_at = CURRENT_TIMESTAMP
+            WHERE companion_id = ? AND slot IN (${validSlots.map(() => '?').join(',')}) AND status = 'wearing'
+          `).run(companionId, ...validSlots);
+        }
+      } else {
+        db.prepare(`
+          UPDATE companion_wardrobe
+          SET status = 'owned', updated_at = CURRENT_TIMESTAMP
+          WHERE companion_id = ? AND slot = ? AND status = 'wearing'
+        `).run(companionId, safeSlot);
+      }
     }
     const info = db.prepare(`
       INSERT INTO companion_wardrobe
@@ -4589,16 +4644,33 @@ export function listWardrobeItems(companionId, { status = null, slot = null, lim
   `).all(...params).map(parseWardrobeRow);
 }
 
-export function wearWardrobeItem(companionId, itemId) {
+export function wearWardrobeItem(companionId, itemId, { replaceAllWearing = false, replaceSlots = null } = {}) {
   const db = getDb();
   const tx = db.transaction(() => {
     const item = db.prepare('SELECT * FROM companion_wardrobe WHERE companion_id = ? AND id = ?').get(companionId, itemId);
     if (!item) return null;
-    db.prepare(`
-      UPDATE companion_wardrobe
-      SET status = 'owned', updated_at = CURRENT_TIMESTAMP
-      WHERE companion_id = ? AND slot = ? AND status = 'wearing' AND id != ?
-    `).run(companionId, item.slot, itemId);
+    if (replaceAllWearing) {
+      db.prepare(`
+        UPDATE companion_wardrobe
+        SET status = 'owned', updated_at = CURRENT_TIMESTAMP
+        WHERE companion_id = ? AND status = 'wearing' AND id != ?
+      `).run(companionId, itemId);
+    } else if (Array.isArray(replaceSlots) && replaceSlots.length) {
+      const validSlots = replaceSlots.filter(s => WARDROBE_SLOTS.includes(s));
+      if (validSlots.length) {
+        db.prepare(`
+          UPDATE companion_wardrobe
+          SET status = 'owned', updated_at = CURRENT_TIMESTAMP
+          WHERE companion_id = ? AND slot IN (${validSlots.map(() => '?').join(',')}) AND status = 'wearing' AND id != ?
+        `).run(companionId, ...validSlots, itemId);
+      }
+    } else {
+      db.prepare(`
+        UPDATE companion_wardrobe
+        SET status = 'owned', updated_at = CURRENT_TIMESTAMP
+        WHERE companion_id = ? AND slot = ? AND status = 'wearing' AND id != ?
+      `).run(companionId, item.slot, itemId);
+    }
     db.prepare(`
       UPDATE companion_wardrobe
       SET status = 'wearing',
@@ -4644,6 +4716,146 @@ export function updateWardrobeItem(companionId, itemId, fields = {}) {
 
 export function deleteWardrobeItem(companionId, itemId) {
   return getDb().prepare('DELETE FROM companion_wardrobe WHERE companion_id = ? AND id = ?').run(companionId, itemId).changes;
+}
+
+// ─── custom_pose_library & custom_outfit_presets（自定义图文姿势/服装灵感库）─────
+function parseCustomPoseRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    kind: row.kind,
+    emoji: row.kind === 'couple' ? '💑' : '📸',
+    label: row.label,
+    tag: row.tag || '收藏参考',
+    framingLabel: row.framing_label || '实图姿势',
+    descZh: row.desc_zh || '',
+    shotMode: row.shot_mode || 'MIRROR_SELFIE',
+    posePrompt: row.pose_prompt,
+    expressionPrompt: row.expression_prompt || '',
+    imageRef: row.image_ref,
+    publicUrl: row.public_url || null,
+    isCustom: true,
+    created_at: row.created_at,
+  };
+}
+
+export function createCustomPose(data = {}) {
+  const id = String(data.id || `cpose_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`);
+  const kind = data.kind === 'couple' ? 'couple' : 'solo';
+  getDb().prepare(`
+    INSERT INTO custom_pose_library
+      (id, kind, label, tag, framing_label, desc_zh, shot_mode, pose_prompt, expression_prompt, image_ref, public_url)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    kind,
+    String(data.label || '自定义姿势').trim().slice(0, 24),
+    String(data.tag || '收藏参考').trim().slice(0, 16),
+    String(data.framingLabel || '实图姿势').trim().slice(0, 16),
+    String(data.descZh || '').trim().slice(0, 120),
+    String(data.shotMode || 'MIRROR_SELFIE').trim().slice(0, 32),
+    String(data.posePrompt || 'natural pose matching the pose reference image').trim().slice(0, 400),
+    String(data.expressionPrompt || '').trim().slice(0, 200),
+    String(data.imageRef || '').trim(),
+    data.publicUrl ? String(data.publicUrl).trim() : null,
+  );
+  return parseCustomPoseRow(getDb().prepare('SELECT * FROM custom_pose_library WHERE id = ?').get(id));
+}
+
+export function listCustomPoses(kind = null) {
+  const db = getDb();
+  const rows = kind === 'solo' || kind === 'couple'
+    ? db.prepare('SELECT * FROM custom_pose_library WHERE kind = ? ORDER BY created_at DESC, rowid DESC').all(kind)
+    : db.prepare('SELECT * FROM custom_pose_library ORDER BY created_at DESC, rowid DESC').all();
+  return rows.map(parseCustomPoseRow);
+}
+
+export function getCustomPoseById(poseId) {
+  if (!poseId) return null;
+  return parseCustomPoseRow(getDb().prepare('SELECT * FROM custom_pose_library WHERE id = ?').get(String(poseId)));
+}
+
+export function deleteCustomPose(poseId) {
+  const existing = getCustomPoseById(poseId);
+  if (!existing) return null;
+  getDb().prepare('DELETE FROM custom_pose_library WHERE id = ?').run(existing.id);
+  return existing;
+}
+
+function parseCustomOutfitPresetRow(row) {
+  if (!row) return null;
+  let styleTags = [];
+  try {
+    const arr = JSON.parse(row.style_tags || '[]');
+    if (Array.isArray(arr)) styleTags = arr;
+  } catch { /* ignore */ }
+  const slotEmoji = { top: '👚', outerwear: '🧥', bottom_or_dress: '👗', shoes: '👟', bag: '👜', accessory: '🎀' };
+  return {
+    id: row.id,
+    slot: row.slot,
+    category: row.category,
+    name: row.name,
+    color: row.color || '',
+    material: row.material || '',
+    styleTags,
+    descZh: row.desc_zh || '',
+    visualPrompt: row.visual_prompt,
+    swatch: row.swatch || '#F5D8E6',
+    emoji: slotEmoji[row.slot] || '👗',
+    imageRef: row.image_ref,
+    publicUrl: row.public_url || null,
+    extractedMode: row.extracted_mode || 'raw',
+    isCustom: true,
+    created_at: row.created_at,
+  };
+}
+
+export function createCustomOutfitPreset(data = {}) {
+  const id = String(data.id || `coutfit_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`);
+  const slot = WARDROBE_SLOTS.includes(data.slot) ? data.slot : 'top';
+  const tags = Array.isArray(data.styleTags)
+    ? data.styleTags.map(t => String(t || '').trim()).filter(Boolean).slice(0, 6)
+    : [];
+  getDb().prepare(`
+    INSERT INTO custom_outfit_presets
+      (id, slot, category, name, color, material, style_tags, desc_zh, visual_prompt, swatch, image_ref, public_url, extracted_mode)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    slot,
+    String(data.category || '穿搭').trim().slice(0, 16),
+    String(data.name || '精选单品').trim().slice(0, 48),
+    String(data.color || '').trim().slice(0, 20),
+    String(data.material || '').trim().slice(0, 20),
+    JSON.stringify(tags),
+    String(data.descZh || '').trim().slice(0, 120),
+    String(data.visualPrompt || data.name || 'casual fashion item').trim().slice(0, 400),
+    String(data.swatch || '#F5D8E6').trim().slice(0, 16),
+    String(data.imageRef || '').trim(),
+    data.publicUrl ? String(data.publicUrl).trim() : null,
+    data.extractedMode === 'flatlay' ? 'flatlay' : 'raw',
+  );
+  return parseCustomOutfitPresetRow(getDb().prepare('SELECT * FROM custom_outfit_presets WHERE id = ?').get(id));
+}
+
+export function listCustomOutfitPresets(slot = null) {
+  const db = getDb();
+  const rows = slot && WARDROBE_SLOTS.includes(slot)
+    ? db.prepare('SELECT * FROM custom_outfit_presets WHERE slot = ? ORDER BY created_at DESC, rowid DESC').all(slot)
+    : db.prepare('SELECT * FROM custom_outfit_presets ORDER BY created_at DESC, rowid DESC').all();
+  return rows.map(parseCustomOutfitPresetRow);
+}
+
+export function getCustomOutfitPresetById(presetId) {
+  if (!presetId) return null;
+  return parseCustomOutfitPresetRow(getDb().prepare('SELECT * FROM custom_outfit_presets WHERE id = ?').get(String(presetId)));
+}
+
+export function deleteCustomOutfitPreset(presetId) {
+  const existing = getCustomOutfitPresetById(presetId);
+  if (!existing) return null;
+  getDb().prepare('DELETE FROM custom_outfit_presets WHERE id = ?').run(existing.id);
+  return existing;
 }
 
 export function listDueWardrobeDeliveries(nowIso = new Date().toISOString().replace('T', ' ').slice(0, 19), limit = 10) {

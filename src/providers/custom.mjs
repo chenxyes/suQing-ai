@@ -152,7 +152,7 @@ export async function customImage(prompt, size = '1024x1024', optionsOrRef = {})
       const tryEdit = async (withHighFidelity) => {
         const editResp = await post('image', '/images/edits', c => {
           const form = new FormData();
-          form.append('model', c.model);
+          form.append('model', options.model || c.model);
           form.append('prompt', prompt);
           form.append('size', size);
           form.append('n', '1');
@@ -163,8 +163,9 @@ export async function customImage(prompt, size = '1024x1024', optionsOrRef = {})
         }, { timeoutMs: 120_000, ...options });
         return extractCustomImageOutput(await readJson(editResp, 'image'));
       };
-      const wantFidelity = options.inputFidelity === 'high'
-        || String(process.env.IMAGE_EDIT_FIDELITY || 'high').toLowerCase() === 'high';
+      const wantFidelity = options.inputFidelity
+        ? options.inputFidelity === 'high'
+        : String(process.env.IMAGE_EDIT_FIDELITY || 'high').toLowerCase() === 'high';
       try {
         const editUrl = await tryEdit(wantFidelity);
         if (editUrl) return editUrl;
@@ -184,7 +185,7 @@ export async function customImage(prompt, size = '1024x1024', optionsOrRef = {})
     }
   }
 
-  const response = await post('image', '/images/generations', c => ({ model: c.model, prompt, size, n: 1 }), { timeoutMs: 90_000, ...options });
+  const response = await post('image', '/images/generations', c => ({ model: options.model || c.model, prompt, size, n: 1 }), { timeoutMs: 90_000, ...options });
   const url = extractCustomImageOutput(await readJson(response, 'image'));
   if (url) return url;
   throw new Error('custom image empty or invalid response');

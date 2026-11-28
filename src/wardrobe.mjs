@@ -26,6 +26,7 @@ import { recognizeImage, generateImage } from './ai.mjs';
 import { ensureVisualIdentity, buildIdentityPrompt } from './visual_identity.mjs';
 import { ANTI_COLLAGE_PROMPT } from './photo_sender.mjs';
 import { getPoseById } from './pose_outfit_library.mjs';
+import { readAssetBuffer, mirrorBufferToR2Quietly } from './storage.mjs';
 import { log } from './logger.mjs';
 
 const DEFAULT_VISUAL_ROOT = path.resolve(
@@ -505,6 +506,7 @@ async function persistGeneratedImage(urlOrDataUrl, companionId, filePrefix, visu
   if (!buf || buf.length < 128) throw new Error('generated image too small');
   const outPath = path.join(dir, `${filePrefix}_${Date.now()}.${ext}`);
   writeFileSync(outPath, buf);
+  mirrorBufferToR2Quietly(`companions/${companionId}/wardrobe/${path.basename(outPath)}`, buf, mimeFromFilePath(outPath)).catch(() => {});
   return outPath;
 }
 
@@ -518,9 +520,23 @@ const SLOT_LAYER_ROLE = {
   accessory: 'ACCESSORY (worn naturally as an accent)',
 };
 
+/**
+ * 判断单品是否为整套穿搭（如 posewear 四季全身搭配、含“+”的组合套装、或连衣裙/礼服）。
+ */
+export function isFullOutfitItem(item = {}) {
+  const id = String(item?.id || '');
+  const name = String(item?.name || '');
+  const prompt = String(item?.visual_prompt || item?.visualPrompt || '');
+  const note = String(item?.gifted_note || item?.giftedNote || '');
+  if (id.startsWith('pw_cos_')) return true;
+  if (/\+|套装|整套|礼服/.test(name) || /\b(spring|summer|autumn|winter|party)\s+outfit\b/i.test(prompt)) return true;
+  if (/整套穿搭/.test(note)) return true;
+  return false;
+}
+
 function pickLayeredFraming(items) {
   const slots = new Set(items.map(it => normalizeWardrobeSlot(it.slot, it.category, it.name)));
-  if (slots.has('shoes') || (slots.has('bottom_or_dress') && slots.size >= 2)) {
+  if (items.some(isFullOutfitItem) || slots.has('shoes') || (slots.has('bottom_or_dress') && slots.size >= 2)) {
     return {
       shotMode: 'FULL_BODY_MIRROR',
       framing: 'Full-body standing mirror selfie in a cozy sunlit bedroom, head-to-toe framing so her face, entire layered outfit, and shoes/legs are all clearly visible.',
@@ -598,6 +614,7 @@ export function buildLayeredTryonPrompt({
   singlePartPreserveRest = false,
   companion = {},
   poseId = null,
+  poseRefIndex = null,
 } = {}) {
   const chosenPose = poseId ? getPoseById(poseId) : null;
   const fallbackFrame = pickLayeredFraming(items);
@@ -616,12 +633,18 @@ export function buildLayeredTryonPrompt({
     parts.push(`SUBJECT: ${fallbackIdentityPrompt}.`);
   }
 
-  parts.push(
-    chosenPose?.posePrompt
-      ? `POSE, EXPRESSION & STYLING (${chosenPose.label}): Pose: ${chosenPose.posePrompt}. Expression: ${expression}. Makeup: ${makeupCue}. Keep her posture and expression vivid and natural.`
-      : `EXPRESSION, POSE & STYLING VARIATION: ${expression}. Makeup: ${makeupCue}. Keep her expression natural, vivid, and alive rather than a rigid ID-photo stare.`,
-    `COMPOSITION: ${framing}`,
-  );
+  if (poseRefIndex) {
+    parts.push(
+      `POSE & FRAMING REFERENCE ONLY (Image ${poseRefIndex}): Replicate ONLY the body posture, arm/hand gesture, head tilt, and camera framing angle from Image ${poseRefIndex}${chosenPose?.posePrompt ? ` (${chosenPose.posePrompt})` : ''}. STRICTLY IGNORE and NEVER copy the person's face, identity, hair, clothing, or background from Image ${poseRefIndex}. Expression: ${expression}. Makeup: ${makeupCue}.`,
+    );
+  } else {
+    parts.push(
+      chosenPose?.posePrompt
+        ? `POSE, EXPRESSION & STYLING (${chosenPose.label}): Pose: ${chosenPose.posePrompt}. Expression: ${expression}. Makeup: ${makeupCue}. Keep her posture and expression vivid and natural.`
+        : `EXPRESSION, POSE & STYLING VARIATION: ${expression}. Makeup: ${makeupCue}. Keep her expression natural, vivid, and alive rather than a rigid ID-photo stare.`,
+      `COMPOSITION: ${framing}`,
+    );
+  }
 
   if (imageBindings.length > 0) {
     const bindingLines = imageBindings.map(({ imageIndex, item }) => {
@@ -643,7 +666,13 @@ export function buildLayeredTryonPrompt({
     parts.push(`ADDITIONAL WORN ITEMS: ${descList.join('; ')}.`);
   }
 
-  if (singlePartPreserveRest && hasFaceRef && items.length === 1) {
+  if (items.length === 1 && isFullOutfitItem(items[0])) {
+    parts.push(
+      hasFaceRef && imageBindings.length > 0
+        ? 'FULL OUTFIT TRANSFER RULE: Dress the woman from Image 1 in the COMPLETE head-to-toe outfit shown in Image 2 (accurately transferring every garment layer, top, outerwear, skirt/pants, socks, and shoes from Image 2), while strictly keeping 100% of Image 1\'s face, hair, and identity (NEVER copy any face or hair from Image 2).'
+        : 'FULL OUTFIT RULE: Wear the complete described outfit cohesively from head to toe with natural realistic draping and fit.',
+    );
+  } else if (singlePartPreserveRest && hasFaceRef && items.length === 1) {
     const onlySlot = normalizeWardrobeSlot(items[0].slot, items[0].category, items[0].name);
     parts.push(
       `SINGLE-PART SWAP RULE: Change ONLY her ${SLOT_LABELS[onlySlot] || onlySlot} to match Image 2; keep the rest of her outfit on unchanged body parts consistent and harmonious with Image 1's natural look.`,
@@ -710,8 +739,19 @@ export async function generateOutfitTryonImage(companion, targetItems = [], opti
     }
   }
 
+  const chosenPose = options.poseId ? getPoseById(options.poseId) : null;
+  let poseRefBuffer = null;
+  if (chosenPose?.imageRef) {
+    try {
+      poseRefBuffer = await readAssetBuffer(chosenPose.imageRef);
+    } catch (e) {
+      log('warn', `[Wardrobe] 读取姿势参考图失败 pose=${chosenPose.id}: ${e.message}`);
+    }
+  }
+
   const imageBindings = [];
-  const maxItemRefs = hasFaceRef ? 3 : 4;
+  const reservedForPose = poseRefBuffer?.buffer ? 1 : 0;
+  const maxItemRefs = Math.max(1, (hasFaceRef ? 3 : 4) - reservedForPose);
   const primaryId = options.primaryItemId || ordered[0]?.id;
   const refCandidates = [...ordered].sort((a, b) => (a.id === primaryId ? -1 : b.id === primaryId ? 1 : 0));
   for (const it of refCandidates) {
@@ -727,6 +767,12 @@ export async function generateOutfitTryonImage(companion, targetItems = [], opti
     }
   }
 
+  let poseRefIndex = null;
+  if (poseRefBuffer?.buffer && refs.length < 4) {
+    refs.push(`data:${poseRefBuffer.contentType || 'image/jpeg'};base64,${poseRefBuffer.buffer.toString('base64')}`);
+    poseRefIndex = refs.length;
+  }
+
   const { shotMode, prompt: finalPrompt } = buildLayeredTryonPrompt({
     items: ordered,
     hasFaceRef,
@@ -735,6 +781,7 @@ export async function generateOutfitTryonImage(companion, targetItems = [], opti
     singlePartPreserveRest: ordered.length === 1,
     companion,
     poseId: options.poseId || null,
+    poseRefIndex,
   });
 
   const referenceImage = refs.length > 1 ? refs : (refs[0] || null);
