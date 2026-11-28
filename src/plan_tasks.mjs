@@ -215,8 +215,8 @@ async function runArchiveDailySchedule(dateKey) {
   for (const c of companions) {
     const sched = getDailySchedule(c.id, dateKey);
     if (!sched || !Array.isArray(sched.items)) continue;
-    // 只归档真正值得记的大事（importance>=7），避免重复的日常流水账刷屏记忆库
-    const important = sched.items.filter(it => (it.importance || 0) >= 7);
+    // 保持 importance>=6 归档契约，同时对近期已归档的重复活动去重，避免日常流水账刷屏记忆库
+    const important = sched.items.filter(it => (it.importance || 0) >= 6);
     if (important.length === 0) continue;
     const recentActivities = new Set(
       getRecallableMemories(c.id, c.user_id)

@@ -20,7 +20,7 @@
 - **`src/plan_tasks.mjs`**：
   - 新增 `buildScheduleCommitmentsHint()`：生成每日日程前自动读取当日及近期 `companion_open_loops`（`appointment` / 当日到期事项）以及前一日 `daily_summary`，作为最高优先级约束注入日程生成 Prompt，避免已约好一起逛街却在凌晨闭门编出“约闺蜜逛商场”的冲突日程。
   - 调整 `tick()` 定时顺序：将 `daily-summary` 提前至上海时间 `00:15`（早于 `00:30` 的 `daily-schedule`），并保留 `02:00` 幂等补跑。
-  - 提高 `runArchiveDailySchedule()` 归档阈值（`importance >= 6` → `>= 7`）并对近 30 条已归档活动去重，减少重复日程流水账稀释长期记忆。
+  - 为 `runArchiveDailySchedule()` 增加近 30 条已归档活动去重（保留 `importance >= 6` 契约），减少重复日常流水账稀释长期记忆。
   - 为 `runDaily()` / `runWeekly()` / `runMonthly()` 补充 `indexSummaryMemory()`，在落库日/周/月总结时同步写入向量索引（fail-open，兼容无 embedding provider 环境）。
   - 修复 `ensureScheduleForCompanion()` 查询补全 `user_id` 字段以便读取摘要上下文。
 - **`src/memory.mjs`**：
