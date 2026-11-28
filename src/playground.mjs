@@ -16,7 +16,7 @@ import { usesGroundedReplies, generateGroundedReply } from './reply_pipeline.mjs
 
 import { availabilityWindowForReply, preserveAvailabilityWindow, reviewPressureTail } from './pressure_tail.mjs';
 import { log } from './logger.mjs';
-import { generateReply, embedTextWithDescriptor } from './ai.mjs';
+import { generateReply, embedTextWithDescriptor, recognizeImage } from './ai.mjs';
 import { isChatFallback } from './chat_response.mjs';
 import {
   recallMemoriesHybrid, touchRecalledMemories, getUserProfileForRecall, getConversationContext,
@@ -27,6 +27,13 @@ import {
 } from './db.mjs';
 import { buildSystemPrompt } from './companion.mjs';
 import { buildLongTermDigest } from './plan_tasks.mjs';
+import { buildWardrobePromptBlock, handleInboundWardrobeTurn } from './wardrobe.mjs';
+import {
+  buildPresenceModeHint,
+  buildDateSessionPromptBlock,
+  handleInboundDateTurn,
+  getFreshActiveDateSession,
+} from './date_mode.mjs';
 import {
   computeRelationshipStage, syncUpdateCompanionState, detectIntimacyOvereach,
   detectUserConfession, consumePendingCelebration, extractAndSaveMemories,
@@ -56,12 +63,21 @@ import { updateEventsFromTurn } from './event_memory.mjs';
 // probe（探针模式）：跑通整条对话链路（含 #310 的 inner-OS double-pass）但**零持久化**——
 // 不写 conversation turns / memory / emotion / profile / safety / open loops / postProcess。
 // 供 scripts/playground_probe.mjs 每日合成探针用（对外通道心跳），配合合成 companion id<0 双保险。
-export async function playgroundChat(companion, userText, { probe = false } = {}) {
+export async function playgroundChat(companion, userText, { probe = false, inboundImages = [], imagePurpose = 'auto' } = {}) {
   const inputStartedAt = Date.now();
   if (!companion) throw new Error('companion 不存在');
-  const text = String(userText || '').trim();
-  if (!text) throw new Error('userText 不能为空');
-  if (text.length > 2000) throw new Error('userText 过长（>2000）');
+  const rawText = String(userText || '').trim();
+  if (!rawText && (!Array.isArray(inboundImages) || !inboundImages.length)) throw new Error('userText 不能为空');
+  if (rawText.length > 2000) throw new Error('userText 过长（>2000）');
+
+  let text = rawText;
+  if (!probe && Array.isArray(inboundImages) && inboundImages.length > 0 && !/\[他发了一张图片/.test(text)) {
+    const img = inboundImages[inboundImages.length - 1];
+    let visionDesc = '';
+    try { visionDesc = await recognizeImage(img.buffer, img.mime || 'image/jpeg'); } catch { /* fail-open */ }
+    const imgTag = visionDesc ? `[他发了一张图片，内容：${visionDesc}]` : '[他发了一张图片]';
+    text = text ? `${imgTag}\n${text}` : imgTag;
+  }
 
   // Cancellation must take effect even when sleep blocks a reply.
   if (isBehaviorEnabled()) {
@@ -194,6 +210,49 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
     shapingHint = buildShapingPromptHint(listShaping(companion.id), { expressionOnly: true });
   }
 
+  let wardrobeNote = '';
+  let wardrobeOutcome = null;
+  if (!probe && imagePurpose !== 'date_bg' && imagePurpose !== 'couple_photo') {
+    try {
+      const effectiveText = imagePurpose === 'gift' && !/送|试穿|买|换上/.test(text)
+        ? `${text}\n送你这个试试看`
+        : text;
+      wardrobeOutcome = await handleInboundWardrobeTurn({ companion, userText: effectiveText, inboundImages });
+      if (wardrobeOutcome?.contextNote) wardrobeNote = wardrobeOutcome.contextNote;
+    } catch (e) { log('warn', `[Wardrobe] web turn hook failed: ${e.message}`); }
+  }
+  let wardrobeHintBase = '';
+  try { wardrobeHintBase = buildWardrobePromptBlock(companion.id); } catch { /* fail-open */ }
+  const wardrobeHint = [wardrobeHintBase, wardrobeNote].filter(Boolean).join('\n');
+
+  let dateOutcome = null;
+  if (!probe) {
+    try {
+      dateOutcome = await handleInboundDateTurn({
+        companion,
+        userText: text,
+        inboundImages,
+        wardrobeHandled: !!wardrobeOutcome?.item,
+      });
+      if (dateOutcome?.activeSession) companion.current_scene = dateOutcome.activeSession.scene;
+      else if (dateOutcome?.settledResult?.settled) companion.current_scene = '日常';
+    } catch (e) { log('warn', `[DateMode] web turn hook failed: ${e.message}`); }
+  } else {
+    try {
+      const activeSession = getFreshActiveDateSession(companion.id);
+      if (activeSession) dateOutcome = { activeSession, contextNote: '' };
+    } catch { /* fail-open */ }
+  }
+  let presenceHint = '';
+  try { presenceHint = buildPresenceModeHint(companion); } catch { /* fail-open */ }
+  let dateModeHint = '';
+  try {
+    dateModeHint = [
+      buildDateSessionPromptBlock(dateOutcome?.activeSession || null),
+      dateOutcome?.contextNote || '',
+    ].filter(Boolean).join('\n');
+  } catch { /* fail-open */ }
+
   async function buildLegacyWebPrompt() {
     const recentSchedules = getRecentSchedules(companion.id, todayKey, 3);
     const longTermDigest = await buildLongTermDigest(companion.id, companion.user_id, { isPro: true });
@@ -202,7 +261,8 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
     const emotionHint = Number(companion.safe_mode) ? '' : buildEmotionPromptHint(emotionState, { missingLevel, arcActive: behaviorOn && (arcCtx.active || !!behaviorPlan) });
     let systemPrompt = buildSystemPrompt(companion, {
       memories, userProfile, recentTurns, longTermDigest,
-      promptMode: 'reply', userText: text, dailySchedule, recentSchedules, personaFacts, preferences, behaviorPlan,
+      promptMode: 'reply', userText: text, dailySchedule, recentSchedules, personaFacts, preferences,
+      wardrobeHint, presenceHint, dateModeHint, behaviorPlan,
     }) + stickerHint + emotionHint;
     if (availability) systemPrompt += '\n他给了大致有空的时段，接话时保留这个范围，等他确认具体时间。';
 
@@ -230,7 +290,8 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
     reply = behaviorOn && crisisLevel === 'high' ? buildCrisisReply()
       : grounded ? (await generateGroundedReply({ companion, userText: text, history,
         memories, userProfile, behaviorPlan, arcState: arcCtx.arcState, probe, channel: 'web',
-        personaFacts, preferences, dailySchedule, shapingHint, relationshipEvent,
+        personaFacts, preferences, dailySchedule, shapingHint, wardrobeHint, presenceHint, dateModeHint,
+        dateSession: dateOutcome?.activeSession || null, relationshipEvent,
       })).reply : await generateReply(systemPrompt, history, text, {
       temperature: companion.temperature,
       max_tokens: companion.max_tokens,
@@ -319,6 +380,19 @@ export async function playgroundChat(companion, userText, { probe = false } = {}
       mood: after.current_mood,
       affection_level: after.affection_level,
       relationship_stage: after.relationship_stage,
+      scene: after.current_scene || '日常',
     },
+    dateSession: dateOutcome?.activeSession || null,
+    settledDate: dateOutcome?.settledResult?.settled ? {
+      summary: dateOutcome.settledResult.summary,
+      resolvedLoops: dateOutcome.settledResult.resolvedLoops || [],
+    } : null,
+    wardrobeAction: wardrobeOutcome?.item ? {
+      intent: wardrobeOutcome.intent,
+      item: wardrobeOutcome.item,
+      shouldSendTryonPhoto: !!wardrobeOutcome.shouldSendTryonPhoto,
+    } : null,
+    shouldTriggerCyberPhoto: Boolean(dateOutcome?.triggerCyberPhoto || imagePurpose === 'couple_photo' || imagePurpose === 'date_bg'),
+    shouldTriggerDatePhoto: Boolean(dateOutcome?.triggerDatePhoto),
   };
 }

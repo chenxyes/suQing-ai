@@ -1,6 +1,7 @@
 /** Independent OpenAI-compatible endpoints for optional model capabilities. */
 import { readFile } from 'node:fs/promises';
 import { getAppSetting, getDb, setAppSetting } from '../db.mjs';
+import { log } from '../logger.mjs';
 export const CUSTOM_CAPABILITIES = ['vision', 'asr', 'tts', 'image', 'embedding'];
 export function readProviderSetting(key) {
   const stored = getAppSetting(key);
@@ -114,11 +115,78 @@ export async function customTts(text, options = {}) {
   if (!audio.length) throw new Error('custom tts empty audio');
   return audio;
 }
-export async function customImage(prompt, size = '1024x1024', options = {}) {
-  const response = await post('image', '/images/generations', c => ({ model: c.model, prompt, size, n: 1 }), { timeoutMs: 90_000, ...options });
-  const data = (await readJson(response, 'image')).data?.[0];
+function dataUrlToBlob(dataUrl, fallbackName = 'ref.png') {
+  if (typeof dataUrl !== 'string') return null;
+  const match = dataUrl.match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i);
+  if (!match) return null;
+  const mime = match[1].toLowerCase();
+  const buf = Buffer.from(match[2], 'base64');
+  if (!buf.length) return null;
+  const ext = mime.includes('jpeg') || mime.includes('jpg') ? 'jpg' : mime.includes('webp') ? 'webp' : 'png';
+  return { blob: new Blob([buf], { type: mime }), filename: fallbackName.replace(/\.[^.]+$/, '') + `.${ext}` };
+}
+
+function normalizeReferenceImages(refInput) {
+  if (!refInput) return [];
+  if (typeof refInput === 'string') return [refInput];
+  if (Array.isArray(refInput)) return refInput.filter(x => typeof x === 'string' && x.trim());
+  return [];
+}
+
+function extractCustomImageOutput(payload) {
+  const data = payload?.data?.[0];
   if (typeof data?.b64_json === 'string' && data.b64_json) return `data:image/png;base64,${data.b64_json}`;
   if (typeof data?.url === 'string' && /^https?:\/\//i.test(data.url)) return data.url;
+  return null;
+}
+
+export async function customImage(prompt, size = '1024x1024', optionsOrRef = {}) {
+  const isRefArg = typeof optionsOrRef === 'string' || Array.isArray(optionsOrRef);
+  const options = isRefArg ? {} : (optionsOrRef || {});
+  const refs = normalizeReferenceImages(isRefArg ? optionsOrRef : options.referenceImage);
+  const editEnabled = String(process.env.IMAGE_EDIT_ENABLED ?? 'true').toLowerCase() !== 'false';
+
+  if (refs.length > 0 && editEnabled) {
+    const blobs = refs.map((r, i) => dataUrlToBlob(r, `ref_${i + 1}.png`)).filter(Boolean);
+    if (blobs.length > 0) {
+      const tryEdit = async (withHighFidelity) => {
+        const editResp = await post('image', '/images/edits', c => {
+          const form = new FormData();
+          form.append('model', c.model);
+          form.append('prompt', prompt);
+          form.append('size', size);
+          form.append('n', '1');
+          if (withHighFidelity) form.append('input_fidelity', 'high');
+          const fieldName = blobs.length > 1 ? 'image[]' : 'image';
+          for (const item of blobs) form.append(fieldName, item.blob, item.filename);
+          return form;
+        }, { timeoutMs: 120_000, ...options });
+        return extractCustomImageOutput(await readJson(editResp, 'image'));
+      };
+      const wantFidelity = options.inputFidelity === 'high'
+        || String(process.env.IMAGE_EDIT_FIDELITY || 'high').toLowerCase() === 'high';
+      try {
+        const editUrl = await tryEdit(wantFidelity);
+        if (editUrl) return editUrl;
+      } catch (err) {
+        if (wantFidelity) {
+          try {
+            log('info', `[image] custom /images/edits(input_fidelity=high) 未被上游接受(${err.message.slice(0, 90)})，重试标准 /images/edits`);
+            const retryUrl = await tryEdit(false);
+            if (retryUrl) return retryUrl;
+          } catch (retryErr) {
+            log('warn', `[image] custom /images/edits 不可用(${retryErr.message.slice(0, 120)})，降级 /images/generations`);
+          }
+        } else {
+          log('warn', `[image] custom /images/edits 不可用(${err.message.slice(0, 120)})，降级 /images/generations`);
+        }
+      }
+    }
+  }
+
+  const response = await post('image', '/images/generations', c => ({ model: c.model, prompt, size, n: 1 }), { timeoutMs: 90_000, ...options });
+  const url = extractCustomImageOutput(await readJson(response, 'image'));
+  if (url) return url;
   throw new Error('custom image empty or invalid response');
 }
 export async function customEmbedding(text, options = {}) {

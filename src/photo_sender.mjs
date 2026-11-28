@@ -9,6 +9,7 @@ import { readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import sharp from 'sharp';
 import { generateImage, generateReply } from './ai.mjs';
+import { getActiveImageProvider } from './providers/image.mjs';
 import { tryAchievement } from './achievements.mjs';
 import {
   getDailySchedule,
@@ -17,6 +18,7 @@ import {
   saveMessage,
   shanghaiDateKey,
   insertPhotoLog,
+  listWardrobeItems,
 } from './db.mjs';
 import { sendMessageItem } from './ilink.mjs';
 import { log } from './logger.mjs';
@@ -186,11 +188,16 @@ async function writeConvertedPhoto(url, companionId, aspect = '3:4') {
   const cover = Math.ceil(Math.max(tw, th) * 1.13);
 
   try {
-    const r = await fetch(url, { signal: AbortSignal.timeout(30_000) });
-    if (!r.ok) throw new Error('download HTTP ' + r.status);
-    const contentLength = Number(r.headers.get('content-length') || 0);
-    if (contentLength > MAX_PHOTO_BYTES) throw new Error(`图片过大 ${contentLength}B`);
-    const buf = Buffer.from(await r.arrayBuffer());
+    let buf;
+    if (typeof url === 'string' && !/^https?:|^data:/i.test(url) && existsSync(url)) {
+      buf = await readFile(url);
+    } else {
+      const r = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+      if (!r.ok) throw new Error('download HTTP ' + r.status);
+      const contentLength = Number(r.headers.get('content-length') || 0);
+      if (contentLength > MAX_PHOTO_BYTES) throw new Error(`图片过大 ${contentLength}B`);
+      buf = Buffer.from(await r.arrayBuffer());
+    }
     if (buf.length > MAX_PHOTO_BYTES) throw new Error(`图片过大 ${buf.length}B`);
     writeFileSync(tmpPath, buf);
     await new Promise((resolve, reject) => {
@@ -312,6 +319,8 @@ export async function cropReferenceToFace(buf, aspect = '3:4') {
     const img = sharp(buf);
     const { width: W, height: H } = await img.metadata();
     if (!W || !H) return buf;
+    // 横版多视图设定图（如左正面/中侧面/右背面三视图）：绝不做居中裁切，否则会切掉正面脸！
+    if (W > H * 1.15) return buf;
     const side = Math.max(64, Math.round(Math.min(W, H) * Math.min(0.95, Math.max(0.3, ratio))));
     const left = Math.max(0, Math.round((W - side) / 2));
     const top = Math.max(0, Math.round(H * Math.min(0.4, Math.max(0, topOff))));
@@ -357,7 +366,7 @@ export function buildFinalImagePrompt({ identityPrompt, scenePrompt, providerCap
   const referenceNote = sceneryShot
     ? 'first-person POV photo of the scene/objects in front of her — do NOT show her face, do NOT make it a selfie; the objects/scenery fill the frame, at most one hand or sleeve at the edge'
     : (referenceImagePath && providerCapabilities?.referenceImage
-      ? 'use the provided reference image for FACE IDENTITY ONLY (keep the same face and likeness); completely IGNORE and REPLACE the reference image background, location, lighting, time of day, clothing and body pose — build the entire scene, background, lighting, time of day and outfit strictly from this text prompt. The photo time of day and setting MUST match the text (e.g. if the text says night, it must look like night), never the reference. Frame as a close waist-up phone shot unless the text says it is a scenery/POV shot'
+      ? 'use the provided reference image (Image 1) for FACE IDENTITY AND HAIRSTYLE (strictly preserve her exact face shape, eyes, nose, lips, bangs, hairstyle, hair color and natural proportions; if Image 1 is a multi-view character sheet, ignore the sheet layout and text labels); completely IGNORE and REPLACE the reference image background, location, lighting, time of day and body pose — build the entire scene, background, lighting, time of day and outfit strictly from this text prompt. The photo time of day and setting MUST match the text (e.g. if the text says night, it must look like night), never the reference. Frame as a close waist-up phone shot unless the text says it is a scenery/POV shot'
       : 'keep the same adult person identity using the stable description');
   // 去重：planner 写的 imagePrompt 常已含部分质感词，拼接前剔掉重复，
   // 避免顶到 900 字上限把独有的质感词（skin texture / grain / DoF）截掉。
@@ -406,6 +415,8 @@ export async function sendCompanionPhoto({
   aspect = '3:4',           // v1.21.2: planner 按机位路由（aspectForShot）
   shotMode = '',            // 落库/digest 比例分布用
   category = '',            // v1.21.6 PR-A: proactive 加权采样命中的品类 id（user 索图为空），落库观察配比
+  extraReferenceImagePaths = [], // 数字衣橱试穿：附带商品原图等额外参考图
+  preGeneratedImagePath = null,  // 已由衣橱/约会高保真多图引擎生成好的本地图片路径（直接转码发微信）
 } = {}) {
   aspect = normalizeAspect(aspect);
   if (!envFlag('PHOTO_SEND_ENABLED', true)) {
@@ -447,14 +458,39 @@ export async function sendCompanionPhoto({
   }
 
   let generated;
+  if (preGeneratedImagePath && existsSync(preGeneratedImagePath)) {
+    generated = { url: preGeneratedImagePath, prompt: 'pre-generated-high-fidelity' };
+  } else {
   try {
-    const scenePrompt = imagePrompt
-      ? sanitizePhotoPrompt(imagePrompt)
-      : sanitizePhotoPrompt(buildScenePrompt({ activity: finalActivity, timeSlot: derived.timeSlot, mood: derived.mood }));
+    let rawScene = imagePrompt || buildScenePrompt({ activity: finalActivity, timeSlot: derived.timeSlot, mood: derived.mood });
+    const autoWardrobePaths = [];
+    // 日常自拍/主动发图（有脸机位且未手动传额外参考图）自动联动数字衣橱今日在穿单品，保证脸+穿搭双一致
+    const noFacePreview = isNoFaceShot({ shotMode, scenePrompt: rawScene });
+    if (!noFacePreview && (!Array.isArray(extraReferenceImagePaths) || !extraReferenceImagePaths.length)) {
+      try {
+        const wearing = listWardrobeItems(companion.id, { status: 'wearing', limit: 3 }) || [];
+        if (wearing.length) {
+          const outfitDesc = wearing.map(it => it.visual_prompt || `${it.color || ''} ${it.name}`.trim()).filter(Boolean).join(', ');
+          if (outfitDesc) rawScene = `${rawScene}, wearing her current outfit: ${outfitDesc}`;
+          for (const it of wearing) {
+            if (it.source_image_path && existsSync(it.source_image_path) && autoWardrobePaths.length < 2) {
+              autoWardrobePaths.push(it.source_image_path);
+            }
+          }
+        }
+      } catch { /* fail-open: 测试环境未建衣橱表时不阻断发图 */ }
+    }
+    const scenePrompt = sanitizePhotoPrompt(rawScene);
     if (!scenePrompt) {
       return { ok: false, code: 'invalid_prompt', error: '照片 prompt 不合规', caption: finalCaption, activity: finalActivity };
     }
-    const identityPrompt = maintainIdentity ? buildIdentityPrompt(visual?.identity) : '';
+    const isCustomProvider = getActiveImageProvider().id === 'custom';
+    const hasLockedFaceRef = !isNoFaceShot({ shotMode, scenePrompt })
+      && Boolean(visual?.capabilities?.referenceImage && visual?.referenceImagePath && existsSync(visual.referenceImagePath));
+    // custom 多图编辑已有真实人物定妆图时，不再注入通用娃娃脸文案覆盖本人真实五官
+    const identityPrompt = maintainIdentity && !(isCustomProvider && hasLockedFaceRef)
+      ? buildIdentityPrompt(visual?.identity)
+      : '';
     const finalPrompt = buildFinalImagePrompt({
       identityPrompt,
       scenePrompt,
@@ -465,29 +501,46 @@ export async function sendCompanionPhoto({
     if (!finalPrompt) {
       return { ok: false, code: 'invalid_prompt', error: '照片 prompt 不合规', caption: finalCaption, activity: finalActivity };
     }
-    // v1.10.53: image-to-image —— provider 支持参考图且有锁定/自动 ref 时，把 ref
-    // 图字节作为 input image 喂进生图，真正锚定同一张脸（不再只塞进文字 note）。
-    // v1.19.2: SCENERY/ACTIVITY-POV 无人脸 —— 不传参考图（走 t2i），否则 i2i 会把脸塞进桌面/风景 POV。
-    // v1.22.x（接线第六案·红线）：无脸机位**绝不载入/使用裁脸参考**——判定走权威 shotMode（与
-    // buildFinalImagePrompt 同源 isNoFaceShot），不再靠 isSceneryScene 文本嗅探（嗅探判错=食物 POV
-    // 仍载入裁脸参考→出脸，prod 06-13 实案）。LLM 在 POV 里夹了人物词也被这道权威闸兜住。
-    let referenceImage = null;
-    if (!isNoFaceShot({ shotMode, scenePrompt }) && visual?.capabilities?.referenceImage && visual?.referenceImagePath) {
+    const referenceImages = [];
+    if (hasLockedFaceRef) {
       try {
         const rawRef = await readFile(visual.referenceImagePath);
-        const refBuf = await cropReferenceToFace(rawRef, aspect); // 裁成目标比例窗：锁脸不锁方（输出跟随 ref 比例）
+        // custom /images/edits 传完整未裁切参考图（兼容三视图/全身定妆照），避免盲裁切毁脸
+        const refBuf = isCustomProvider ? rawRef : await cropReferenceToFace(rawRef, aspect);
         const mime = refBuf === rawRef ? refMimeFromPath(visual.referenceImagePath) : 'image/png';
-        referenceImage = `data:${mime};base64,${refBuf.toString('base64')}`;
-        log('debug', `[Photo] i2i 参考图已载入 companion=${companion.id} raw=${rawRef.length} cropped=${refBuf.length}`);
+        referenceImages.push(`data:${mime};base64,${refBuf.toString('base64')}`);
+        log('debug', `[Photo] i2i 人物参考图已载入 companion=${companion.id} raw=${rawRef.length} used=${refBuf.length}`);
       } catch (e) {
-        log('warn', `[Photo] 读取参考图失败 companion=${companion.id}: ${e.message}`);
+        log('warn', `[Photo] 读取人物参考图失败 companion=${companion.id}: ${e.message}`);
       }
     }
+    const mergedExtraPaths = (Array.isArray(extraReferenceImagePaths) && extraReferenceImagePaths.length)
+      ? extraReferenceImagePaths
+      : autoWardrobePaths;
+    if (mergedExtraPaths.length && (visual?.capabilities?.referenceImage || isCustomProvider)) {
+      for (const extraPath of mergedExtraPaths.slice(0, 3)) {
+        if (!extraPath || !existsSync(extraPath)) continue;
+        try {
+          const extraBuf = await readFile(extraPath);
+          const mime = refMimeFromPath(extraPath);
+          referenceImages.push(`data:${mime};base64,${extraBuf.toString('base64')}`);
+          log('debug', `[Photo] 附带单品参考图已载入 companion=${companion.id} bytes=${extraBuf.length}`);
+        } catch (e) {
+          log('warn', `[Photo] 读取附带参考图失败 companion=${companion.id}: ${e.message}`);
+        }
+      }
+    }
+    const referenceImage = referenceImages.length > 1 ? referenceImages : (referenceImages[0] || null);
     const sizedPrompt = `${finalPrompt}, ${aspectPromptHint(aspect)}`;
-    generated = { url: await generateImage(sizedPrompt, { size: ASPECT_SIZE[aspect], referenceImage }), prompt: sizedPrompt };
+    // custom (如 gpt-image-2) 竖图只认 1024x1536 / 1536x1024 / 1024x1024，避免 768x1024 触发 /images/edits 400 降级丢参考图
+    const reqSize = isCustomProvider
+      ? (aspect === '4:3' ? '1536x1024' : aspect === '1:1' ? '1024x1024' : '1024x1536')
+      : ASPECT_SIZE[aspect];
+    generated = { url: await generateImage(sizedPrompt, { size: reqSize, referenceImage }), prompt: sizedPrompt };
   } catch (e) {
     log('warn', `[Photo] 生成照片失败 companion=${companion.id}: ${e.message}`);
     return { ok: false, code: 'generate_failed', error: e.message, caption: finalCaption, activity: finalActivity };
+  }
   }
 
   let converted;
@@ -544,6 +597,7 @@ export async function sendCompanionPhoto({
       prompt: generated.prompt || '',
       trigger,
       fileName: converted.outName,
+      filePath: converted.outPath,
       source,
     };
   } catch (e) {

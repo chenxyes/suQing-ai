@@ -15,7 +15,8 @@ export function usesGroundedReplies(companion, safetyLevel = 'none') {
 export async function generateGroundedReply(options, { generate = generateReply, review = reviewGroundedReply, search = resolveReplySearchContext } = {}) {
   const { companion, userText, history = [], memories = [], userProfile = null, events = null,
     behaviorPlan = null, arcState = 'normal', accountId = null, probe = false, channel = 'web',
-    personaFacts = [], preferences = null, dailySchedule = null, shapingHint = '',
+    personaFacts = [], preferences = null, dailySchedule = null, shapingHint = '', wardrobeHint = '',
+    presenceHint = '', dateModeHint = '', dateSession = null,
     mode = 'reply', followup = null, relationshipEvent = null, safetyLevel = 'none', now = new Date() } = options;
   if (!usesGroundedReplies(companion, safetyLevel)) return { reply: CHAT_FALLBACK, review: { status: 'ineligible', reasons: [] } };
   const recallEnabled = !!Number(companion.memory_enabled);
@@ -28,13 +29,25 @@ export async function generateGroundedReply(options, { generate = generateReply,
     userProfile: recallEnabled ? userProfile : null, events: eventRecords, companionId: companion.id, userId: companion.user_id });
   if (context.unknown.some(item => item.id === 'current')) return { reply: CHAT_FALLBACK, review: { status: 'invalid_context', reasons: [] } };
   if (mode === 'followup') context.task = { kind: 'followup', topic: followup?.topic || '', dueAt: followup?.dueAt || null, status: 'claimed' };
+  const dateState = dateSession && dateSession.status === 'active'
+    ? {
+      id: dateSession.id,
+      title: dateSession.title,
+      scene: dateSession.scene,
+      activityType: dateSession.activity_type || 'custom',
+      outfit: Array.isArray(dateSession.outfit_snapshot)
+        ? dateSession.outfit_snapshot.map(it => [it.color, it.name].filter(Boolean).join('')).filter(Boolean).slice(0, 4)
+        : [],
+    }
+    : null;
   context.state = { activity: activityAt(companion, dailySchedule, now, userText), timeZone: 'Asia/Shanghai',
     mood: companion.current_mood || '平静', arcState, relationshipEvent, channel,
+    ...(dateState ? { dateSession: dateState } : {}),
     shaping: String(shapingHint || '').slice(0, 1600) };
   const searchContext = mode === 'followup' ? '' : await search(context.current.text);
   if (searchContext) context.webSearch = searchContext;
   const persona = buildReplyPersona(companion, { personaFacts, preferences });
-  const prompt = buildGroundedReplyPrompt(companion, { context, behaviorPlan, persona, mode, followup });
+  const prompt = buildGroundedReplyPrompt(companion, { context, behaviorPlan, persona, mode, followup, wardrobeHint, presenceHint, dateModeHint });
   const currentInput = mode === 'followup' ? '执行本轮已授权的跟进任务。当前没有新来信。' : context.current.text;
   const draft = await generate(prompt, context.history.map(turn => ({ role: turn.role, content: turn.text, ...(turn.at ? { created_at: turn.at } : {}) })), currentInput, {
     temperature: companion.temperature, max_tokens: companion.max_tokens, top_p: companion.top_p,

@@ -134,7 +134,7 @@ export function buildFirstTurnHint(companion) {
 }
 
 // ─── 主函数 ───────────────────────────────────────────────────────────────────
-export function buildSystemPrompt(companion, { memories = [], userProfile = null, recentTurns = [], longTermDigest = null, promptMode = 'reply', dailySchedule = null, recentSchedules = null, personaFacts = null, preferences = null, shapingHint = '', worksHint = '', openLoopsHint = '', locale = null, behaviorPlan = null, now = new Date(), userText = '' } = {}) {
+export function buildSystemPrompt(companion, { memories = [], userProfile = null, recentTurns = [], longTermDigest = null, promptMode = 'reply', dailySchedule = null, recentSchedules = null, personaFacts = null, preferences = null, shapingHint = '', worksHint = '', openLoopsHint = '', wardrobeHint = '', presenceHint = '', dateModeHint = '', locale = null, behaviorPlan = null, now = new Date(), userText = '' } = {}) {
   memories = memories.filter(isMemoryRecallable);
   const c     = companion;
   const parts = [];
@@ -160,6 +160,9 @@ export function buildSystemPrompt(companion, { memories = [], userProfile = null
   if (c.body_type)      looks.push(`${c.body_type}身材`);
   if (c.clothing_style) looks.push(`喜欢${c.clothing_style}风格穿搭`);
   if (looks.length > 0) parts.push(`\n【你的样子】${looks.join('，')}。`);
+  if (wardrobeHint && typeof wardrobeHint === 'string' && wardrobeHint.trim()) {
+    parts.push(`\n${wardrobeHint.trim()}`);
+  }
 
   // ── 3. 性格 ──────────────────────────────────────────────────────────────────
   const personality = [];
@@ -242,12 +245,18 @@ export function buildSystemPrompt(companion, { memories = [], userProfile = null
     parts.push(`现状：${c.relationship_status}。`);
   }
   if (c.shared_memory)     parts.push(`你记得你们的共同经历：${c.shared_memory}`);
+  if (presenceHint && typeof presenceHint === 'string' && presenceHint.trim()) {
+    parts.push(`\n${presenceHint.trim()}`);
+  }
 
   // ── 6. 当前状态（心情 + 场景）───────────────────────────────────────────────
   parts.push(`\n【此刻的你】`);
   const moodText = MOOD_INFLUENCE[c.current_mood] || MOOD_INFLUENCE['平静'];
   parts.push(moodText);
   if (activity.scene) parts.push(`最近场景记录（北京时间 ${activity.scene.at}）：${activity.scene.text}。`);
+  if (dateModeHint && typeof dateModeHint === 'string' && dateModeHint.trim()) {
+    parts.push(`\n${dateModeHint.trim()}`);
+  }
 
   // ── 7. 对话模式 ──────────────────────────────────────────────────────────────
   // ── 完全自适应：根据时间/心情/活动自动选合适的对话模式 ──

@@ -26,7 +26,7 @@ const PERSONA_FIELDS = [
   'how_met', 'relationship_status', 'shared_memory',
   'memory_priorities',
   'proactive_enabled', 'proactive_frequency', 'proactive_time_window', 'proactive_daily_target',
-  'attachment_style', 'first_love', 'locale',
+  'attachment_style', 'first_love', 'locale', 'presence_mode',
   'voice_reply_enabled', 'sticker_reply_enabled',
   'call_user_as', 'user_call_her_as',
   'persona_prompt', 'forbidden_topics',
@@ -52,7 +52,7 @@ const IMPORT_STRING_FIELDS = new Set([
   'call_user_as', 'user_call_her_as', 'persona_prompt', 'relationship_stage',
   'current_scene', 'backstory', 'family_background', 'education',
   'voice_style', 'chat_mode_active', 'proactive_frequency', 'proactive_time_window',
-  'attachment_style', 'locale',
+  'attachment_style', 'locale', 'presence_mode',
 ]);
 const IMPORT_INT_FIELDS = new Set([
   'age', 'height', 'introvert_level', 'use_emoji_level', 'use_kaomoji',
@@ -69,6 +69,7 @@ const IMPORT_JSON_FIELDS = new Set([
 const IMPORT_ENUM_VALUES = new Map([
   ['attachment_style', new Set(['secure', 'anxious', 'avoidant'])],
   ['locale', new Set(['zh', 'en'])],
+  ['presence_mode', new Set(['local', 'ldr', 'digital'])],
 ]);
 
 // Patterns that suggest injected credentials / prompts
@@ -235,7 +236,7 @@ export async function importCompanionForUser(userId, accountId, botId, payload, 
     memory_priorities: '["我的喜好","情绪变化"]',
     proactive_enabled: 1, proactive_frequency: '适中', proactive_time_window: '07:30-24:00',
     proactive_daily_target: 4,
-    attachment_style: 'secure', first_love: 1, locale: 'zh',
+    attachment_style: 'secure', first_love: 1, locale: 'zh', presence_mode: 'local',
     voice_reply_enabled: 0, sticker_reply_enabled: 0,
     call_user_as: '你', user_call_her_as: null,
     persona_prompt: '', forbidden_topics: '[]',

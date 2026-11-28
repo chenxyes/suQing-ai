@@ -845,3 +845,587 @@ html[data-theme="dark"] .dash-info-strip {
 html[data-theme="dark"] .dash-info-strip strong {
   color: #F4F4F6;
 }
+
+/* ═══ 数字衣橱 · 精品玻璃展示柜（Boutique Glass Showcase Closet） ═══ */
+.wardrobe-cabinet {
+  position: relative;
+  border-radius: 22px;
+  padding: 14px;
+  background:
+    radial-gradient(ellipse 75% 42% at 50% 0%, rgba(255, 226, 240, 0.55) 0%, rgba(255, 255, 255, 0) 70%),
+    linear-gradient(180deg, rgba(255, 252, 254, 0.92) 0%, rgba(252, 248, 250, 0.84) 100%);
+  border: 1.5px solid rgba(255, 182, 217, 0.42);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    inset 0 -16px 32px -24px rgba(190, 140, 165, 0.25),
+    0 12px 32px -18px rgba(255, 143, 184, 0.35);
+}
+.wardrobe-cabinet::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 16%;
+  right: 16%;
+  height: 3px;
+  border-radius: 0 0 999px 999px;
+  background: linear-gradient(90deg, transparent, rgba(255, 214, 170, 0.85), rgba(255, 255, 255, 0.98), rgba(255, 214, 170, 0.85), transparent);
+  pointer-events: none;
+}
+.wardrobe-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.wardrobe-ref-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(255, 182, 217, 0.45);
+  font-size: 11px;
+  font-weight: 600;
+  color: #5C5258;
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+.wardrobe-ref-pill:hover {
+  border-color: #FF8FB8;
+  color: #E0578A;
+  background: #FFF2F8;
+}
+.wardrobe-ref-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  background: #D1D5DB;
+  flex-shrink: 0;
+}
+.wardrobe-ref-dot.is-locked {
+  background: #10B981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.18);
+}
+
+/* 今日上身陈列台（OOTD Hero） */
+.wardrobe-ootd {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(255, 240, 247, 0.9) 0%, rgba(255, 255, 255, 0.92) 100%);
+  border: 1px solid rgba(255, 143, 184, 0.35);
+  box-shadow: 0 6px 20px -12px rgba(255, 143, 184, 0.45);
+}
+.wardrobe-ootd-thumb {
+  width: 56px;
+  height: 74px;
+  border-radius: 11px;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: #FAF5F8;
+  border: 1.5px solid rgba(255, 182, 217, 0.6);
+  cursor: pointer;
+}
+.wardrobe-ootd-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* 分类层板筛选条 */
+.wardrobe-shelf-bar {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding-bottom: 4px;
+  margin-bottom: 10px;
+}
+.wardrobe-shelf-bar::-webkit-scrollbar { display: none; }
+.wardrobe-shelf-tab {
+  flex-shrink: 0;
+  padding: 5px 11px;
+  border-radius: 9999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #6E6E73;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+.wardrobe-shelf-tab:hover {
+  border-color: rgba(255, 143, 184, 0.5);
+  color: #E0578A;
+}
+.wardrobe-shelf-tab.active {
+  background: linear-gradient(135deg, #FF9BC0 0%, #F46CA0 100%);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 4px 12px -4px rgba(244, 108, 160, 0.6);
+}
+
+/* 精品展示柜网格（2~3 列透明陈列格） */
+.wardrobe-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+@media (min-width: 640px) {
+  .wardrobe-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+.wardrobe-cell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(255, 182, 217, 0.36);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    0 8px 20px -14px rgba(31, 38, 135, 0.22);
+  transition: transform 0.2s cubic-bezier(.16, 1, .3, 1), box-shadow 0.2s ease, border-color 0.2s ease;
+}
+.wardrobe-cell:hover {
+  transform: translateY(-2px);
+  border-color: rgba(255, 143, 184, 0.7);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    0 14px 28px -14px rgba(255, 143, 184, 0.5);
+}
+.wardrobe-cell.is-wearing {
+  border-color: rgba(255, 126, 179, 0.78);
+  box-shadow:
+    0 0 0 1px rgba(255, 143, 184, 0.25),
+    0 12px 26px -14px rgba(255, 126, 179, 0.55);
+}
+
+/* 3:4 玻璃橱窗主展位（带柔和射灯顶光 + 底部展台层板） */
+.wardrobe-stage {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  width: 100%;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse 80% 45% at 50% 0%, rgba(255, 236, 209, 0.55) 0%, rgba(255, 240, 247, 0.35) 45%, rgba(246, 244, 248, 0.9) 100%);
+  border-bottom: 3px solid rgba(235, 224, 230, 0.9);
+}
+.wardrobe-stage::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(125deg, rgba(255, 255, 255, 0.32) 0%, transparent 32%, transparent 72%, rgba(255, 255, 255, 0.12) 100%);
+  pointer-events: none;
+}
+.wardrobe-stage-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  cursor: zoom-in;
+  transition: transform 0.35s cubic-bezier(.16, 1, .3, 1);
+}
+.wardrobe-cell:hover .wardrobe-stage-img {
+  transform: scale(1.03);
+}
+.wardrobe-stage-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: #B4A8B0;
+  font-size: 11px;
+}
+
+/* 左上角状态浮标 + 右下角原图/试穿小窗切换 */
+.wardrobe-status-pill {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  padding: 2.5px 8px;
+  border-radius: 9999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.10);
+}
+.wardrobe-status-pill.is-wearing {
+  background: rgba(255, 118, 170, 0.92);
+  color: #fff;
+}
+.wardrobe-status-pill.is-transit {
+  background: rgba(245, 158, 11, 0.9);
+  color: #fff;
+}
+.wardrobe-status-pill.is-owned {
+  background: rgba(255, 255, 255, 0.86);
+  color: #5C5258;
+}
+.wardrobe-mode-tag {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  padding: 2px 7px;
+  border-radius: 9999px;
+  font-size: 10px;
+  font-weight: 600;
+  background: rgba(20, 20, 26, 0.56);
+  color: #fff;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.wardrobe-swap-pip {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  z-index: 3;
+  width: 38px;
+  height: 48px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 2px solid rgba(255, 255, 255, 0.95);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.24);
+  cursor: pointer;
+  background: #fff;
+  transition: transform 0.16s ease;
+}
+.wardrobe-swap-pip:hover {
+  transform: scale(1.08);
+}
+.wardrobe-swap-pip img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* 展台铭牌与极简操作条 */
+.wardrobe-plaque {
+  padding: 9px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+.wardrobe-plaque-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #1D1D1F;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wardrobe-plaque-meta {
+  font-size: 10.5px;
+  color: #8A8A93;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wardrobe-plaque-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: auto;
+  padding-top: 2px;
+}
+.wardrobe-mini-btn {
+  flex: 1;
+  padding: 4px 6px;
+  border-radius: 9999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+.wardrobe-mini-btn.is-primary {
+  background: #FFE8F2;
+  color: #E0578A;
+  border: 1px solid rgba(255, 143, 184, 0.4);
+}
+.wardrobe-mini-btn.is-primary:hover {
+  background: #FFD4E8;
+}
+.wardrobe-mini-btn.is-ghost {
+  background: #F6F6F9;
+  color: #55555E;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+.wardrobe-mini-btn.is-ghost:hover {
+  border-color: rgba(255, 143, 184, 0.55);
+  color: #E0578A;
+}
+.wardrobe-del-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 9999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #B0B0B8;
+  font-size: 12px;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.wardrobe-del-btn:hover {
+  color: #E11D48;
+  background: #FFF1F2;
+}
+
+/* 展柜空位卡片 */
+.wardrobe-empty-slot {
+  grid-column: 1 / -1;
+  padding: 28px 16px;
+  border-radius: 16px;
+  border: 1.5px dashed rgba(255, 143, 184, 0.45);
+  background: rgba(255, 255, 255, 0.55);
+  text-align: center;
+  color: #8A8A93;
+  font-size: 12px;
+}
+
+/* 页内高清灯箱 Lightbox */
+.wardrobe-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(15, 14, 20, 0.78);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.wardrobe-lightbox.hidden { display: none; }
+.wardrobe-lightbox-card {
+  position: relative;
+  width: 100%;
+  max-width: 440px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  border-radius: 22px;
+  overflow: hidden;
+  background: rgba(28, 26, 34, 0.96);
+  border: 1px solid rgba(255, 182, 217, 0.3);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+  color: #F4F4F6;
+}
+.wardrobe-lightbox-imgwrap {
+  position: relative;
+  background: #14131A;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-height: 68vh;
+  overflow: hidden;
+}
+.wardrobe-lightbox-imgwrap img {
+  max-width: 100%;
+  max-height: 68vh;
+  object-fit: contain;
+  display: block;
+}
+
+/* 暗色模式展柜 */
+html[data-theme="dark"] .wardrobe-cabinet {
+  background:
+    radial-gradient(ellipse 75% 42% at 50% 0%, rgba(255, 143, 184, 0.16) 0%, rgba(20, 20, 26, 0) 70%),
+    linear-gradient(180deg, rgba(28, 27, 35, 0.94) 0%, rgba(20, 20, 26, 0.92) 100%);
+  border-color: rgba(255, 143, 184, 0.25);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 16px 36px -18px rgba(0, 0, 0, 0.7);
+}
+html[data-theme="dark"] .wardrobe-ref-pill {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #E2E2E8;
+}
+html[data-theme="dark"] .wardrobe-ootd {
+  background: linear-gradient(135deg, rgba(255, 143, 184, 0.14) 0%, rgba(30, 30, 38, 0.9) 100%);
+  border-color: rgba(255, 143, 184, 0.3);
+}
+html[data-theme="dark"] .wardrobe-shelf-tab {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.08);
+  color: #B4B4BC;
+}
+html[data-theme="dark"] .wardrobe-cell {
+  background: rgba(30, 30, 38, 0.92);
+  border-color: rgba(255, 255, 255, 0.09);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 10px 24px -12px rgba(0, 0, 0, 0.65);
+}
+html[data-theme="dark"] .wardrobe-stage {
+  background: radial-gradient(ellipse 80% 45% at 50% 0%, rgba(255, 205, 160, 0.18) 0%, rgba(36, 34, 46, 0.92) 70%);
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+}
+html[data-theme="dark"] .wardrobe-plaque-title { color: #F4F4F6; }
+html[data-theme="dark"] .wardrobe-mini-btn.is-ghost {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #D8D8E0;
+}
+html[data-theme="dark"] .wardrobe-mini-btn.is-primary {
+  background: rgba(255, 143, 184, 0.18);
+  color: #FFB6D9;
+  border-color: rgba(255, 143, 184, 0.35);
+}
+html[data-theme="dark"] .wardrobe-empty-slot {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 143, 184, 0.3);
+}
+
+/* ═══ 清透极光玻璃（默认浅色） + 暗夜液态玻璃（深色）双旗舰主题 ═══ */
+body {
+  background:
+    radial-gradient(ellipse 66% 44% at 10% 0%, rgba(255, 198, 229, 0.38) 0%, transparent 62%),
+    radial-gradient(ellipse 56% 42% at 92% 4%, rgba(190, 222, 255, 0.34) 0%, transparent 60%),
+    radial-gradient(ellipse 55% 42% at 52% 100%, rgba(235, 214, 255, 0.26) 0%, transparent 64%),
+    #F8FAFD !important;
+  transition: background 0.35s ease;
+}
+html[data-theme="dark"] body {
+  background:
+    radial-gradient(ellipse 64% 42% at 12% 0%, rgba(255, 122, 178, 0.16) 0%, transparent 62%),
+    radial-gradient(ellipse 56% 40% at 90% 6%, rgba(112, 148, 255, 0.15) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 40% at 50% 100%, rgba(168, 120, 255, 0.10) 0%, transparent 64%),
+    #09090F !important;
+}
+body > header {
+  background: rgba(255, 255, 255, 0.72) !important;
+  backdrop-filter: blur(24px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(24px) saturate(180%) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.85) !important;
+  box-shadow: 0 4px 24px -16px rgba(31, 38, 135, 0.14);
+}
+html[data-theme="dark"] body > header {
+  background: rgba(14, 14, 21, 0.76) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+  box-shadow: 0 8px 28px -16px rgba(0, 0, 0, 0.75);
+}
+.card, .dash-acc-item {
+  background: rgba(255, 255, 255, 0.74) !important;
+  backdrop-filter: blur(22px) saturate(175%);
+  -webkit-backdrop-filter: blur(22px) saturate(175%);
+  border: 1px solid rgba(255, 255, 255, 0.9) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.96),
+    0 12px 34px -20px rgba(31, 38, 135, 0.16) !important;
+}
+html[data-theme="dark"] .card,
+html[data-theme="dark"] .dash-acc-item {
+  background: rgba(20, 20, 29, 0.76) !important;
+  border: 1px solid rgba(255, 255, 255, 0.09) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 16px 38px -18px rgba(0, 0, 0, 0.78) !important;
+}
+.aurora-theme-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 11px;
+  border-radius: 9999px;
+  font-size: 11.5px;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(255, 182, 217, 0.5);
+  color: #4A4449;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  white-space: nowrap;
+}
+.aurora-theme-btn:hover {
+  background: #FFF0F7;
+  border-color: #FF8FB8;
+  color: #E0578A;
+  transform: translateY(-1px);
+}
+html[data-theme="dark"] .aurora-theme-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 143, 184, 0.35);
+  color: #F4F4F6;
+}
+html[data-theme="dark"] .aurora-theme-btn:hover {
+  background: rgba(255, 143, 184, 0.2);
+}
+
+/* 左侧角色光影大舞台（Character Hero Stage） */
+.dash-hero-stage {
+  position: relative;
+  border-radius: 18px;
+  overflow: hidden;
+  aspect-ratio: 4 / 5;
+  margin-bottom: 14px;
+  background:
+    radial-gradient(ellipse 80% 50% at 50% 0%, rgba(255, 210, 232, 0.6) 0%, transparent 65%),
+    linear-gradient(160deg, #FFF3F9 0%, #EEF4FF 100%);
+  border: 1.5px solid rgba(255, 255, 255, 0.92);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    0 14px 30px -16px rgba(244, 108, 160, 0.38);
+  cursor: pointer;
+}
+html[data-theme="dark"] .dash-hero-stage {
+  background:
+    radial-gradient(ellipse 80% 50% at 50% 0%, rgba(255, 143, 184, 0.25) 0%, transparent 65%),
+    linear-gradient(160deg, #1B1826 0%, #121420 100%);
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 18px 36px -18px rgba(0, 0, 0, 0.8);
+}
+.dash-hero-stage img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center top;
+  display: block;
+  transition: transform 0.45s cubic-bezier(.16, 1, .3, 1);
+}
+.dash-hero-stage:hover img { transform: scale(1.03); }
+.dash-hero-overlay {
+  position: absolute;
+  inset: auto 0 0 0;
+  padding: 28px 12px 10px;
+  background: linear-gradient(180deg, transparent 0%, rgba(16, 14, 22, 0.72) 100%);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dash-hero-badge {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  padding: 3px 9px;
+  border-radius: 9999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(10px);
+  color: #E0578A;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+.dash-hero-badge.is-dating {
+  background: linear-gradient(135deg, #FF82B2 0%, #F45B96 100%);
+  color: #fff;
+}

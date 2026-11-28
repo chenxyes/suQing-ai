@@ -66,6 +66,8 @@ async function execute(kind, f, { probe = false, provider = 'ok', crisis = 'none
     ...behavior, usesGroundedReplies, availabilityWindowForReply,
     console, Set, Date, companion: f.companion, userText: query, text: query, probe,
     ctx: {}, msg: { fromUser: 'synthetic-runtime' }, botId: 'fixture', userParts: null,
+    wardrobeOutcome: null, dateOutcome: null, inboundImages: [], imagePurpose: 'auto',
+    handleInboundWardrobeTurn: async () => null, handleInboundDateTurn: async () => null, getFreshActiveDateSession: () => null,
     binding: {}, userMsgSafetyLevel: 'none', kind: 'normal', account: { bot_token: 'fixture-token', bot_id: 'fixture' }, opts: {},
     log: () => {},
     embedTextWithDescriptor: async text => {
@@ -107,7 +109,7 @@ async function execute(kind, f, { probe = false, provider = 'ok', crisis = 'none
   };
   for (const name of ['buildStickerPromptHint', 'buildEmotionPromptHint', 'buildInnerOsHint', 'buildReunionHint', 'buildShapingConfirmHint',
     'buildShapingPromptHint', 'buildWorksPromptHint', 'buildOpenLoopsHint', 'escalationDirective', 'buildIntentDedupHint', 'buildRealityFacts',
-    'buildFirstTurnHint', 'buildRecentProactiveHint']) sandbox[name] = () => '';
+    'buildFirstTurnHint', 'buildRecentProactiveHint', 'buildWardrobePromptBlock', 'buildPresenceModeHint', 'buildDateSessionPromptBlock']) sandbox[name] = () => '';
   // Playground's prefix declares this binding locally; other selected sections use an enclosing one.
   if (kind === 'playground') delete sandbox.userMsgSafetyLevel;
   const context = vm.createContext(sandbox);

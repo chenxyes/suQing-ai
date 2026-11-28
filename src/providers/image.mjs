@@ -164,12 +164,12 @@ async function openrouterCall(prompt, size, model, refImage = null) {
   if (!key) throw new Error('OPENROUTER_API_KEY 未配置');
   const sizedPrompt = size ? `${prompt}\n\n[尺寸要求: ${size}]` : prompt;
 
-  // v1.10.53: image-to-image —— 有参考图时把它作为 input image 一起传，
-  // 让 gpt-image / gemini-2.5-flash-image 锚定同一张脸；否则走纯文生图。
-  const content = refImage
+  // v1.10.53 + wardrobe try-on: 支持单张或多张参考图（人物定妆照 + 商品图）
+  const refList = Array.isArray(refImage) ? refImage.filter(Boolean) : (refImage ? [refImage] : []);
+  const content = refList.length
     ? [
         { type: 'text', text: sizedPrompt },
-        { type: 'image_url', image_url: { url: refImage } },
+        ...refList.map(url => ({ type: 'image_url', image_url: { url } })),
       ]
     : sizedPrompt;
 
@@ -237,8 +237,9 @@ async function ai302Call(prompt, size, model, refImage = null) {
   const key = process.env.AI302_API_KEY;
   if (!key) throw new Error('AI302_API_KEY 未配置');
   const sizedPrompt = size ? `${prompt}\n\n[尺寸要求: ${size}]` : prompt;
-  const content = refImage
-    ? [{ type: 'text', text: sizedPrompt }, { type: 'image_url', image_url: { url: refImage } }]
+  const refList = Array.isArray(refImage) ? refImage.filter(Boolean) : (refImage ? [refImage] : []);
+  const content = refList.length
+    ? [{ type: 'text', text: sizedPrompt }, ...refList.map(url => ({ type: 'image_url', image_url: { url } }))]
     : sizedPrompt;
   const resp = await fetch('https://api.302.ai/v1/chat/completions', {
     method: 'POST',
@@ -320,13 +321,14 @@ export function getActiveImageProvider() {
 
 export function getImageProviderCapabilities(providerName = active()) {
   const id = String(providerName || active() || '').toLowerCase();
-  // v1.10.53: openrouter 走 chat/completions 多模态，可吃 input image 做
-  // image-to-image（gpt-image / gemini-2.5-flash-image）。其它 provider 暂只文生图。
-  const supportsRef = id === 'openrouter' || id === '302ai';
+  const customEdit = id === 'custom' && String(process.env.IMAGE_EDIT_ENABLED ?? 'true').toLowerCase() !== 'false';
+  // openrouter / 302ai 走多模态 chat，custom 支持 /images/edits（不支持时 fail-open 降级）
+  const supportsRef = id === 'openrouter' || id === '302ai' || customEdit;
   return {
     provider: id,
     textToImage: Boolean(REGISTRY[id]),
     imageToImage: supportsRef,
     referenceImage: supportsRef,
+    multiReferenceImage: supportsRef,
   };
 }
