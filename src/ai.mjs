@@ -297,6 +297,20 @@ function stripActionNarration(text) {
   return unwrapped.length ? unwrapped : text;
 }
 
+// P2: 剥离模型模仿历史消息前缀吐出的 [北京时间 YYYY-MM-DD HH:MM] / 【北京时间 ...】水印
+const LEADING_TIMESTAMP_RE = /^(?:[\[【]\s*北京时间\s*\d{4}-\d{2}-\d{2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?\s*[\]】]\s*)+/u;
+
+function stripTimestampPrefix(text) {
+  if (!text || typeof text !== 'string') return text;
+  if (!text.includes('北京时间')) return text;
+  const stripped = text
+    .split(/(\s*(?:\|\||｜｜)\s*)/)
+    .map((part, idx) => (idx % 2 === 0 ? part.replace(LEADING_TIMESTAMP_RE, '') : part))
+    .join('')
+    .trim();
+  return stripped || text;
+}
+
 export async function resolveReplySearchContext(userMessage) {
   try {
     if (!shouldSearch(userMessage).search) return '';
@@ -329,8 +343,10 @@ export async function generateReply(personaPrompt, history, userMessage, params 
       ? (h.direction === 'in' ? 'user' : 'assistant')
       : (h.role === 'user' ? 'user' : 'assistant');
     if (role === 'assistant' && isChatFallback(h.content)) continue;
+    const cleanContent = stripTimestampPrefix(h.content);
     const at = shanghaiMessageTime(h.created_at);
-    messages.push({ role, content: at ? `[北京时间 ${at}] ${h.content}` : h.content });
+    // 仅给 user 历史附带时间戳，避免 assistant 历史自带 [北京时间 ...] 触发模型 few-shot 模仿泄漏
+    messages.push({ role, content: (role === 'user' && at) ? `[北京时间 ${at}] ${cleanContent}` : cleanContent });
   }
   messages.push({ role: 'user', content: userMessage });
 
@@ -364,6 +380,8 @@ export async function generateReply(personaPrompt, history, userMessage, params 
       role,
     });
     let reply = text;
+    // P2: 确定性剥离任何泄漏的 [北京时间 ...] 前缀（防历史污染或模型偶发模仿）
+    if (purpose !== 'internal') reply = stripTimestampPrefix(reply);
     // v1.13.x 真人感#1：非角色扮演模式，删掉动作神态旁白（确定性兜底，prompt 之外再保一道）
     if (purpose !== 'internal' && !/进入角色扮演模式/.test(personaPrompt)) reply = stripActionNarration(reply);
     if (reasoning && companionId != null) {
@@ -436,3 +454,5 @@ export async function recognizeImage(imageBuffer, mimeType = 'image/jpeg', opts 
 export async function recognizeVoice(audioBuffer, mimeType = 'audio/ogg') {
   return await asrRecognize(audioBuffer, mimeType);
 }
+
+export { stripTimestampPrefix };

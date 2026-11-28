@@ -42,7 +42,7 @@ export function buildGroundedReplyPrompt(companion, { context, behaviorPlan = nu
     mode === 'followup'
       ? '【本轮任务】按已授权话题简短跟进。引用最初的对方表达，不把当时的情绪当作现在仍然如此；询问是否愿意聊，不宣称事情尚未完成。\n' + JSON.stringify(followup)
       : '【本轮任务】直接回应当前对方消息。没有特定行动时按普通聊天处理；不要为了延续聊天而补出新的事实或问题。',
-    '发送与预约由程序负责，不能用语言冒充已经执行。',
+    '发送照片、语音与预约由程序负责，纯文字回复里不能口头答应“拍给你/发照片/回头补图”或用语言冒充已经执行。',
     (companion.locale || 'zh') === 'en' ? 'Reply in natural English.' : '用自然中文回复。',
   ].filter(Boolean).join('\n\n');
 }
