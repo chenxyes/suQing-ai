@@ -25,6 +25,7 @@ import {
 import { recognizeImage, generateImage } from './ai.mjs';
 import { ensureVisualIdentity, buildIdentityPrompt } from './visual_identity.mjs';
 import { ANTI_COLLAGE_PROMPT } from './photo_sender.mjs';
+import { getPoseById } from './pose_outfit_library.mjs';
 import { log } from './logger.mjs';
 
 const DEFAULT_VISUAL_ROOT = path.resolve(
@@ -596,9 +597,15 @@ export function buildLayeredTryonPrompt({
   imageBindings = [],
   singlePartPreserveRest = false,
   companion = {},
+  poseId = null,
 } = {}) {
-  const { shotMode, framing } = pickLayeredFraming(items);
-  const { expression, makeupCue } = pickTryonExpressionAndStyling(companion, items);
+  const chosenPose = poseId ? getPoseById(poseId) : null;
+  const fallbackFrame = pickLayeredFraming(items);
+  const shotMode = chosenPose?.shotMode || fallbackFrame.shotMode;
+  const framing = chosenPose?.framingPrompt || fallbackFrame.framing;
+  const autoStyling = pickTryonExpressionAndStyling(companion, items);
+  const expression = chosenPose?.expressionPrompt || autoStyling.expression;
+  const makeupCue = chosenPose?.makeupCue || autoStyling.makeupCue;
   const parts = [];
 
   if (hasFaceRef) {
@@ -610,7 +617,9 @@ export function buildLayeredTryonPrompt({
   }
 
   parts.push(
-    `EXPRESSION, POSE & STYLING VARIATION: ${expression}. Makeup: ${makeupCue}. Keep her expression natural, vivid, and alive rather than a rigid ID-photo stare.`,
+    chosenPose?.posePrompt
+      ? `POSE, EXPRESSION & STYLING (${chosenPose.label}): Pose: ${chosenPose.posePrompt}. Expression: ${expression}. Makeup: ${makeupCue}. Keep her posture and expression vivid and natural.`
+      : `EXPRESSION, POSE & STYLING VARIATION: ${expression}. Makeup: ${makeupCue}. Keep her expression natural, vivid, and alive rather than a rigid ID-photo stare.`,
     `COMPOSITION: ${framing}`,
   );
 
@@ -725,6 +734,7 @@ export async function generateOutfitTryonImage(companion, targetItems = [], opti
     imageBindings,
     singlePartPreserveRest: ordered.length === 1,
     companion,
+    poseId: options.poseId || null,
   });
 
   const referenceImage = refs.length > 1 ? refs : (refs[0] || null);
@@ -781,7 +791,7 @@ export async function generateWardrobeTryonImage(companion, item, deps = {}) {
   return generateOutfitTryonImage(
     companion,
     combo,
-    { primaryItemId: item.id, filePrefix: `tryon_${item.id}` },
+    { primaryItemId: item.id, filePrefix: `tryon_${item.id}`, poseId: deps.poseId || null },
     deps,
   );
 }

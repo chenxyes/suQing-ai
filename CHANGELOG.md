@@ -8,6 +8,21 @@
 
 ### Added
 
+#### Phase 4-A · 姿势库（单人试穿 + 双人约会合影）+ 精选服装灵感预设库
+- **姿势与服装灵感目录（`src/pose_outfit_library.mjs`）**：
+  - 内置 10 款单人试穿/叠穿姿势（对镜比耶、回眸轻笑、插兜酷girl、轻撩碎发、侧身秀包、窗边托腮、咖啡馆坐姿、街头抓拍、慵懒靠墙、俏皮眨眼），每款附带专属机位（`shotMode`）、英文取景/动作/表情/轻妆容描述。
+  - 内置 6 款双人约会同框合影姿势（并肩贴贴比耶、温柔靠肩合影、餐桌干杯打卡、牵手回头抓拍、贴近镜头自拍、夕阳并肩看景）。
+  - 内置 12 款精选服装灵感预设，完整覆盖 `top / outerwear / bottom_or_dress / shoes / bag / accessory` 六大部位槽位，无需自行找商品图即可一键穿上或收入展柜自由叠穿。
+- **后端控姿与预设入柜接口（`src/wardrobe.mjs`、`src/date_mode.mjs`、`src/api.mjs`）**：
+  - `buildLayeredTryonPrompt()` 与 `buildDatePhotoPrompt()` 支持传入 `poseId`，精准注入所选姿势的机位、动作、表情与轻妆容指令（不选时保持原有按心情/风格自然变化）。
+  - 新增 `GET /api/wardrobe/catalog` 与 `POST /api/companions/:id/wardrobe/preset`，并在单品试穿、整套叠穿 OOTD 合拍、约会打卡照及赛博双人合影接口全面透传可选 `pose_id`。
+- **Dashboard & Playground 可视化姿势图卡选择器（`public/app/pose-previews.js`、`public/app/dashboard.html`、`public/app/dashboard.css`、`public/app/dashboard.js`、`public/app/playground.html`）**：
+  - 新增 `public/app/pose-previews.js` 零依赖矢量示意图渲染器：同时为 10 款单人试穿姿势、6 款双人约会合影姿势与 12 款精选服装预设绘制直观的时尚剪影/平铺款式预览图卡（附景别/部位角标、色块点与中文款式动作说明，并预留 `previewUrl` 支持后续挂载 R2 自定义实图），完整适配极光浅色与暗夜液态玻璃双主题；展示柜中尚未生成试穿照的预设单品也自动展示对应平铺预览图而非空白占位。
+  - 数字衣橱展示柜顶栏新增「✨ 服装灵感库」抽屉（支持按部位筛选、色块预览、一键「立即穿上 / 收入展柜」），并在展柜上方新增横向「✨ 试穿姿势库」图卡选择条（同时作用于单品试穿与整套叠穿大片）。
+  - 控制台「约会剧场」与网页沉浸聊天室「💕 约会剧场浮层」均新增「💕 双人约会合影姿势」图卡选择条（同时作用于约会打卡照与传背景赛博合影）。
+- **回归测试与文档（`scripts/wardrobe_tryon_check.mjs`、`scripts/date_mode_check.mjs`、`TODO.md`）**：
+  - 扩充离线自动化测试校验 10 单人姿势、6 双人姿势、12 款全槽位预设、零禁用称谓、`pose_id` Prompt 精准注入与预设入柜落库；Phase 4-B（360° 旋转展台）继续保留于 `TODO.md` 待后续接入视频生成资源。
+
 #### Phase 1 · 数字衣橱 + 微信发图送礼试穿 + 快递拆箱闭环
 - **技术架构文档**：新增 `docs/WARDROBE_AND_TRYON_ARCHITECTURE.md`，完整沉淀数据模型、状态机、微信连发图片融合、按品类机位路由与多图参考编辑策略。
 - **数据层（`src/db.mjs`）**：新增 `companion_wardrobe` 表及索引、原子槽位唯一穿戴切换（`wearWardrobeItem`）、在途快递查询（`listDueWardrobeDeliveries`）与删角色级联清理。

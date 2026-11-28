@@ -3784,8 +3784,40 @@ router.delete('/companions/:id/wardrobe/:itemId', requireAuth, (req, res) => {
   return ok(res, { deleted: true, item_id: itemId });
 });
 
+// GET /api/wardrobe/catalog — 姿势库（单人试穿 + 双人约会）与精选服装预设库
+router.get('/wardrobe/catalog', requireAuth, async (_req, res) => {
+  const { getPoseAndOutfitCatalog } = await import('./pose_outfit_library.mjs');
+  return ok(res, getPoseAndOutfitCatalog());
+});
+
+// POST /api/companions/:id/wardrobe/preset — 从精选服装灵感库一键加入展示柜
+router.post('/companions/:id/wardrobe/preset', requireAuth, async (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c = requireOwnedCompanion(req, res, id); if (!c) return;
+  const presetId = String(req.body?.preset_id || '').trim();
+  const { getOutfitPresetById } = await import('./pose_outfit_library.mjs');
+  const preset = getOutfitPresetById(presetId);
+  if (!preset) return err(res, '服装预设不存在', 404);
+  const status = ['wearing', 'owned', 'tryon_only'].includes(req.body?.status) ? req.body.status : 'wearing';
+  const item = createWardrobeItem({
+    companionId: id,
+    slot: preset.slot,
+    category: preset.category,
+    name: preset.name,
+    color: preset.color,
+    material: preset.material,
+    styleTags: preset.styleTags,
+    visualPrompt: preset.visualPrompt,
+    giftedBy: 'user',
+    giftedNote: `精选服装库 · ${preset.name}`,
+    status,
+  });
+  log('info', `[API] wardrobe preset added companion=${id} preset=${preset.id} item=#${item.id} status=${item.status}`);
+  return ok(res, { item, preset }, 201);
+});
+
 // POST /api/companions/:id/wardrobe/outfit-tryon
-// 多部位叠穿 / 整套 OOTD 大片（默认取当前所有 wearing 单品，也支持传 item_ids 自由组合）
+// 多部位叠穿 / 整套 OOTD 大片（默认取当前所有 wearing 单品，也支持传 item_ids 自由组合与 pose_id 控姿）
 router.post('/companions/:id/wardrobe/outfit-tryon', requireAuth, async (req, res) => {
   const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
   const c = requireOwnedCompanion(req, res, id); if (!c) return;
@@ -3799,10 +3831,12 @@ router.post('/companions/:id/wardrobe/outfit-tryon', requireAuth, async (req, re
     if (!targetItems.length) {
       return err(res, '请先穿上或勾选至少一件藏品再拍叠穿照', 400);
     }
+    const poseId = typeof req.body?.pose_id === 'string' && req.body.pose_id.trim() ? req.body.pose_id.trim() : null;
     const { generateOutfitTryonImage } = await import('./wardrobe.mjs');
     const result = await generateOutfitTryonImage(c, targetItems, {
       primaryItemId: targetItems[0].id,
       filePrefix: 'outfit',
+      poseId,
     });
     return ok(res, {
       item: result.item,
@@ -3842,8 +3876,9 @@ router.post('/companions/:id/wardrobe/:itemId/tryon', requireAuth, async (req, r
   if (!item) return err(res, '衣橱单品不存在', 404);
   try {
     const composeWithWearing = req.body?.compose_with_wearing !== false;
+    const poseId = typeof req.body?.pose_id === 'string' && req.body.pose_id.trim() ? req.body.pose_id.trim() : null;
     const { generateWardrobeTryonImage } = await import('./wardrobe.mjs');
-    const result = await generateWardrobeTryonImage(c, item, { composeWithWearing });
+    const result = await generateWardrobeTryonImage(c, item, { composeWithWearing, poseId });
     return ok(res, {
       item: result.item,
       items: result.items,
@@ -3947,10 +3982,12 @@ router.post('/companions/:id/date-mode/photo', requireAuth, async (req, res) => 
     const { getFreshActiveDateSession, generateDatePhoto } = await import('./date_mode.mjs');
     const session = getFreshActiveDateSession(id);
     if (!session) return err(res, '请先开启约会剧场再拍约会打卡照', 400);
+    const poseId = typeof req.body?.pose_id === 'string' && req.body.pose_id.trim() ? req.body.pose_id.trim() : null;
     const out = await generateDatePhoto(c, session, {
       mode: 'date_scene',
       includeUser: req.body?.include_user !== false,
       userText: typeof req.body?.note === 'string' ? req.body.note : '',
+      poseId,
     });
     if (!out.ok) return err(res, out.error || '约会打卡照生成失败', 500);
     return ok(res, {
@@ -3979,12 +4016,14 @@ router.post('/companions/:id/date-mode/cyber-photo', requireAuth, async (req, re
   try {
     const { getFreshActiveDateSession, generateDatePhoto } = await import('./date_mode.mjs');
     const session = getFreshActiveDateSession(id);
+    const poseId = typeof req.body?.pose_id === 'string' && req.body.pose_id.trim() ? req.body.pose_id.trim() : null;
     const out = await generateDatePhoto(c, session, {
       mode: 'cyber_group',
       sceneImageBuffer: sceneBuf,
       sceneMime: match[1].toLowerCase(),
       includeUser: req.body?.include_user !== false,
       userText: typeof req.body?.note === 'string' ? req.body.note : '',
+      poseId,
     });
     if (!out.ok) return err(res, out.error || '赛博合影生成失败', 500);
     return ok(res, {
