@@ -23,7 +23,7 @@ const RUBRIC = `你是聊天输出审查器，只检查草稿，不扮演聊天�
 - 安慰先接住具体感受，不要求讲清经过才安慰。庆祝不追加未经请求的生活训诫。简短确认允许结束，不要求对方回答旧问题或提供更多内容。
 - 对方指出失言且原话确有依据时承认影响，不用“随口一说”“只是想你”辩解。没有依据不乱认错，也不强迫人物立即原谅。
 - 停止或转题后不追问旧事。尊重对方给出的完整时间范围，不挑一个时间催他遵守。不以撒娇、玩笑预设他会迟到、拖延或做不好。
-- 只在能力数据明确支持时保留后台联系承诺；followup 仅是对方请求，不是投递成功或精确闹钟。没有已经安排的能力依据，就不许承诺稍后主动来找他。
+- 只在能力数据明确支持时保留后台联系承诺；followup 仅是对方请求，不是投递成功或精确闹钟。没有已经安排的能力依据，就不许承诺稍后主动来找他。纯文字回复不能口头答应“拍给你/发照片/回头补图”，若草稿出现拍照承诺请改写为不承诺拍照的自然回应。
 - 保留对方明确要的建议、合理安全提醒、个人边界及有依据的关心；不要把这些一律删除。不增加新事实、离线行动、承诺、内部字段或表情包标记。
 本轮行为 plan 非空时，检查最终话语是否真的执行 action：validate 接住感受；listen 倾听且不逼问；suggest 回答求助；celebrate 共享喜悦；clarify/repair 回应具体争执；pause 尊重停止。plan 为 null 时正常聊天，不生造干预。
 只输出一个 JSON 对象，不要代码围栏或说明：
@@ -67,12 +67,16 @@ function enforceTurnScope(outcome, context, plan) {
   if (!outcome || plan || context.task) return outcome;
   const current = context.current.text.trim();
   const activity = context.state?.activity;
+  const hasCurrentWindowHistory = !!activity && context.history.some(
+    turn => !turn.at || inActivityWindow(shanghaiMessageTime(turn.at), activity),
+  );
   let reply;
-  if (activity && !activity.scene && /^(?:还没到|到了没|到了吗)(?:啊|呀|呢|嘛)?[？?。！!～~]*$/u.test(current)
-      && !context.history.some(turn => !turn.at || inActivityWindow(shanghaiMessageTime(turn.at), activity))) {
+  if (activity && !activity.scene && !hasCurrentWindowHistory
+      && /^(?:还没到|到了没|到了吗)(?:啊|呀|呢|嘛)?[？?。！!～~]*$/u.test(current)) {
     reply = '你是说到哪儿？';
-  } else if (activity && !activity.scene && /^(?:你(?:现在|这会儿?|此刻)?(?:正在|在)?|(?:现在|这会儿?|此刻)?(?:正在|在))(?:干嘛|干吗|做什么|做啥|忙什么|忙啥)(?:呢|呀|啊)?[？?。！!～~]*$/u.test(current)) {
-    // With only a plan, the clock does not establish progress, completion, or a location.
+  } else if (activity && !activity.scene && !hasCurrentWindowHistory
+      && /^(?:你(?:现在|这会儿?|此刻)?(?:正在|在)?|(?:现在|这会儿?|此刻)?(?:正在|在))(?:干嘛|干吗|做什么|做啥|忙什么|忙啥)(?:呢|呀|啊)?[？?。！!～~]*$/u.test(current)) {
+    // With only a plan and no active in-window conversation, the clock does not establish progress or location.
     const item = activity.scheduled;
     reply = item ? '我今天 ' + item.time + ' 的安排是' + item.activity.replace(/[。！？!?]+$/u, '') + '。' : '在跟你聊天呀。';
   }
@@ -97,8 +101,16 @@ function enforceTurnScope(outcome, context, plan) {
 function checkPersonalAnecdote(outcome, context, persona) {
   if (!outcome || !['kept','revised'].includes(outcome.status)) return outcome;
   const clause = /(?:^|[。！？!?～~｜|\n，,])\s*(我(?:今[天早晚]|昨[天晚]|早上|中午|下午|晚上|晚饭|刚刚?|方才|之前|上次|也|已经|才|就|还|自己|随便|也就|又|早就|只|去|在){0,5}(?:吃|喝|买|煮|做饭|逛|去了|去过|下班|起床|睡醒|看完)[^，。！？!?～~｜|\n]{0,12}(?:了|过)[^，。！？!?～~｜|\n]*)/gu;
-  const evidence = [...context.facts.filter(f => f.subject === 'companion').map(f => f.text),
-    ...(persona.personaFacts || []).map(f => f.content)];
+  const activity = context.state?.activity;
+  const activeHistoryEvidence = (context.history || [])
+    .filter(turn => turn && typeof turn.text === 'string'
+      && (!activity || !turn.at || inActivityWindow(shanghaiMessageTime(turn.at), activity)))
+    .map(turn => turn.text);
+  const evidence = [
+    ...context.facts.filter(f => f.subject === 'companion').map(f => f.text),
+    ...(persona.personaFacts || []).map(f => f.content),
+    ...activeHistoryEvidence,
+  ];
   for (const match of outcome.reply.matchAll(clause)) {
     if (evidence.some(text => typeof text === 'string' && text.includes(match[1]))) continue;
     const before = outcome.reply.slice(0, match.index + match[0].indexOf(match[1])).trim().replace(/[，,｜|]+$/u, '').trim();

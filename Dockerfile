@@ -62,8 +62,8 @@ WORKDIR /app
 
 COPY --from=builder --chown=xiyu:xiyu /app /app
 
-# data 目录走 volume，启动前确保存在
-RUN mkdir -p /app/data /app/logs /app/public/avatars \
+# data 与场景照目录走 volume，启动前确保存在且属主为 xiyu
+RUN mkdir -p /app/data /app/logs /app/public/avatars/scenes \
     && chown -R xiyu:xiyu /app/data /app/logs /app/public/avatars
 
 USER xiyu

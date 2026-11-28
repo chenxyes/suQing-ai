@@ -347,7 +347,7 @@ const MEMORY_SYSTEM_PROMPT = `你是记忆候选提取助手。输入是已落�
 引述、转述、假设、问题和简短附和不是个人事实证明；没有完整明确证据就不生成候选。证据 quote 必须逐字引用原消息中的完整、自足陈述，不能从假设或引号内摘半句来断言为真。
 只返回 JSON：
 {
-  "current_scene": "仅本轮明确的角色自己的当前地点。对方的地点、过去场景和未来计划不填。没有就空字符串",
+  "current_scene": "仅本轮明确的角色自己此刻所在地点或正在进行的共同外出场景（如刚确认到商场、在店里逛街、在咖啡店）。对方单独的地点、过去场景和未来计划不填。没有就空字符串",
   "memories": [{
     "subject": "user|companion|shared",
     "memory_type": "fact|preference|event|emotion",

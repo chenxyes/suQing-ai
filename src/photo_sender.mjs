@@ -4,7 +4,7 @@ import { isChatFallback } from './chat_response.mjs';
  */
 
 import path from 'node:path';
-import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { accessSync, constants as fsConstants, existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import sharp from 'sharp';
@@ -29,6 +29,27 @@ import {
 } from './visual_identity.mjs';
 
 const PHOTO_DIR = path.resolve(process.cwd(), 'public/avatars/scenes');
+const FALLBACK_PHOTO_DIR = path.resolve(
+  process.env.XIYU_DATA_DIR || path.join(process.cwd(), 'data'),
+  'companion_visuals',
+  'scenes',
+);
+
+export function resolveWritablePhotoDir(primaryDir = PHOTO_DIR, fallbackDir = FALLBACK_PHOTO_DIR) {
+  for (const dir of [primaryDir, fallbackDir]) {
+    try {
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      accessSync(dir, fsConstants.W_OK);
+      if (dir !== primaryDir) {
+        log('warn', `[Photo] 主目录不可写(${primaryDir})，已降级到可写目录 ${dir}`);
+      }
+      return dir;
+    } catch { /* try next candidate */ }
+  }
+  // 让上游抛出原生文件系统错误
+  if (!existsSync(primaryDir)) mkdirSync(primaryDir, { recursive: true });
+  return primaryDir;
+}
 const REQUEST_CAPTIONS = [
   '喏，刚拍的，别笑我',
   '在写东西呢，看到你消息就顺手拍了一张',
@@ -154,10 +175,10 @@ function aspectPromptHint(aspect) {
 const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
 
 async function writeConvertedPhoto(url, companionId, aspect = '3:4') {
-  if (!existsSync(PHOTO_DIR)) mkdirSync(PHOTO_DIR, { recursive: true });
+  const targetDir = resolveWritablePhotoDir();
   const ts = Date.now();
   const outName = `scene_${companionId}_${ts}.webp`;
-  const outPath = path.join(PHOTO_DIR, outName);
+  const outPath = path.join(targetDir, outName);
   const tmpPath = outPath + '.tmp';
   // 目标尺寸按机位比例（曾无条件 1157^→crop 1024x1024：provider 出什么比例落地都成 1:1，
   // photo 功能上线(v1.10.0)起全量方图——本函数是所有照片必经，这里是 1:1 的总根因）

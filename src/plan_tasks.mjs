@@ -22,7 +22,7 @@ import {
   cleanupPlanMemories, getAllActiveCompanions, getConversationTurnsBetween,
   saveMemory, summaryMemoryExists, getDb, shanghaiDateKey, shanghaiBoundsForDateKey,
   getRecentSummaries, getRecallableMemories, getMemoryRecallBarrier, writeMemoryEmbedding,
-  saveDailySchedule, getDailySchedule,
+  saveDailySchedule, getDailySchedule, listOpenLoops,
   listEpisodicMemoriesOlderThan, compactMemories,
   cleanupProcessedMessages,                              // Issue #1 去重表清理
   cleanupAiUsageEvents,                                  // P1-7 成本明细清理
@@ -74,12 +74,14 @@ export function startPlanTasks() {
 
 async function tick(now = new Date()) {
   const parts = shanghaiParts(now);
-  // 00:30 — 为每个 companion 生成今日日程
+  // 00:15 — 先生成昨日日总结，供 00:30 今日日程读取最近约定与上下文
+  await runOnce(parts, 'daily-summary', parts.hour === 0 && parts.minute === 15, () => runDaily(parts.dateKey));
+  // 00:30 — 为每个 companion 生成今日日程（消费 open_loops 今日约定 + 昨日日总结）
   await runOnce(parts, 'daily-schedule', parts.hour === 0 && parts.minute === 30, () => runDailySchedules(parts.dateKey, parts.weekdayLabel, parts.weekday));
   // #324 失忆修：次日 00:30 场景清场（current_scene 是当日态，跨日必清，防"昨天的图书馆"漏到今天）
   await runOnce(parts, 'scene-reset', parts.hour === 0 && parts.minute === 30, () => resetScenesForNewDay());
-  // 02:00 — 所有人的日总结 + 清理
-  await runOnce(parts, 'daily-summary', parts.hour === 2 && parts.minute === 0, () => runDaily(parts.dateKey));
+  // 02:00 — 日总结幂等补跑（若 00:15 已生成则 summaryMemoryExists 自动跳过）
+  await runOnce(parts, 'daily-summary-retry', parts.hour === 2 && parts.minute === 0, () => runDaily(parts.dateKey));
   // 周日 02:30 — Pro 周总结
   await runOnce(parts, 'weekly-summary', parts.weekday === 0 && parts.hour === 2 && parts.minute === 30, () => runWeekly(parts.dateKey));
   // 每月 1 号 03:00 — Pro 月总结
@@ -213,11 +215,21 @@ async function runArchiveDailySchedule(dateKey) {
   for (const c of companions) {
     const sched = getDailySchedule(c.id, dateKey);
     if (!sched || !Array.isArray(sched.items)) continue;
+    // 保持 importance>=6 归档契约，同时对近期已归档的重复活动去重，避免日常流水账刷屏记忆库
     const important = sched.items.filter(it => (it.importance || 0) >= 6);
     if (important.length === 0) continue;
+    const recentActivities = new Set(
+      getRecallableMemories(c.id, c.user_id)
+        .filter(row => row.memory_type === 'event' && typeof row.content === 'string')
+        .slice(0, 30)
+        .map(row => row.content.replace(/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+/, '').trim()),
+    );
     for (const it of important) {
       try {
-        const content = `${dateKey} ${it.time} ${it.activity}`.slice(0, 60);
+        const normalizedAct = String(it.activity || '').trim();
+        if (!normalizedAct || recentActivities.has(normalizedAct)) continue;
+        recentActivities.add(normalizedAct);
+        const content = `${dateKey} ${it.time} ${normalizedAct}`.slice(0, 60);
         const { revision } = getMemoryRecallBarrier(c.id, c.user_id);
         const memoryId = saveMemory({
           companionId: c.id,
@@ -279,6 +291,52 @@ async function runDailySchedules(dateKey, weekdayLabel, weekdayNum) {
   }
 }
 
+// ─── 今日约定与近期上下文注入日程（防“已约好一起逛街却编出约闺蜜”）────────────
+export function buildScheduleCommitmentsHint(companionId, userId, dateKey, { isWeekend = false } = {}) {
+  const lines = [];
+  try {
+    const loops = listOpenLoops(companionId, { status: 'open', limit: 20 }) || [];
+    const cutoffKey = addDays(dateKey, -7);
+    const relevant = loops.filter(l => {
+      if (!l || !l.title) return false;
+      const dueDay = typeof l.due_at === 'string' ? l.due_at.slice(0, 10) : null;
+      if (dueDay === dateKey) return true;
+      if (l.loop_kind === 'appointment' && !dueDay) {
+        const createdDay = typeof l.created_at === 'string' ? l.created_at.slice(0, 10) : '';
+        if (createdDay && createdDay < cutoffKey) return false;
+        if (isWeekend && /周末|周六|周日|星期六|星期天/.test(l.title)) return true;
+        return createdDay >= addDays(dateKey, -2);
+      }
+      return false;
+    });
+    for (const l of relevant.slice(0, 4)) {
+      const tag = l.loop_kind === 'appointment' ? '【你俩的约定】' : '【待办/关注】';
+      lines.push(`- ${tag}${String(l.title).slice(0, 60)}${l.due_at ? `（日期：${String(l.due_at).slice(0, 10)}）` : ''}`);
+    }
+  } catch { /* fail-open */ }
+
+  let yesterdaySnippet = '';
+  try {
+    if (userId != null) {
+      const prevKey = addDays(dateKey, -1);
+      const summaries = getRecentSummaries(companionId, userId, 'daily_summary', 2) || [];
+      const prev = summaries.find(s => typeof s?.content === 'string' && s.content.startsWith(`${prevKey} 日记忆：`));
+      if (prev) yesterdaySnippet = prev.content.slice(0, 180);
+    }
+  } catch { /* fail-open */ }
+
+  if (!lines.length && !yesterdaySnippet) return '';
+  const parts = ['\n【今日已与他的约定与近期上下文 - 最高优先级】'];
+  if (lines.length) {
+    parts.push(...lines);
+    parts.push('硬规则：如果今天已经和他约好了外出/逛街/吃饭/玩游戏，必须在对应时段留出准备或赴约空间，绝不要在同一时段凭空编造“约闺蜜/同桌逛街”等冲突安排。');
+  }
+  if (yesterdaySnippet) {
+    parts.push(`昨日互动摘要：${yesterdaySnippet}`);
+  }
+  return parts.join('\n');
+}
+
 async function generateScheduleFor(comp, dateKey, weekdayLabel, weekdayNum) {
   const personality = (() => {
     try { return JSON.parse(comp.personality_tags || '[]').join('、'); } catch { return ''; }
@@ -290,6 +348,7 @@ async function generateScheduleFor(comp, dateKey, weekdayLabel, weekdayNum) {
   const age = comp.age || 22;
   const isWeekend = weekdayNum === 0 || weekdayNum === 6;
   const occupationHint = ageOccupationHint(age, isWeekend, comp.role_title);
+  const commitmentsHint = buildScheduleCommitmentsHint(comp.id, comp.user_id, dateKey, { isWeekend });
 
   // v1.12.0「她有自己的连续生活线」：把昨天日程里值得延续的事喂进来，让今天不是全新的人和事
   let continuityHint = '';
@@ -321,13 +380,14 @@ async function generateScheduleFor(comp, dateKey, weekdayLabel, weekdayNum) {
 
 【强制约束 - 极其重要】
 ${occupationHint}
+${commitmentsHint}
 ${continuityHint}
 ${worksScheduleHint}
 
 【风格要求】
 - 输出 8-12 个时间点，覆盖从 07:00 到 23:30
 - 活动描述 8-18 字要具体（"和同桌分享便当里的玉子烧" 不是 "和朋友吃饭"）
-- 不要剧透爱情/情感事件，不要提到"对方/他聊天"
+- 没有约定的时候不要凭空编造感情事件；若上面【今日已与他的约定】列了今天的约定，必须按约定留出对应时段，不编冲突日程
 - 要符合${isWeekend ? '周末' : '工作日'}的节奏
 - 不同年龄段不同活动：学生别去酒吧，上班族别去操场跑圈
 
@@ -411,7 +471,7 @@ export async function ensureScheduleForCompanion(companionId, dateKey) {
   if (Date.now() - last < 30 * 60_000) return false;
   _ensureScheduleAttempts.set(key, Date.now());
   const db = getDb();
-  const comp = db.prepare(`SELECT id, name, age, role_title, personality_tags, hobbies FROM companions WHERE id = ?`).get(companionId);
+  const comp = db.prepare(`SELECT id, user_id, name, age, role_title, personality_tags, hobbies FROM companions WHERE id = ?`).get(companionId);
   if (!comp) return false;
   const weekdayNum = new Date(dateKey + 'T12:00:00+08:00').getDay();
   const weekdayLabel = WEEKDAY_LABELS[weekdayNum];
@@ -579,7 +639,21 @@ async function runOnce(parts, name, shouldRun, fn) {
   await fn();
 }
 
-// ─── 每日 02:00 ──────────────────────────────────────────────────────────────
+async function indexSummaryMemory(memoryId, companionId, userId, content, expectedRecallRevision) {
+  try {
+    const result = await embedTextWithDescriptor(content);
+    if (result) {
+      writeMemoryEmbedding(memoryId, companionId, userId, result, {
+        expectedContent: content,
+        expectedRecallRevision,
+      });
+    }
+  } catch (err) {
+    log('debug', `[PlanTasks] summary embedding skipped companion=${companionId}: ${err.message}`);
+  }
+}
+
+// ─── 每日 00:15（02:00 幂等兜底） ─────────────────────────────────────────────
 async function runDaily(todayKey) {
   // Issue #1: 清理 7 天前的去重记录（防 processed_messages 无限增长）
   try { const n = cleanupProcessedMessages(7); if (n) log('info', `[PlanTasks] 清理 processed_messages ${n} 条`); } catch {}
@@ -598,6 +672,7 @@ async function runDaily(todayKey) {
       if (turns.length === 0) continue;
 
       const summary = await summarizeDaily(targetKey, turns);
+      const content = `${targetKey} 日记忆：${summary}`;
       const memoryId = saveMemory({
         companionId: companion.id,
         userId: companion.user_id,
@@ -605,10 +680,11 @@ async function runDaily(todayKey) {
         memorySource: 'summary',
         sourceMemoryIds: [],
         expectedRecallRevision: revision,
-        content: `${targetKey} 日记忆：${summary}`,
+        content,
         importance: 8,
       });
       if (!memoryId) continue; // Rejected/stale output must not be published to backup files.
+      await indexSummaryMemory(memoryId, companion.id, companion.user_id, content, revision);
       await writeMemoryFile(companion.id, 'daily', targetKey, summary, {
         companionName: companion.name,
         wechatUserId: companion.wechat_user_id,
@@ -656,6 +732,7 @@ async function runWeekly(todayKey) {
       if (daily.length === 0) continue;
 
       const summary = await summarizeMemoryList('周记忆', `${startKey} 到 ${endKey}`, daily);
+      const content = `${prefix}${summary}`;
       const memoryId = saveMemory({
         companionId: companion.id,
         userId: companion.user_id,
@@ -663,10 +740,11 @@ async function runWeekly(todayKey) {
         memorySource: 'summary',
         sourceMemoryIds: daily.map(row => row.id),
         expectedRecallRevision: revision,
-        content: `${prefix}${summary}`,
+        content,
         importance: 9,
       });
       if (!memoryId) continue; // Rejected/stale output must not be published to backup files.
+      await indexSummaryMemory(memoryId, companion.id, companion.user_id, content, revision);
       const weekLabel = isoWeekLabel(endKey);
       await writeMemoryFile(companion.id, 'weekly', weekLabel, summary, {
         companionName: companion.name,
@@ -695,6 +773,7 @@ async function runMonthly(todayKey) {
       if (weekly.length === 0) continue;
 
       const summary = await summarizeMemoryList('月记忆', month, weekly);
+      const content = `${prefix}${summary}`;
       const memoryId = saveMemory({
         companionId: companion.id,
         userId: companion.user_id,
@@ -702,10 +781,11 @@ async function runMonthly(todayKey) {
         memorySource: 'summary',
         sourceMemoryIds: weekly.map(row => row.id),
         expectedRecallRevision: revision,
-        content: `${prefix}${summary}`,
+        content,
         importance: 10,
       });
       if (!memoryId) continue; // Rejected/stale output must not be published to backup files.
+      await indexSummaryMemory(memoryId, companion.id, companion.user_id, content, revision);
       await writeMemoryFile(companion.id, 'monthly', month, summary, {
         companionName: companion.name,
         month,
