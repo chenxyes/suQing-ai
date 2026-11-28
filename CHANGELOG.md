@@ -4,7 +4,7 @@
 
 ---
 
-## [Unreleased] - 2026-11-28
+## [1.23.0] - 2026-11-28
 
 ### Fixed
 - **精选服装灵感库「收入展柜 / 穿着中」唯一绑定、防重复与置灰态同步（`src/db.mjs`、`src/api.mjs`、`src/pose_outfit_library.mjs`、`src/wardrobe_stylist.mjs`、`public/app/dashboard.js`、`public/app/dashboard.css`）**：
