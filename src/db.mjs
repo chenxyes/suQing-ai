@@ -52,6 +52,7 @@ export function getDb() {
     migrateProactiveEngineV2();
     migrateEmotionHistory();
     migrateP2Tables();
+    migrateWardrobePresetId();
     migrateDiary();
     migrateReminderPush();
     migrateProactiveDailyTarget();
@@ -1226,6 +1227,7 @@ function initSchema() {
       visual_prompt TEXT NOT NULL,
       source_image_path TEXT DEFAULT NULL,
       tryon_image_path TEXT DEFAULT NULL,
+      preset_id TEXT DEFAULT NULL,
       gifted_by TEXT DEFAULT 'user',
       gifted_note TEXT DEFAULT '',
       status TEXT NOT NULL DEFAULT 'owned',
@@ -1437,6 +1439,31 @@ function addColIfMissing(table, col, def) {
 function migrateUsers() {
   addColIfMissing('users', 'plan', "TEXT DEFAULT 'free' CHECK(plan IN ('free','pro'))");
   addColIfMissing('users', 'plan_expires_at', 'DATETIME');
+}
+
+function migrateWardrobePresetId() {
+  addColIfMissing('companion_wardrobe', 'preset_id', 'TEXT DEFAULT NULL');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_wardrobe_comp_preset ON companion_wardrobe(companion_id, preset_id)');
+  // 幂等回填：对迁移前已入柜的自定义灵感预设单品，按 slot + name + visual_prompt 精确回填唯一 preset_id
+  try {
+    db.exec(`
+      UPDATE companion_wardrobe
+      SET preset_id = (
+        SELECT p.id FROM custom_outfit_presets p
+        WHERE p.slot = companion_wardrobe.slot
+          AND p.name = companion_wardrobe.name
+          AND p.visual_prompt = companion_wardrobe.visual_prompt
+        LIMIT 1
+      )
+      WHERE (preset_id IS NULL OR preset_id = '')
+        AND EXISTS (
+          SELECT 1 FROM custom_outfit_presets p
+          WHERE p.slot = companion_wardrobe.slot
+            AND p.name = companion_wardrobe.name
+            AND p.visual_prompt = companion_wardrobe.visual_prompt
+        );
+    `);
+  } catch { /* ignore if custom_outfit_presets not ready */ }
 }
 
 function migratePendingBindSessions() {
@@ -4537,6 +4564,7 @@ export function createWardrobeItem({
   visualPrompt = '',
   sourceImagePath = null,
   tryonImagePath = null,
+  presetId = null,
   giftedBy = 'user',
   giftedNote = '',
   status = 'owned',
@@ -4551,6 +4579,7 @@ export function createWardrobeItem({
   const safeCat = String(category || '衣服').trim().slice(0, 30);
   const safeVisual = String(visualPrompt || safeName).trim().slice(0, 500);
   const safeNote = replaceUserWording(String(giftedNote || '').trim().slice(0, 240));
+  const safePresetId = presetId ? String(presetId).trim().slice(0, 120) : null;
   const tagsJson = JSON.stringify(Array.isArray(styleTags) ? styleTags.map(s => String(s).trim().slice(0, 20)).filter(Boolean).slice(0, 8) : []);
 
   const tx = db.transaction(() => {
@@ -4581,9 +4610,9 @@ export function createWardrobeItem({
     const info = db.prepare(`
       INSERT INTO companion_wardrobe
         (companion_id, slot, category, name, color, material, style_tags, visual_prompt,
-         source_image_path, tryon_image_path, gifted_by, gifted_note, status, eta_at,
+         source_image_path, tryon_image_path, preset_id, gifted_by, gifted_note, status, eta_at,
          wear_count, last_worn_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       companionId,
       safeSlot,
@@ -4595,6 +4624,7 @@ export function createWardrobeItem({
       safeVisual,
       sourceImagePath ? String(sourceImagePath).slice(0, 300) : null,
       tryonImagePath ? String(tryonImagePath).slice(0, 300) : null,
+      safePresetId,
       giftedBy === 'self' ? 'self' : 'user',
       safeNote,
       safeStatus,
@@ -4605,6 +4635,38 @@ export function createWardrobeItem({
     return parseWardrobeRow(db.prepare('SELECT * FROM companion_wardrobe WHERE id = ?').get(info.lastInsertRowid));
   });
   return tx();
+}
+
+export function findWardrobeItemByPreset(companionId, preset = {}) {
+  if (!companionId || !preset) return null;
+  const db = getDb();
+  const pid = String(preset.id || '').trim();
+  if (pid) {
+    const byId = db.prepare(`
+      SELECT * FROM companion_wardrobe
+      WHERE companion_id = ? AND preset_id = ? AND status != 'archived'
+      ORDER BY updated_at DESC, id DESC
+      LIMIT 1
+    `).get(companionId, pid);
+    if (byId) return parseWardrobeRow(byId);
+  }
+  // 仅对迁移前的历史藏品（preset_id 为空）做精确兜底：必须 slot + name + visual_prompt 三者全一致，避免同名不同款（如多条“短款连衣裙”）误命中
+  const name = String(preset.name || '').trim();
+  const slot = String(preset.slot || '').trim();
+  const visualPrompt = String(preset.visualPrompt || '').trim().slice(0, 500);
+  if (name && slot && visualPrompt) {
+    const byLegacyExact = db.prepare(`
+      SELECT * FROM companion_wardrobe
+      WHERE companion_id = ?
+        AND (preset_id IS NULL OR preset_id = '')
+        AND slot = ? AND name = ? AND visual_prompt = ?
+        AND status != 'archived'
+      ORDER BY updated_at DESC, id DESC
+      LIMIT 1
+    `).get(companionId, slot, name, visualPrompt);
+    if (byLegacyExact) return parseWardrobeRow(byLegacyExact);
+  }
+  return null;
 }
 
 export function getWardrobeItem(companionId, itemId) {
@@ -4702,6 +4764,7 @@ export function updateWardrobeItem(companionId, itemId, fields = {}) {
   if (fields.visualPrompt !== undefined) { sets.push('visual_prompt = ?'); params.push(String(fields.visualPrompt).trim().slice(0, 500)); }
   if (fields.tryonImagePath !== undefined) { sets.push('tryon_image_path = ?'); params.push(fields.tryonImagePath ? String(fields.tryonImagePath).slice(0, 300) : null); }
   if (fields.giftedNote !== undefined) { sets.push('gifted_note = ?'); params.push(replaceUserWording(String(fields.giftedNote).trim().slice(0, 240))); }
+  if (fields.presetId !== undefined) { sets.push('preset_id = ?'); params.push(fields.presetId ? String(fields.presetId).trim().slice(0, 120) : null); }
   if (fields.status !== undefined && fields.status !== 'wearing' && WARDROBE_STATUSES.includes(fields.status)) {
     sets.push('status = ?'); params.push(fields.status);
   }

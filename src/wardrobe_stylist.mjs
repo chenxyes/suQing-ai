@@ -12,6 +12,7 @@ import {
   listWardrobeItems,
   createWardrobeItem,
   wearWardrobeItem,
+  findWardrobeItemByPreset,
   getAppSetting,
   setAppSetting,
   getDailySchedule,
@@ -229,31 +230,38 @@ export async function decideSuQingOutfitAndPose(companion, {
   if (decision.chosenPresetId) {
     const preset = getOutfitPresetById(decision.chosenPresetId);
     if (preset) {
-      let sourceImagePath = null;
-      if (preset.imageRef) {
-        try {
-          const asset = await readAssetBuffer(preset.imageRef);
-          if (asset?.buffer?.length) {
-            sourceImagePath = saveWardrobeProductImage(companion.id, asset.buffer, asset.contentType || 'image/jpeg');
-          }
-        } catch { /* non-blocking */ }
+      const existing = findWardrobeItemByPreset(companion.id, preset);
+      if (existing) {
+        const worn = wearWardrobeItem(companion.id, existing.id, { replaceAllWearing: true });
+        if (worn) appliedItems = [worn];
+      } else {
+        let sourceImagePath = null;
+        if (preset.imageRef) {
+          try {
+            const asset = await readAssetBuffer(preset.imageRef);
+            if (asset?.buffer?.length) {
+              sourceImagePath = saveWardrobeProductImage(companion.id, asset.buffer, asset.contentType || 'image/jpeg');
+            }
+          } catch { /* non-blocking */ }
+        }
+        const created = createWardrobeItem({
+          companionId: companion.id,
+          slot: preset.slot,
+          category: preset.category,
+          name: preset.name,
+          color: preset.color,
+          material: preset.material,
+          styleTags: preset.styleTags,
+          visualPrompt: preset.visualPrompt,
+          sourceImagePath,
+          presetId: preset.id,
+          giftedBy: 'self',
+          giftedNote: `${companion.name || '苏晴'}自己挑的今日穿搭`,
+          status: 'wearing',
+          replaceAllWearing: true,
+        });
+        appliedItems = [created];
       }
-      const created = createWardrobeItem({
-        companionId: companion.id,
-        slot: preset.slot,
-        category: preset.category,
-        name: preset.name,
-        color: preset.color,
-        material: preset.material,
-        styleTags: preset.styleTags,
-        visualPrompt: preset.visualPrompt,
-        sourceImagePath,
-        giftedBy: 'self',
-        giftedNote: `${companion.name || '苏晴'}自己挑的今日穿搭`,
-        status: 'wearing',
-        replaceAllWearing: true,
-      });
-      appliedItems = [created];
     }
   } else if (decision.chosenWardrobeIds.length > 0) {
     const bySlot = new Map();

@@ -1174,6 +1174,22 @@ html[data-theme="dark"] .dash-info-strip strong {
   border-color: rgba(255, 143, 184, 0.55);
   color: #E0578A;
 }
+.wardrobe-mini-btn:disabled {
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.wardrobe-mini-btn.is-done {
+  background: rgba(148, 163, 184, 0.14);
+  color: #94A3B8;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  opacity: 0.72;
+}
+.wardrobe-mini-btn.is-wearing-now {
+  background: rgba(255, 143, 184, 0.14);
+  color: #C96A8E;
+  border: 1px dashed rgba(255, 143, 184, 0.45);
+  opacity: 0.8;
+}
 .wardrobe-del-btn {
   width: 24px;
   height: 24px;
@@ -1289,6 +1305,18 @@ html[data-theme="dark"] .wardrobe-mini-btn.is-primary {
   background: rgba(255, 143, 184, 0.18);
   color: #FFB6D9;
   border-color: rgba(255, 143, 184, 0.35);
+}
+html[data-theme="dark"] .wardrobe-mini-btn.is-done {
+  background: rgba(255, 255, 255, 0.04);
+  color: #71717A;
+  border-color: rgba(255, 255, 255, 0.08);
+  opacity: 0.7;
+}
+html[data-theme="dark"] .wardrobe-mini-btn.is-wearing-now {
+  background: rgba(255, 143, 184, 0.1);
+  color: #D48AA8;
+  border-color: rgba(255, 143, 184, 0.28);
+  opacity: 0.8;
 }
 html[data-theme="dark"] .wardrobe-empty-slot {
   background: rgba(255, 255, 255, 0.03);

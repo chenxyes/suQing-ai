@@ -251,6 +251,33 @@ try {
   assert.equal(ootdTurn?.shouldSendTryonPhoto, true);
   assert.equal(ootdTurn?.poseId, 'mirror_peace', '今日穿搭拍照应自动沿用苏晴自己选定的姿势');
 
+  // 验证精选预设入柜去重匹配（有 preset_id 严格按 id；旧数据按 slot+name+visual_prompt 精确匹配，同名不同款绝不误撞）
+  const presetOwned = database.createWardrobeItem({
+    companionId: 99,
+    slot: 'bottom_or_dress',
+    category: '裙子',
+    name: '短款连衣裙',
+    visualPrompt: 'red velvet mini dress with black tights',
+    presetId: 'preset_red_mini_dress',
+    status: 'wearing',
+  });
+  assert.equal(database.findWardrobeItemByPreset(99, {
+    id: 'preset_red_mini_dress', slot: 'bottom_or_dress', name: '短款连衣裙', visualPrompt: 'red velvet mini dress with black tights',
+  })?.id, presetOwned.id);
+  assert.equal(database.findWardrobeItemByPreset(99, {
+    id: 'preset_black_mini_dress', slot: 'bottom_or_dress', name: '短款连衣裙', visualPrompt: 'black mini dress with green heels',
+  }), null, '同名不同款（不同 preset_id）绝不能误匹配为同一件');
+  assert.equal(database.findWardrobeItemByPreset(99, {
+    id: 'legacy_preset_id', slot: 'outerwear', name: '奶白开衫', visualPrompt: 'cream cardigan',
+  })?.id, ownedB.id, '迁移前旧数据（preset_id 为空）按 slot+name+visual_prompt 精确匹配');
+  assert.equal(database.findWardrobeItemByPreset(99, {
+    id: 'legacy_preset_other', slot: 'outerwear', name: '奶白开衫', visualPrompt: 'different cream cardigan with hood',
+  }), null, '迁移前旧数据同名但 visual_prompt 不同绝不误匹配');
+  database.deleteWardrobeItem(99, presetOwned.id);
+  assert.equal(database.findWardrobeItemByPreset(99, {
+    id: 'preset_red_mini_dress', slot: 'bottom_or_dress', name: '短款连衣裙', visualPrompt: 'red velvet mini dress with black tights',
+  }), null, '移出展柜后应恢复可再次收入');
+
   // ── 5. 实图姿势参考编号绑定与防串脸校验 ─────────────────────────────────────
   const soloPoseRefPrompt = wardrobe.buildLayeredTryonPrompt({
     items: [{ id: 1, slot: 'outerwear', category: '外套', name: '美拉德皮衣', visual_prompt: 'brown leather jacket' }],
