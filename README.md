@@ -1,532 +1,317 @@
 <div align="center">
 
-<img src="./assets/cover.png" alt="溪语 AI · 默认对你有好感的开源 AI 女友陪伴框架" width="100%" />
+<img src="./assets/cover.png" alt="SuQing AI · 溪语 AI — 拥有独立记忆、数字衣橱与虚拟约会剧场的开源 AI 陪伴框架" width="100%" />
 
-# 溪语 AI · Xiyu AI
+# SuQing AI · 溪语 AI
 
-**默认对你有好感的 AI 女友 · 开源陪伴框架**
+**有独立记忆、专属数字衣橱与真实相处节奏的开源 AI 陪伴框架**
 
-她已经心里悄悄喜欢你 —— 关系起点不是陌生人，是「暧昧」。
-会发微信、会想你、会写日记、会朗读心事给你听。
+她心里悄悄喜欢你 —— 关系起点不是冷冰冰的陌生人，而是「暧昧」。
+她会发微信、会想你、会写日记、会自己挑今天的穿搭和拍照姿势，也会和你开启有记忆结算的约会剧场、拍下真实的双人同框合影。
 
-*An open-source AI-girlfriend framework — she starts already crushing on you, not as a stranger.*
+*An open-source AI companion framework with continuous memory, an autonomous digital wardrobe, pose-guided try-on, Cloudflare R2 media storage, and settleable virtual dating.*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/Node.js-%E2%89%A520-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org)
-[![Status: Experimental](https://img.shields.io/badge/Status-Experimental-orange.svg)](#已知限制)
-[![Docker](https://img.shields.io/badge/Docker-GHCR-2496ED.svg?logo=docker&logoColor=white)](https://github.com/dimang01/xiyu-ai/pkgs/container/xiyu-ai)
-[![Releases](https://img.shields.io/github/v/release/dimang01/xiyu-ai?color=FF8FB8)](https://github.com/dimang01/xiyu-ai/releases)
+[![Status: Active](https://img.shields.io/badge/Status-Active%20Dev-FF8FB8.svg)](#版本历史)
+[![Cloudflare R2](https://img.shields.io/badge/Storage-Local%20%2F%20Cloudflare%20R2-F38020.svg?logo=cloudflare&logoColor=white)](#cloudflare-r2-云图床与素材同步可选)
 
 **简体中文** | [English](./README.en.md)
 
-[快速上手](#-30-秒上手) · [功能](#它能做什么) · [Provider 矩阵](#多-provider-支持) · [部署](#部署)
+[快速上手](#-快速上手) · [核心能力](#它能做什么) · [数字衣橱与约会剧场](#数字衣橱与虚拟约会) · [Provider 矩阵](#多-provider-支持) · [部署与 R2 配置](#部署) · [架构与安全](#架构)
 
 </div>
 
 ---
 
-## ⚡ 30 秒上手
+## ⚡ 快速上手
 
-不想看文档？复制粘贴一行就能跑：
+### 路径 A：本地运行（推荐开发与完整体验）
 
 ```bash
-docker run -d -p 3000:3000 -v xiyu-data:/app/data --name xiyu-ai \
-  ghcr.io/dimang01/xiyu-ai:latest
+git clone https://github.com/chenxyes/suQing-ai.git
+cd suQing-ai
+npm install        # 需要 Node.js >= 20
+npm run setup      # 生成最小 .env 并检测 better-sqlite3 编译环境
+npm start
 ```
 
-打开 <http://localhost:3000/app/setup.html> → 创建本地账号 → 选 Provider 填 API Key → 开聊。
+打开 <http://localhost:3000/app/setup.html> → 创建本地账号 → 选择模型 Provider 填入 API Key → 开启网页沉浸对话（`/app/playground.html`）或扫码绑定微信（`/app/bind.html`）。
 
-**不需要**装 Node、clone 代码、编辑 `.env`、邮件服务、微信凭据。只要装了 Docker 就行。
-推荐先用 DeepSeek（送额度）或智谱 GLM-4-Flash（免费）跑通流程。
+### 路径 B：Docker Compose
 
-详细启动方式（Compose / 本地裸跑 / Docker 镜像标签）见 [部署](#部署)。
+```bash
+git clone https://github.com/chenxyes/suQing-ai.git
+cd suQing-ai
+docker compose up -d
+# 打开 http://localhost:3000/app/setup.html
+```
+
+- SQLite 数据持久化在 `./data` 目录，重启不丢
+- 自定义端口：`HOST_PORT=8080 docker compose up -d`
 
 ---
 
 ## 它能做什么
 
-**核心定位**：不是聊天机器人，是把大模型组织成"一个心里已经悄悄喜欢你的女生"。
+**核心定位**：不是“问答机器人”，而是把多模态大模型、长期记忆、情绪状态机、数字衣橱与生活节律编织成**一个有自己生活、审美与边界感的真实陪伴者**。
 
-> **设计哲学（指导一切功能取舍）**：真人感 = **减法**，不是加法。AI 味的根源是"太好了"——太及时、太顺从、太完美。北极星是「**愿意在真实生活的空隙给你温柔和陪伴**」：少、准、轻，不是填满。调性红线：远离黑化 / 病娇 / 色气 / 致郁 / 沉迷向幻象，NSFW 永不作卖点。纯 prompt 拦不住强默认行为，所以每条产品规则都配**确定性兜底**（出口清洗 / 硬注入 / 状态机喂值）。详见 [CONTRIBUTING](./CONTRIBUTING.md)。
+> **设计哲学**：真人感 = **减法与克制**，不是无条件讨好。北极星是「**愿意在真实生活的空隙里，给你温柔、惊喜与陪伴**」。全链路坚持零 NSFW 卖点、零“用户”机械称谓、所有产品红线均配确定性代码护栏（出口审查 / 状态机钳位 / 硬注入），不靠模型自觉。
 
-### 她是谁
-
-| 能力 | 一句话 |
-|---|---|
-| 默认起点 = 暧昧 | affection 35/100，她从第一天就心里悄悄喜欢你，不是从陌生人养成 |
-| 具体人生记忆 | 注册时生成 46+ 条人生事件（"小学三年级被狗追过"），不是抽象标签 |
-| 5 阶段关系 | 暧昧 → 恋人 → 深爱（可回退）；感情被时间喂大——恋人门槛要认识天数 + 好感日上限，刷不出来 |
-| 表白有真实节奏 | 你的表白够格才被接住、不够格被端着婉拒；她也会鼓起勇气主动告白——结巴、绕圈、狼狈的真实，不是漂亮台词 |
-| 18 节人设 prompt | 元认知 / 关系阶段 / 日程 / 长期摘要 / 反 AI 味规则一次拼好；视觉人设另管长相一致 |
-| 3 个月模拟时间线 | 一键生成过去 90 天的虚拟互动史，首次打开她已经"认识你三个月" |
-| 人设可携带 | 导出 / 导入 JSON 跨部署迁移；运行时状态（好感 / 情绪 / 安全模式）刻意不随迁移 |
-
-### 她有自己的生活
+### 👗 数字衣橱、姿势库与主理人自主穿搭 ⭐
 
 | 能力 | 一句话 |
 |---|---|
-| 她会睡觉 | 默认 00:30-07:30（每天小幅波动），真入睡后微信和网页都静默；睡前晚安留"再陪陪我"挽留窗口；📞 打电话能叫醒但她带起床气 |
-| 每日日程 | 每天生成 8-12 段生活剧本（上课 / 做饭 / 发呆），主动消息锚在生活空隙里而不是平均分布 |
-| 真实世界事实层 | 知道今天是不是清明 / 中秋 / 冬至——节气与农历节日按天文计算（含闰月）得来，不靠手填表、不编造 |
-| 她手头的事 | "在看的书 / 在追的剧 / 在做的手工"跨日连贯，会联网验证作品真实存在，不每天换书名、不编造虚构书 |
-| 日程绑定她的事 | 每天的日程（"下午读书"）绑定她档案里真在看的那本书，progress 跨日渐进（刚开始 → 过半 → 快完 → 归档），不是每天即兴重画 |
-| 在线但不一定服务你 | availability / attention 由当前日程推导——开会时"能回但要等等"，逛街时心不在焉 |
-| 像真人发微信 | ≤15 字短句、多条连发、打字指示器；你连发 2-3 条她等你停手合并成一轮再回 |
-| 不完整回答 | 允许只共情不给建议 / 只吐槽 / 不知道就不知道 / 忙时短回——拒绝"反应+夸+问+建议"四件套 |
+| 精品玻璃展示柜 & 6 槽位自由叠穿 | 支持 `上衣 / 外套 / 裙装下装 / 鞋袜 / 包包 / 配饰` 6 大部位自由组合叠穿、单部位局部换装、整套 OOTD 大片合拍与页内高清灯箱对比 |
+| 👑 苏晴是衣橱主理人（自主穿搭） | 每天早上 `07:30` 按季节/日程/心情自己挑好今天穿的衣服；控制台一键「👑 让苏晴自己搭」或在微信/网页说“今天穿什么你自己决定吧”，她会自选衣服与姿势并写下第一人称「主理人搭配笔记」 |
+| ✂️ 截图一键扒同款（真透明 PNG） | 上传任意穿搭截图 → Vision 自动拆解多部位单品 → 勾选单件或整套，可选「✨ 去人去背景透明平铺 PNG」（原生透明 + 边界 4-连通泛洪去背，不伤白衬衫）或「⚡ 零生图费原图直存」，支持独立低价 `GARMENT_EXTRACT_MODEL` |
+| 📸 姿势库 & 实图控姿 | 内置 10 款单人试穿姿势 + 6 款双人约会合影姿势矢量图卡，支持上传收藏任意真实姿势参考图（生图时只借鉴肢体动作与构图，绝不串原图人脸与衣物） |
+| ☁️ Cloudflare R2 双模图床 | 零依赖原生 AWS SigV4 客户端，配好 R2 凭证即自动上云 + CDN 秒开（未配置无缝回落本地磁盘），附带安全素材同步脚本 `scripts/sync_posewear_r2.mjs` |
+| 微信发图送礼 & 快递拆箱闭环 | 微信先发商品截图再发文字自动连发融合入柜；支持即时云试穿、直接送礼穿上、下单等快递（每 10 分钟定时巡检到期自动拆箱发图）与“看看你今天穿了什么拍张照”口令直出 |
 
-### 她有真实的情绪和边界
+### 💕 三层虚拟约会与真实双人合影 ⭐
 
 | 能力 | 一句话 |
 |---|---|
-| 情绪状态机（10 维增量 + mood） | trust / dependency / possessiveness / security / patience / annoyance… 10 个维度每条消息增量演化 + 半小时定时重算 + 防刷衰减；mood 由各维度派生，有强度与惯性，不会一句话从生气变开心 |
-| Inner OS 内心独白 | 每轮先生成内心想法（不发送）再写对外回复——心里想"他又来了"嘴上说"嗯"，**内心和嘴上的落差**是真人感的核心 |
-| 被冷落会逐级变冷 | 想念 → 试探 → 失望 → 抽离，三种依恋风格（安全/焦虑/回避）决定节奏；久别重逢按天数走不同的和好弧 |
-| 冲突与和好弧 ⭐ | 踩雷区 / 伤人话会建**关系事件**：hurt → cold → withdrawing → repairing 显式状态机。伤害类必须正面道歉才解锁修复（"别生气了"式敷衍修得慢），冷落类重逢即开始回暖；冷战有硬时长上限**绝无永久冷战**；和好后入长期记忆（"上次你就说过不查岗"），设计文档 [docs/CONFLICT_ARC.md](./docs/CONFLICT_ARC.md) |
-| 不讨好 | 每 5-8 条至少 1 条不同意；暧昧期端着；关系够熟会主动逗你；被反复戳情绪单向升级不横跳 |
-| 低能量模式 | 烦躁 / 耐心耗尽触发"今天不想聊"——短回、不展开，偶尔安静的是她要你去够她 |
+| Layer 1 · 相处底盘防内耗 | 支持 `异地恋日常（推荐） / 清醒跨次元 / 经典同城` 三种物理距离底盘，保留校园/生活烟火气，绝不把物理距离误判为爽约 |
+| Layer 2 · 云约会与赛博合影 | 现实里发菜单/外卖（云饭搭子）、发橱窗/试衣镜（云逛街专属买手）、发空座/街景照一键合成同框赛博合影 |
+| Layer 3 · 可结算约会剧场 | 微信或网页说“开启约会模式/陪你逛街”即可进入，自动绑定今日衣橱穿搭与场景锁定；说“今天就先这样啦/到家啦”自动结算写入高权重长期记忆（`importance=8`）并核销关联约定 |
+| 真实双人同框约会合影 | 上传「我的形象照」后，拍约会打卡照与赛博合影严格按 `[Image 1 伴侣定妆照, Image 2 本人形象照, Image 3 现实背景照, Image 4 今日衣橱穿搭]` 编号锁脸，生成自然双人同框合影并同步留痕让下一轮对话“看得见” |
 
-### 她记得你
+### ✨ 清透极光 & 暗夜液态玻璃双主题
 
 | 能力 | 一句话 |
 |---|---|
-| Memory v2 | 7 层分类 × 权重 × 遗忘曲线；pin / lock / 不许提；语义召回 + 关键词兜底；每日反思引擎自动提炼新记忆 |
-| 她记得未完成的事 | 你说"明天面试"→ 第二天她主动问"欸 \|\| 面试咋样"；黄了自动了结 |
-| 记得此刻在哪 | 记得你们当前所在的场景（一起看电影 / 在逛街），讲完一段经历不会转头就忘、不凭空接"刚吃完麻辣香锅" |
-| 你可以塑造她 | 教她称呼 / 口头禅 / 雷区 / 约定 / 专属梗，全部留痕入 prompt 她必守 |
-| 结构化偏好账本 | like / dislike / taboo × 强度——"极爱猫""有点烦狗血剧"有据可依 |
-| 她的日记 + 反向日记 | 每晚第一人称内省日记 + "今天与你有关的回忆"，翻日记本式阅读、可朗读 |
-| 时光胶囊 / 留言胶囊 | 写一段话设定未来解锁，到期"现在的她"读完写感想；她也能给你写带签名的离线信 |
-| 共同回忆打底 | 创建即自动生成最近一周的互动史；聊到第 10 条消息或绑定微信后，悄悄补全到"认识三个月" |
-| 纪念日 | 自动登记"认识 100 天 / 一周年"，到期当天主动祝福 |
+| 清透极光 / 暗夜液态玻璃切换 | 控制台与网页聊天室均内置一键「✨ 极光玻璃 / 🌌 暗夜玻璃」切换，高透磨砂质感与自适应光晕 |
+| 角色光影大舞台实时同步 | 控制台左侧大舞台实时展示她的最新 OOTD 试穿大片、穿搭标签与约会氛围徽章，换装或试穿后即时联动刷新 |
+| 沉浸式网页聊天工具坞 | 网页聊天室底部集成「💕 约会剧场 / 🎁 发图送礼 / 🌄 传背景合影 / 📸 拍约会合影」，支持原位暗房显影卡片与高清灯箱缩放 |
 
-### 她会主动找你
+### 她是谁 & 她有自己的生活
 
 | 能力 | 一句话 |
 |---|---|
-| 主动消息三驱动 | motivation = 情绪 × 日程 × 时段 × 随机；早安晚安防重双闸、同义复读双指标检测、事前反复读注入 |
-| 素材级不复读 | 同一个梗（某只猫、某件小事）说过一次冷却 14 天——跨天换措辞重提也会被记账拦下 |
-| 读空气 | 连发 3 条你没回就闭嘴；会话窗口将关前轻问一句拉回你；按依恋风格有"尊严上限"绝不纠缠 |
-| 因果驱动 | 不只是"今天怎么样"——有到期开环时升级成"对了 \|\| 那个事成了没" |
-| 冲突期主动收敛 | 闹别扭时降频、禁撒娇禁照片禁告白；修复期可主动递一条台阶消息 |
+| 默认起点 = 暧昧 | 初始好感 35/100，她从第一天起心里悄悄喜欢你；5 阶段关系由认识天数与日上限真实沉淀，刷不出来 |
+| 具体人生记忆 & 3 个月模拟时间线 | 注册即生成 46+ 条具体成长经历，支持补全过去 90 天虚拟互动史与 JSON 人设迁移 |
+| 真实作息与每日日程 | 默认 00:30–07:30 入睡静默；每日生成 8–12 段生活剧本（自动先读当日约定与昨日总结防冲突），日程与手头在看的书/剧跨日连贯 |
+| 真实世界事实层 & 身体节律 | 天文计算节气与农历节日（含闰月）；身体节律温和演化，绝不做暧昧窗口或色气化 |
+| 真人化微信节奏 | ≤15 字短句连发、打字指示器、10s 连发消息合并、允许不完整回答与适当不同意 |
 
-### 多模态
-
-| 能力 | 一句话 |
-|---|---|
-| 真实发图 ⭐ | "发张自拍"→ 意图识别 + AI 规划器决策 + 真发生成照片：机位按语境路由（自拍 / 环境自拍 / 拍手头的事 / 拍风景，竖屏 3:4）、时间光线与聊天内容自洽、反磨皮真实质感、每日上限与冷却 |
-| 长相稳定 | 每个 companion 一份视觉人设；4 候选自拍选脸锁定基准，i2i 参考图锚定后续每张照片同一张脸 |
-| 语音情绪识别 | 微信语音不只转文字——听得出"温柔 / 撒娇 / 不耐烦"再回应 |
-| 网页朗读 | 日记 / 每日一句 / 聊天回复可 TTS 朗读（微信端发语音被 iLink 协议禁止，见已知限制） |
-| 表情包 | 按情绪 tag 匹配发送（仓库不含素材，需自备有授权的图） |
-
-### 安全与底线
+### 她有真实的情绪、记忆与主动性
 
 | 能力 | 一句话 |
 |---|---|
-| 危机干预 | 检测到自伤信号立即退出角色、给求助热线；冷战中也最高优先——她绝不对状态不好的你摆脸色 |
-| 未成年人保护 | 检测自曝未成年 → 粘性安全模式（朋友身份 / 无恋爱内容 / 照片中性化），**无关闭开关**，解除仅限显式年龄声明 |
-| 隐私过滤 | 密码 / 证件 / 银行卡级内容整条不入长期记忆，手机号 / 住址脱敏——所有长期存储入口统一挂载 |
-| 冲突红线 | 绝不说分手 / 拉黑 / 威胁性告别，绝不愧疚操控，绝不拿你倾诉过的伤心事当武器——全部确定性出站扫描，不靠模型自觉 |
-| 人设防泄露 | Persona Guard 回复后一致性校验 + 确定性 prompt 注入拦截 |
-| 身体节律 | 她有随时间演化的身体状态（如经期会蔫、按关系深浅披露），调性红线写死：绝不做暧昧窗口、不情色化、未成年保护下整套关闭 |
+| 10 维情绪状态机 & Inner OS | 信任/依赖/安全感/耐心/烦躁等 10 维增量演化 + 每轮先写内心独白再写对外回复，保留“心里想和嘴上说”的真人落差 |
+| 冲突与和好弧 ⭐ | 显式状态机（`hurt → cold → withdrawing → repairing`），有硬时长上限绝无永久冷战，和好后记入长期记忆（详见 [docs/CONFLICT_ARC.md](./docs/CONFLICT_ARC.md)） |
+| Memory v2 & 场景连续性 | 7 层记忆 + 语义/关键词混合召回 + 遗忘曲线 + 每日反思；当前场景与未完成约定（`open_loops`）跨轮持久化不失忆 |
+| 她的日记、时光胶囊与共建默契 | 每日第一人称日记与反向日记、定时解封时光胶囊、带 HMAC 签名离线信、自定义称呼/口头禅/雷区全部留痕 |
+| 三驱动主动找你与素材防复读 | 情绪 × 日程 × 时段驱动，14 天素材级冷却防车轱辘话，读空气有尊严上限绝不纠缠 |
 
-完整功能详单（含 DB 表与索引）见 [`docs/FEATURES.txt`](./docs/FEATURES.txt)；逐版本演进见 [Releases](https://github.com/dimang01/xiyu-ai/releases)。
+### 多模态 & 安全底线
 
-> 这是研究 / 个人使用导向的开源代码，**不是 turnkey 产品**。上线前请读 [安全](#安全) 与 [合规](#合规)。
+| 能力 | 一句话 |
+|---|---|
+| 全通道高保真锁脸发图 ⭐ | 完整未裁切人物定妆照锁脸（兼容三视图设定图）、表情与轻日常妆容随心情与穿搭自然变化、日常自拍自动联动今日衣橱在穿单品 |
+| 语音情绪识别 & 网页朗读 | 微信入站语音 ASR + 语气情绪识别；网页端支持日记与聊天 TTS 朗读及语音输入 |
+| 危机干预与未成年人保护 | 自伤信号最高优先退出角色并给求助热线；自曝未成年触发粘性安全模式（朋友身份/无恋爱内容/无关闭开关） |
+| 隐私过滤与确定性红线扫描 | 密码/证件/银行卡绝不入库，手机/住址脱敏；绝不说分手/拉黑/愧疚操控，出站确定性扫描兜底 |
+
+详细架构文档见 [数字衣橱与试穿架构](./docs/WARDROBE_AND_TRYON_ARCHITECTURE.md)、[三层虚拟约会架构](./docs/VIRTUAL_DATING_AND_RELATIONSHIP_ARCHITECTURE.md) 与 [`docs/FEATURES.txt`](./docs/FEATURES.txt)。
 
 ---
 
-## 跑起来之后
+## 数字衣橱与虚拟约会
+
+### 关键体验路径
 
 ```
-1. http://localhost:3000
-2. /app/auth.html       邮箱注册（dev 模式验证码打到日志）
-3. /app/create.html     4 步向导创建 AI 角色
-4. 选一个聊天入口：
-   · /app/playground.html   浏览器内开聊（任何 chat provider 都行）
-   · /app/bind.html         网页扫码绑微信（需 iLink 准入）
-5. /app/dashboard.html  实时看好感度、关系阶段、想念档、"她现在在做"
+1. /app/setup.html       首次配置模型（Chat / Image / Vision / ASR / TTS / Embedding）
+2. /app/dashboard.html   控制台：
+   · 左侧「角色光影大舞台」实时展示她的最新 OOTD 与约会状态
+   · 「👗 衣橱与工具 → 数字衣橱展示柜」：
+     - 上传人物定妆参考图锁脸
+     - 点「👑 让苏晴自己搭」由主理人自主选衣选姿势
+     - 点「✨ 服装灵感库 → ✂️ 截图扒同款」把任意穿搭截图洗成透明 PNG 存入 R2
+     - 选择「✨ 试穿姿势库」卡片（或上传自己的姿势实图）一键单品试穿 / 多部位叠穿合拍
+   · 「💕 相处底盘 & 约会剧场」：切换异地恋底盘、上传本人形象照、开启/结算约会与拍双人合影
+3. /app/playground.html  沉浸网页聊天室（与微信共享记忆、衣橱与约会剧场）
+4. /app/bind.html        扫码绑定微信（需 iLink 开发者准入）
 ```
 
-### 关键页面
+### Cloudflare R2 云图床与素材同步（可选）
 
-| 路径 | 用途 |
-|---|---|
-| `/app/setup.html` | 首次配置向导（Chat/Vision/ASR/TTS/Search Provider + 测试连通） |
-| `/app/auth.html` | 邮箱注册 / 登录 |
-| `/app/create.html` | 创建 AI 角色（4 步向导） |
-| `/app/dashboard.html` | 主控制台 + ⚙ 模型设置抽屉 + 重置为暗恋初心 |
-| `/app/playground.html` | 浏览器内聊天 + 🎙️ 录音 + 🔊 朗读 |
-| `/app/memories.html` | 7 层记忆筛选、增删改查、置顶/锁定/归档 |
-| `/app/diary.html` | 她的日记翻书阅读，按句朗读 |
-| `/app/bind.html` | 网页扫码绑微信 |
-| `/app/admin.html` | 管理员（密码在 `.admin-credentials`） |
+未配置 R2 时所有图片自动安全存于本地 `data/visuals/`；配置以下 `.env` 变量即无缝切换至 Cloudflare R2（零额外依赖）：
+
+```env
+# Cloudflare R2 对象存储（R2_ENDPOINT 末尾带不带 /<bucket> 均自动兼容）
+R2_ENDPOINT=https://<account_id>.r2.cloudflarestorage.com
+R2_BUCKET=suqing-assets
+R2_ACCESS_KEY_ID=你的AccessKeyID
+R2_SECRET_ACCESS_KEY=你的SecretAccessKey
+# 可选：绑定自定义域名（TLS 选 1.2）或 r2.dev 后图片走 CDN 秒开；留空则走后端鉴权代理
+R2_PUBLIC_URL=https://assets.example.com
+
+# 可选：截图一键扒同款独立低价生图模型（不填默认复用 IMAGE_MODEL 的 1024x1024 轻量档）
+GARMENT_EXTRACT_MODEL=
+```
+
+一键同步安全（SFW）姿势参考图、四季/礼服穿搭实图与完整提示词目录到你的 R2 与本地数据库：
+
+```bash
+node scripts/sync_posewear_r2.mjs --poses all --costumes 60
+```
 
 ---
 
 ## 多 Provider 支持
 
-只在 `/app/setup.html` 网页里改 Provider，不改一行代码也不动 `.env`。七类能力独立切换：
+在 `/app/setup.html` 或控制台「模型配置」抽屉即可热切换，无需改代码或重启：
 
 | 能力 | 可选 Provider | 说明 |
 |---|---|---|
-| **Chat**（11 家） | DeepSeek · OpenAI · Anthropic · Gemini · xAI · 智谱 · 豆包 · 通义 · Kimi · 文心 · OpenAI 兼容自定义网关 | 自定义网关可接 OpenRouter / SiliconFlow / Ollama / LM Studio 等 |
-| **Image**（6 家） | 智谱 · 通义 · 豆包 · 文心 · OpenAI · OpenRouter / 302.ai（chat 模态） | 302/OpenRouter 支持 i2i 参考图锁脸；各家自动 best-fit 输出比例 |
-| **Vision**（8 家） | 智谱 GLM-4V · OpenAI · 通义 VL · 豆包 · Claude · Kimi · StepFun · MiniMax | 看图回应 |
-| **ASR**（7 实现） | Gemini · OpenAI Whisper · 通义 paraformer · Groq · MiniMax · Azure · 豆包 | 讯飞 / 腾讯云占位待 PR |
-| **TTS**（5 家） | MiniMax · OpenAI · Azure · 豆包 · 通义 CosyVoice | 仅网页端朗读生效 |
-| **Embedding**（4 家） | OpenAI · Gemini · 智谱 · 通义 | 语义记忆召回 |
-| **Search**（4 家） | Tavily · Brave · SerpAPI · SearXNG | 联网搜索 |
-
-> ⚠️ 并非所有 Provider 都经过生产验证；生产前用 Setup Wizard 的「测试连通」自测。
-
-**Key 复用**：MiniMax 一把 key 通 TTS/ASR/Vision；OpenAI 通 Chat/Vision/ASR/TTS/Embedding；DashScope（通义）通 Chat/Vision/ASR/Embedding；Azure Speech 同管 TTS/STT。豆包 TTS/ASR cluster 不同需独立配置。
+| **Chat**（11 家） | DeepSeek · OpenAI · Anthropic · Gemini · xAI · 智谱 · 豆包 · 通义 · Kimi · 文心 · 自定义 OpenAI 兼容网关 | 自定义网关兼容 OpenRouter / SiliconFlow / Ollama / 各类中转站 |
+| **Image**（7 家） | 自定义中转（`/images/edits` 多图 `image[]` + `input_fidelity=high` + `background=transparent`）· OpenRouter · 302.ai · OpenAI · 智谱 · 通义 · 豆包 · 文心 | 支持多参考图高保真锁脸、6 槽位叠穿、透明平铺抠图与双人同框合影 |
+| **Vision**（9 家） | 自定义中转 · 智谱 GLM-4V · OpenAI · 通义 VL · 豆包 · Claude · Kimi · StepFun · MiniMax | 聊天看图、商品入柜解析、穿搭截图多单品拆解与姿势图解析 |
+| **ASR**（8 实现） | 自定义中转 · Gemini · OpenAI Whisper · 通义 paraformer · Groq · MiniMax · Azure · 豆包 | 微信语音转写 + 语气情绪识别 |
+| **TTS**（6 家） | 自定义中转 · MiniMax · OpenAI · Azure · 豆包 · 通义 CosyVoice · Fish Audio | 网页端聊天与日记朗读 |
+| **Embedding**（5 家） | 自定义中转 · OpenAI · Gemini · 智谱 · 通义 | Memory v2 混合语义召回 |
+| **Search**（4 家） | Tavily · Brave · SerpAPI · SearXNG | 联网查证现实信息与作品真实性 |
 
 ---
+
 ## 微信接入
 
 ### 网页扫码（推荐）
+打开 `/app/bind.html` 实时申请二维码并扫码绑定（需腾讯 iLink/ClawBot 准入资格）；VPS 无头环境可运行 `npm run ilink:login`。
 
-跟着 [跑起来之后](#跑起来之后) 走到第 4 步即可。**不需要**预填 `ILINK_BOT_TOKEN` / `ILINK_BOT_ID`，不需要预跑 `npm run ilink:login`。
-
-后端会在 `POST /api/wechat/bind-session` 时调 `ilink/bot/get_bot_qrcode` 实时申请新二维码，扫码成功后自动入表并 hot-register。
-
-> **iLink 准入资格**：扫码后能否拿到 `bot_token`，取决于你的微信号是否已在腾讯 iLink/ClawBot 后台获得开发者准入。未准入时仍可用 `/app/playground.html` 在浏览器里跑完整体验，只是不发到微信。
-
-### 终端二维码（VPS / 容器）
-
-```bash
-npm run ilink:login
-```
-
-成功写入 `./.weixin-credentials.json`（mode 0600，已 gitignore）。
-
-### 微信端能做什么 / 不能做什么
+### 微信端能力矩阵
 
 | 操作 | 状态 |
 |---|---|
-| 收发文本 | ✅ |
-| 发图片 / 文件 / 视频 | ✅ |
-| **用户要"自拍 / 照片 / 看看你" → 真实发图** | ✅ 程序侧识别 + AI 规划器决策 + 视觉人设保持外貌一致 |
-| 白天主动场景照（≥36h 候选窗口，AI 自决是否真发） | ✅ |
-| 主动消息 + 打字指示器 | ✅ |
-| **连发消息整合**（连发 2-3 条等你停手合并回一次，v1.10.53） | ✅ 默认 10s 窗口，`COALESCE_WINDOW_MS` 可调 |
-| 收用户语音 → ASR **+ 情绪识别** | ✅ qwen-audio 听得出语气情绪（playground 也支持 ASR） |
-| **bot 在微信里发语音** | ❌ iLink 协议禁止 outbound voice（实测 HTTP 200 但消息静默丢弃，腾讯反欺诈） |
-
-所以**语音合成 / 朗读功能仅在网页/PWA 端生效**。SILK 编码 pipeline 代码保留备用，将来腾讯放开时秒切。详见 [`docs/voice-sprint-plan.md`](./docs/voice-sprint-plan.md) 末尾 Sprint 2 失败结论。
+| 文本收发 + 10s 连发消息合并 + 打字指示器 | ✅ |
+| **发商品截图送礼 / 云试穿 / 下单等快递（到期自动拆箱返图）** | ✅ 支持先发图再发文字自动融合 |
+| **发本人照锁定形象 + 约会剧场自然启停 + 双人同框约会/赛博合影** | ✅ 口令“这是我的照片 / 开启约会模式 / 拍张合影 / 今天就先这样啦” |
+| **主理人自主穿搭 & 今日穿搭自拍** | ✅ 说“今天穿什么你自己决定吧 / 拍张今日穿搭看看”直出 OOTD 照 |
+| 日常要自拍 / 主动场景照（自动联动今日衣橱在穿单品） | ✅ 完整定妆照锁脸 + 穿搭一致 |
+| 入站语音 ASR + 语气情绪识别 | ✅ |
+| 主动发微信语音 | ❌ iLink 协议永久限制（网页端朗读正常） |
 
 ---
 
 ## 部署
 
-### 路径 A：Docker Compose（推荐生产）
+### 本地开发与前端样式构建
 
 ```bash
-git clone https://github.com/dimang01/xiyu-ai.git
-cd xiyu-ai
-docker compose up -d
-# 打开 http://localhost:3000/app/setup.html
+npm install
+npm run build:css      # 编译 Tailwind CSS（修改前端样式后执行）
+npm start              # 启动服务（默认 http://localhost:3000）
 ```
 
-- SQLite 数据走 `./data` volume，重启不丢
-- `restart: unless-stopped` 已写在 compose 里，不必额外 systemd
-- 自定义端口：`HOST_PORT=8080 docker compose up -d`
-- 看日志：`docker compose logs -f xiyu-ai`
+### 生产反代、单用户模式与自检工具箱
 
-### 路径 B：本地裸跑（推荐入门）
+- 生产模板见 [`deploy/xiyu-ai.service`](./deploy/xiyu-ai.service)、[`deploy/nginx.conf.example`](./deploy/nginx.conf.example) 与 [`scripts/backup-db.sh`](./scripts/backup-db.sh)。
+- 个人内网/本机单用户使用可在 `.env` 设置 `SINGLE_USER=true` 跳过登录页（**公网无鉴权环境严禁开启**）。
+- 全套质量与回归检查：
 
 ```bash
-git clone https://github.com/dimang01/xiyu-ai.git
-cd xiyu-ai
-npm install        # Node ≥ 20
-npm run setup      # 生成最小 .env + 预检 better-sqlite3 编译工具链
-npm start
+npm run doctor                           # 一键环境与服务健康诊断
+npm run lint                             # ESLint 静态检查
+npm run check:behavior                   # 行为规划与消息投递回归
+node scripts/wardrobe_tryon_check.mjs    # 数字衣橱、锁脸、叠穿与整套换装回归
+node scripts/date_mode_check.mjs         # 三层约会框架与双人合影回归
+node scripts/phase4_assets_check.mjs     # R2 SigV4、透明抠图、姿势控姿与主理人自主搭配回归
+node scripts/user_wording_guard.mjs      # 零禁用称谓扫描
+npm run check:imports && npm run check:field-drift && npm run check:release
 ```
-
-`npm run setup` 缺编译工具时会给出针对你 OS 的修复命令。
-
-### 路径 C：一行 `docker run`
-
-```bash
-docker run -d -p 3000:3000 -v xiyu-data:/app/data \
-  --name xiyu-ai ghcr.io/dimang01/xiyu-ai:latest
-```
-
-镜像每次 v\* tag 自动构建发到 GHCR，支持 `linux/amd64` 和 `linux/arm64`。可用标签：`latest` / `1.4` / `1.4.2`（推荐锁版本）。
-
-裁剪镜像：build 时传 `--build-arg WITH_VOICE=0 --build-arg WITH_IMAGE=0` 可去掉 ffmpeg / wx-voice 体积。
-
-### 反代 / systemd / 备份
-
-`deploy/` 提供模板：
-
-| 文件 | 用途 |
-|---|---|
-| [`deploy/xiyu-ai.service`](./deploy/xiyu-ai.service) | systemd unit，已带 `NoNewPrivileges` / `PrivateTmp` / `ProtectSystem` |
-| [`deploy/nginx.conf.example`](./deploy/nginx.conf.example) | nginx 反代：HTTPS + HSTS + 长轮询超时 + AI 爬虫友好路由 |
-| [`deploy/README.md`](./deploy/README.md) | clone → 上线 step-by-step |
-| `scripts/backup-db.sh` | SQLite 三件套（`bot.db` + `-wal` + `-shm`）备份起点 |
-
-### nginx 双目录部署的坑（自托管常见）
-
-如果你像我们的生产那样把 nginx `root` 指向**独立**的前端目录（比如 `/var/www/xxx/frontend/` 而不是项目 `public/`），那么每次 `git pull` 之后**必须把 `public/` 同步过去**，否则前端改动（html/css/js）不会生效，但 API 改动会立刻生效——前端调用新 API 时报错难排查。
-
-最小同步脚本（保留 nginx 目录里独有的素材文件）：
-
-```bash
-rsync -av --exclude='.gitkeep' /opt/xiyu-ai-new/public/ /var/www/xxx/frontend/
-systemctl restart zhaohy-wechat
-```
-
-如果你的 nginx `root` 直接指向项目 `public/`（推荐），无视本节。
-
-### 自检 / 诊断
-
-```bash
-npm run doctor          # Node/SQLite/key/iLink/端口/服务健康，一键诊断
-npm run check:p0        # P0/P1 回归 127 项
-npm run check:imports   # ESM 循环依赖 / 死 import 检查
-npm run check:field-drift  # daily_summary 字段名漂移
-npm run smoke           # release smoke 10 项
-bash scripts/opensource_check.sh   # 6 项开源合规
-```
-
-`npm run doctor` 不输出 key 内容，只显示字符数和占位符检测结果。
-
-### 单用户模式
-
-如果你是本机/内网/已用反代加保护的自托管单用户场景，可以**跳过登录页**：
-
-```bash
-# .env 加一行
-SINGLE_USER=true
-```
-
-效果：
-- 启动后访问任意页面直接进 dashboard，不再弹登录/注册
-- 首次启动自动创建 owner 账号（密码占位，永远不用）
-- 多账号场景下用最早注册的账号（一般是 admin）作为默认身份
-- dashboard 顶部「登出」按钮隐藏（登出后会自动登回，按钮无意义）
-
-⚠️ **严禁在以下情况开启**：
-- 服务直接暴露公网（无 nginx Basic Auth / Cloudflare Access / IP 白名单）
-- 多人共用部署（每个人应该有独立账号）
-
-开启后**所有聊天记录、记忆、绑定信息对所有访问者开放**。默认 OFF，多用户模式与旧行为完全兼容。
 
 ---
 
-## 运维工具箱
-
-自托管不是"跑起来就完了"——这个仓把生产运营踩过的坑都做成了工具：
-
-```bash
-npm run doctor          # Node/SQLite/key/iLink/端口/服务健康，一键诊断
-npm run lint            # ESLint：const 重赋值等"运行时静默炸"问题编译期抓死
-npm run check:p0        # P0/P1 回归 127 项
-npm run arc:digest      # 运营日报（只读）：错误签名归并(新签名置顶尖叫)/关系事件
-                        # 与道歉判定流水/红线触发/危机接管/照片比例分布
-npm run smoke           # release smoke；bash scripts/opensource_check.sh 开源合规 6 项
-```
-
-- **错误签名日报**：近 24h 的 error 日志按归一化签名归并（计数 / 环比 / 首现），新签名高亮——静默失败第一时间变响
-- **proactive 死人开关**：每小时心跳，按三桶信号分离（已发送 / 正当克制 / 出错或无心跳）——只有"出错 / 无心跳"才 CRITICAL + 邮件告警（`ADMIN_ALERT_EMAIL`），把"正当读空气的沉默"与"真断供"分开、大幅减少假警报；纯报警零自愈
-- **emotion-debug 面板**（`/app/emotion-debug.html`，admin）：关系弧状态 / 事件流水 / 每条消息的情绪增量及原因——情绪因果可查，不上线玄学
-- **样本标注工具**（`/app/annotate.html`，admin）：读真实回复时顺手标 好/坏 + tag（AI味/化验单腔调/神来之笔…），`scripts/export-corpus.mjs` 导出 JSONL——微调语料生产线，"读"变成"攒"
-- **CI 门禁 45+ 项**：语法 / lint / 字段漂移对账 / 发布一致性 / 各功能 smoke / 红线护栏——新规则都做过"红色验证"（对坏版本跑必须红）
-- **运维钳位**：`ARC_MAX_STATE` 可临时封顶冲突状态（生产误伤免回滚的保险丝；与未成年人保护相反——那个是不可关的安全底线）
-
----
 ## 架构
 
 ```
-                ┌────────────────────────────────────────────────┐
-                │   Web Dashboard / Playground   /   WeChat user  │
-                └───────────────────┬─────────────────────────────┘
-                                    │
-   ┌──────────────────────────────────────────────────────────────┐
-   │  Express (index.mjs) — 多租户 iLink 轮询池                    │
-   │  ┌─────────────┬──────────────┬───────────────────────────┐  │
-   │  │  api.mjs    │  auth.mjs    │  Setup Wizard / Dashboard │  │
-   │  └─────────────┴──────────────┴───────────────────────────┘  │
-   │  ┌────────────────────────────────────────────────────────┐  │
-   │  │  bot.mjs (WeChat in)    playground.mjs (Web in)        │  │
-   │  │           ↓                          ↓                  │  │
-   │  │  公共 reply pipeline：buildSystemPrompt + recallMemory │  │
-   │  │           ↓                                             │  │
-   │  │  ai.mjs → providers/ → chat/image/vision/asr/tts/...   │  │
-   │  │           ↓                                             │  │
-   │  │  memory_v2.mjs · emotion_state.mjs · proactive.mjs     │  │
-   │  │  · persona_guard.mjs · companion.mjs · diary.mjs       │  │
-   │  └────────────────────────────────────────────────────────┘  │
-   │  ┌────────────────────────────────────────────────────────┐  │
-   │  │  db.mjs (better-sqlite3 + WAL)                         │  │
-   │  └────────────────────────────────────────────────────────┘  │
-   └──────────────────────────────────────────────────────────────┘
+       ┌────────────────────────────────────────────────────────────┐
+       │  Web Dashboard / Playground (Aurora & Obsidian)  /  WeChat │
+       └──────────────────────────────┬─────────────────────────────┘
+                                      │
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │  Express (index.mjs) + 多租户 iLink 轮询池                            │
+  │  ┌──────────────┬───────────────────────┬──────────────────────────┐ │
+  │  │ api.mjs      │ bot.mjs / playground  │ plan_tasks.mjs (Cron)    │ │
+  │  │ REST & Auth  │ 统一 Reply Pipeline   │ 日程/反思/拆箱/晨间OOTD   │ │
+  │  └──────────────┴───────────┬───────────┴──────────────────────────┘ │
+  │                             ↓                                        │
+  │  ┌────────────────────────────────────────────────────────────────┐  │
+  │  │ 领域服务：wardrobe.mjs · wardrobe_stylist.mjs · date_mode.mjs  │  │
+  │  │          pose_outfit_library.mjs · garment_extractor.mjs       │  │
+  │  │          memory_v2.mjs · emotion_state.mjs · reply_review.mjs  │  │
+  │  └──────────────────────────┬─────────────────────────────────────┘  │
+  │                             ↓                                        │
+  │  ┌──────────────────────────┴──────────┬──────────────────────────┐  │
+  │  │ ai.mjs → providers/* (多模态网关)   │ storage.mjs (R2 / Local) │  │
+  │  │ db.mjs (better-sqlite3 + WAL)       │ visual_identity.mjs      │  │
+  │  └─────────────────────────────────────┴──────────────────────────┘  │
+  └──────────────────────────────────────────────────────────────────────┘
 ```
 
-### 关键设计
-
-- **Provider facade**：业务层只看 `chatComplete()` / `ttsSynthesize()` 等通用方法，厂商差异隐藏在 `src/providers/*.mjs`
-- **同一份 reply pipeline**：微信入口和 playground 入口共用，只是不走 iLink 派发
-- **Proactive 防复读**：发送前用字符 3-gram Jaccard 检测最近 5 条 assistant 内容；相似度 ≥ 0.6 升温重生
-- **日程自愈**：00:30 cron 失败时 proactive tick 检测到缺日程会按需补一次（30 分钟级 debounce）
-- **Persona Guard**：回复后一致性校验，自动检测"我是 AI"、客服话术、阶段违规；轻问题后处理，重问题重生成
-
-### 目录结构
+### 核心目录
 
 ```
 .
-├── index.mjs                Express 入口 + iLink 轮询池
+├── index.mjs                         Express 入口与 iLink 轮询池
 ├── src/
-│   ├── ai.mjs               业务层 AI facade
-│   ├── providers/           chat / image / vision / asr / tts / embedding / web_search
-│   ├── api.mjs              REST 路由
-│   ├── bot.mjs              微信消息处理 + 连发合并
-│   ├── playground.mjs       浏览器聊天
-│   ├── companion.mjs        18 节 system prompt 合成
-│   ├── memory_v2.mjs        7 层记忆 + 语义召回 + 遗忘曲线
-│   ├── emotion_state.mjs    情绪状态机（10 维增量 + mood）+ presence
-│   ├── inner_os.mjs         Inner OS 内心独白 + 冲突弧结构化检测
-│   ├── open_loops.mjs       她记得未完成的事
-│   ├── proactive.mjs        主动消息 + 场景照调度
-│   ├── photo_intent.mjs     用户照片请求意图识别
-│   ├── photo_planner.mjs    照片 AI 决策器 + 机位/比例路由
-│   ├── photo_sender.mjs     生图 → 比例转码 → 上传发送
-│   ├── visual_identity.mjs  稳定视觉人设 + 参考图管理
-│   ├── visual_identity_candidates.mjs  4 候选自拍生成 + 选脸锁定
-│   ├── image_beautify.mjs   生图全局轻美颜后处理
-│   ├── security/netguard.mjs SSRF 防护下载
-│   ├── relationship_arc.mjs 冲突与和好弧状态机（+_runtime IO 层）
-│   ├── moderation.mjs       危机干预 + 冲突红线出站护栏
-│   ├── minor_guard.mjs      未成年人保护（粘性安全模式）
-│   ├── privacy_filter.mjs   长期存储隐私过滤
-│   ├── persona_guard.mjs    回复后一致性校验
-│   ├── reflection.mjs       每日/每周 AI 反思
-│   ├── diary.mjs            日记生成
-│   ├── thoughts.mjs         今天她想对你说
-│   ├── voice_pipeline.mjs   mp3 → SILK 转码
-│   ├── voice_inbound.mjs    入站语音 下载+解密+解码
-│   ├── voice_emotion.mjs    语音情绪识别
-│   ├── plan_tasks.mjs       cron 调度（日 / 周 / 月）
-│   ├── ilink.mjs            iLink 协议封装
-│   └── db.mjs               SQLite + 全部 migrateXxx() 注册点
-├── public/app/              20 个前端页面（dashboard / playground / emotion-debug …）
-├── deploy/                  systemd + nginx 模板
-├── scripts/                 110+ 个：setup / doctor / arc-digest / 各 smoke / 沙箱验收 / ...
-├── docs/
-│   ├── FEATURES.txt         完整功能清单（最权威）
-│   ├── HANDOFF.md           新对话交接提示词
-│   ├── CONFLICT_ARC.md      冲突与和好弧设计文档
-│   ├── ROADMAP.md           路线完成情况与 2026-06 回顾
-│   └── voice-sprint-plan.md 语音 sprint 计划
-└── data/                    运行时数据（gitignored）
+│   ├── wardrobe.mjs                  数字衣橱、意图识别、6 槽位叠穿、高保真锁脸试穿与快递拆箱
+│   ├── wardrobe_stylist.mjs          苏晴「衣橱主理人」自主穿搭/选姿势引擎与 07:30 晨间 OOTD
+│   ├── pose_outfit_library.mjs       单人/双人姿势库与精选服装灵感库（内置 + 自定义合并）
+│   ├── garment_extractor.mjs         截图多单品拆解、去人去背景真透明 PNG 平铺提取与姿势图解析
+│   ├── storage.mjs                   零依赖 Cloudflare R2（AWS SigV4）+ 本地磁盘双模存储
+│   ├── date_mode.mjs                 三层相处底盘、云约会、可结算约会剧场与双人同框合影
+│   ├── visual_identity.mjs           人物定妆参考图管理与身份锁定
+│   ├── photo_sender.mjs              日常/主动发图管线（自动联动今日衣橱在穿单品）
+│   ├── companion.mjs / reply_*.mjs   18 节人设 Prompt、上下文组装与 Grounded Reply 审查
+│   ├── memory_v2.mjs / emotion_state.mjs / relationship_arc.mjs
+│   ├── bot.mjs / playground.mjs / api.mjs / plan_tasks.mjs / db.mjs
+│   └── providers/                    Chat / Image / Vision / ASR / TTS / Embedding / Search
+├── public/app/                       极光/暗夜双主题前端（dashboard / playground / pose-previews.js …）
+├── scripts/                          CI 门禁、回归测试（wardrobe / date_mode / phase4_assets）与 R2 同步脚本
+├── docs/                             架构设计文档（衣橱 / 约会 / 冲突弧 / 路线图）
+├── TODO.md & CHANGELOG.md            路线清单与完整变更登记
+└── data/                             运行时 SQLite 与本地素材（已 gitignore）
 ```
 
 ---
 
-## 安全
+## 安全与合规
 
-### 凭据与敏感文件
-
-- `.env` / `.env.*` / `.auth-secret` / `.admin-secret` / `.admin-credentials` / `.weixin-credentials.json` / `data/bot.db*` / `data/user_memories/` 全部 `.gitignore`
-- 管理员密码首次启动自动生成 20 位写入 `.admin-credentials`（0600），忘记可删文件重生
-- `AUTH_SECRET` 留空会自动生成但每次重启重生（导致 token 全部失效）。**生产请显式设 ≥32 字符随机串**
-- `/api/health` 只输出 provider 名 / iLink configured 与否 / 邮件模式，绝不输出 token / 用户数据
-- iLink `bot_token` 从不打印；扫码脚本只显示 masked `bot_id` / `user_id`
-- 默认 CORS 关；默认 rate limit (`src/ratelimit.mjs`) 按个人量级设计，公开服务前置 WAF
-
-### v1.6.1 加固
-
-- **SSRF 防护**：所有从用户 URL 下载的图片（如"从 URL 设头像"）走 `src/security/netguard.mjs`：仅 http/https、DNS 解析后逐 IP 校验、拒绝 127/10/172.16-31/192.168/169.254/100.64/IPv6 ULA-link-local 等保留段、≤5MB、≤3 跳重定向、15s 超时
-- **限流 IP 取值**：`req.ip` 由 Express trust-proxy 链计算，不再裸读客户端 `X-Forwarded-For`（可伪造）。反代场景配置 `TRUST_PROXY=true` 或具体 IP/CIDR
-- **首次初始化 token**：`POST /api/setup/local-account` 默认只允许 localhost；如需远程一键初始化可设 `XIYU_SETUP_TOKEN=<随机串>`，调用方通过 `xiyu-setup-token` header 提供，校验用 `crypto.timingSafeEqual` 防侧信道
-- **管理端鉴权**：`/api/admin/ilink-status` 加 `requireAdmin`，返回字段去除 token / errmsg 截断 80 字 / bot_id 脱敏，避免泄漏运营态
-- **越权防护**：`/api/companions/user/:uid` 校验 companion 归属当前账号（IDOR 修复）
-- **Setup 试 Provider**：`/api/setup/test-chat` 加 `softAuth`，匿名调用仅限"首次本机 + 用户数=0"白名单
-
-### 数据与内容
-
-- SQLite 默认 `data/bot.db`，含聊天历史 / 记忆 / 用户画像。自托管时数据完全在你机器上
-- 对话历史默认保留 60 天 (`runHourlyCleanup`)，可调；删账号清空对应 companion 全部数据
-- **未成年人 / 心理高风险场景请额外谨慎**，见 [Issue #3](https://github.com/dimang01/xiyu-ai/issues/3)
-
-### 报告安全问题
-
-- 邮箱：`xiyuai@proton.me`
-- GitHub Security Advisories：<https://github.com/dimang01/xiyu-ai/security/advisories/new>
-- 详细见 [SECURITY.md](./SECURITY.md)
-
----
-
-## 合规
-
-**MIT 协议只覆盖代码，不覆盖你产出的内容、引用的第三方服务、运营行为。公开部署是运营者自己的责任。**
-
-7 项部署者自查清单（不构成法律意见）：
-
-| 维度 | 你需要做的 |
-|---|---|
-| 隐私政策 / 用户协议 | `terms.html` / `privacy.html` 是空模板，**不能直接用** |
-| AI 生成内容标识 | 中国大陆《生成式人工智能服务管理暂行办法》、欧盟 AI Act 等都要求显著标识 |
-| 未成年人保护 | v1.20 起内置：检测用户自曝未成年（regex + LLM 兜底）→ 粘性安全模式（朋友身份、无恋爱内容、阶段封顶、照片中性化），解除仅限 dashboard 显式年龄声明。**但这不是年龄验证**——无法识别不自曝的未成年人，公开运营仍建议接入实名/年龄验证 |
-| 个人信息保护 | PIPL / GDPR / CCPA 等需自行明示收集目的、提供删除接口 |
-| 内容安全审核 | 仓库当前只有简单黑名单，对外开放前请接入云厂商审核 API |
-| 危机话术 | 内置基础危机检测（自伤信号 → 退出角色 + 求助热线），但不替代专业审核，公开运营请额外接入 |
-| Provider ToS | 每家 LLM/图像 provider 各有条款（是否允许虚拟人格、情感陪伴、商用），切换前自行确认 |
-
-### 关于"陪伴"定位
-
-框架不预设角色性格 / NSFW 内容 / 越界互动。**注册角色的人设由部署方或终端用户决定**。仓库里所有人格模板都是中立示例。是否做向成年用户的情感陪伴、是否允许某些角色，是你的产品决策与合规决策，请自负其责。
-
----
-
-## 已知限制
-
-| 限制 | 状态 / 跟踪 |
-|---|---|
-| **bot 在微信里发语音** | 永久限制 — iLink 协议禁止 outbound voice；网页/PWA 端正常 |
-| 讯飞 / 腾讯云 ASR 仅占位 | WebSocket + HMAC 协议复杂，需 PR |
-| 内容审核 API 需运营者自接 | 危机干预与未成年人保护已内置；公开运营建议另接审核服务 |
-| 生产部署指南未完善 | [#5](https://github.com/dimang01/xiyu-ai/issues/5) |
-| 微信对接依赖腾讯 iLink/ClawBot 准入 | 上游条件 |
-| 实时语音通话 | 协议层做不到 |
+- **凭据隔离**：`.env`、`.auth-secret`、`.admin-credentials`、`.weixin-credentials.json`、`data/bot.db*` 全部 gitignore；生产环境请显式设置 ≥32 字符 `AUTH_SECRET`。
+- **SSRF 与鉴权加固**：外部图片下载经 `src/security/netguard.mjs` 拦截保留网段；所有伴侣与衣橱接口校验账号归属防 IDOR。
+- **合规自查**：MIT 协议仅覆盖源代码；若公开部署，请自行补齐隐私协议、AI 生成内容显著标识、内容安全审核 API 与各模型厂商条款核验。内置危机干预与粘性未成年人保护，但不能替代正式年龄核验。
 
 ---
 
 ## 版本历史
 
-发版节奏 / 完整 changelog 在 [GitHub Releases](https://github.com/dimang01/xiyu-ai/releases)；增量索引见 [`docs/FEATURES.txt`](./docs/FEATURES.txt)；2026-06 路线回顾见 [`docs/ROADMAP.md`](./docs/ROADMAP.md)。
+完整详细变更见 [`CHANGELOG.md`](./CHANGELOG.md)；路线清单见 [`TODO.md`](./TODO.md)。
 
-主线脉络（一句话版）：
-
-- **v1.22.0 她的生活有实物 + 失忆修复**：她有了随时间演化的身体（生理期会蔫但不指向你、按关系深浅披露、绝不做暧昧窗口、未成年保护下关闭，情绪上的细微影响默认只后台观测）；世界经得起查证（节气 / 农历节日天文计算含闰月、手头的书 / 剧 / 事跨日连贯）；不再"突然失忆"（记得当前场景与你们的约定，讲完故事不再忘、不凭空编"刚吃完麻辣香锅"，凭空重病声明也拦）；运维侧死人开关三桶信号分离减少假警报、反思心跳、playground 探针
-- **v1.21.x 冲突与和好弧 + 工程加固**：关系事件状态机（她会真的受伤、和好有惯性）统一收编全部"她对你冷"的逻辑；事故复盘后让静默失败变响（ESLint / 错误签名日报 / 死人开关）；照片比例修复；沉浸感卫生包（她的世界里没有"用户"这个词、素材级防复读、互动历史自动打底）；照片承诺兑现链（承诺前可行性闸门、拍不出能改期补发、月相锚定杜绝凭空满月）；照片品类校准（像真实恋爱那样发照片：食物一等公民、天空靠 sun_times 日落窗口锚定、"看到这个想到你"、真实出版物封面护栏；先审计后改配比时还顺手揪出并修了一桩 1.5 天的静默断图 P0）
-- **v1.20.x 安全收尾**：未成年人保护（粘性安全模式）、隐私过滤全口子、发布一致性 CI、照片真实感 v2（反磨皮质感词直达生产）
-- **v1.14 → v1.19 真人感纵深**：被冷落逐级转变 + 依恋风格、留存漏斗（挽留/升温/读空气/破冰）、照片真实感大改（环境自拍/i2i 锁脸/机位路由）、初恋特质
-- **v1.6 → v1.13 体验底座**：真实发图链路、反讨好系列、Inner OS、开环记忆、睡眠系统、连发合并、关系节奏（时间喂大感情）、中英双语
-- **v1.0 → v1.5 框架成型**：人设引擎、Memory v2、情绪状态机、主动消息、日记、多 Provider 抽象
-
----
-## 贡献 & 路线图
-
-- 开发环境 / PR 约定 / 产品调性 → [CONTRIBUTING.md](./CONTRIBUTING.md)（3 分钟读完）
-- 找到 bug → [新 Issue](https://github.com/dimang01/xiyu-ai/issues/new/choose)
-- 路线图 → [Issues](https://github.com/dimang01/xiyu-ai/issues) 带 `enhancement` / `help wanted` / `good first issue` 标签的最适合上手
-- 想贡献代码：fork → PR；保持改动小而聚焦，附带说明动机
-- 致谢见 [ACKNOWLEDGMENTS.md](./ACKNOWLEDGMENTS.md)
+- **v1.23 开发主线（数字衣橱 × 虚拟约会 × 主理人自主穿搭 × R2 云图床）**：
+  - **数字衣橱与玻璃展示柜**：6 槽位自由叠穿、高保真完整原图锁脸、微信连发图片融合、快递到期自动拆箱返图与周末回访彩蛋。
+  - **三层虚拟约会与双人同框合影**：异地恋/跨次元防内耗底盘、云饭搭子/云逛街、可结算约会剧场（自动写入 `importance=8` 记忆并核销约定）、本人形象照双人同框合影与微信/网页全双端对齐。
+  - **姿势/服装实图库、真透明抠图与 R2 云存储**：10 单人 + 6 双人可视化图卡与无限实图扩展、截图一键扒同款（去人去背景真透明 PNG）、零依赖 Cloudflare R2 SigV4 存储 + CDN 直链、清透极光 / 暗夜液态玻璃双主题。
+  - **👑 衣橱主理人自主搭配**：苏晴每天 `07:30` 按季节/日程/心情自己换装，支持控制台一键与微信/网页聊天自然交权，自选衣服与姿势并记录第一人称搭配笔记。
+- **v1.22.0 她的生活有实物 + 失忆修复**：身体节律演化、节气/农历天文计算、在看书剧跨日连贯、场景与约定记忆连续性修复、运维死人开关三桶分离。
+- **v1.21.x 冲突与和好弧 + 工程加固**：显式冲突修复状态机、ESLint / 错误签名日报、沉浸感卫生包（零“用户”称谓）、照片品类校准与承诺兑现链。
+- **v1.20.x 安全收尾**：粘性未成年人保护、全入口隐私过滤、发布一致性门禁、真实肤质反磨皮。
+- **v1.0 → v1.19 体验与框架底座**：18 节人设引擎、Memory v2、10 维情绪状态机、Inner OS、作息与日程、多 Provider 抽象与微信 iLink 接入。
 
 ---
 
 ## 许可证
 
-[MIT](./LICENSE) © 2026 溪语 AI Contributors
+[MIT](./LICENSE) © 2026 SuQing AI / 溪语 AI Contributors
 
-仓库**不包含**任何第三方表情包图片。`assets/stickers/` 只有加载与 tag 匹配机制，启用表情包请自行准备有合法授权的素材。
+仓库**不包含**任何第三方受版权保护的表情包或图库图片素材，如需启用请自行准备有合法授权的素材。
 
 <div align="center">
 
-[⬆ 回到顶部](#溪语-ai--xiyu-ai) · [English](./README.en.md)
+[⬆ 回到顶部](#suqing-ai--溪语-ai) · [English](./README.en.md)
 
 </div>

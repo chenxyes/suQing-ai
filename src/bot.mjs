@@ -1240,7 +1240,10 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
       (async () => {
         try {
           const genOut = await withTimeout(
-            generateWardrobeTryonImage(companion, tryonItem, { composeWithWearing: true }),
+            generateWardrobeTryonImage(companion, tryonItem, {
+              composeWithWearing: true,
+              poseId: wardrobeOutcome.poseId || null,
+            }),
             PHOTO_GEN_TIMEOUT_MS,
             'wardrobe tryon gen',
           );

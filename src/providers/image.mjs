@@ -298,15 +298,21 @@ export async function imageGenerate(prompt, {
   referenceImage = null,
   model = null,
   inputFidelity = null,
+  background = null,
   skipBeautify = false,
 } = {}) {
   const ACTIVE = active();
   const fn = REGISTRY[ACTIVE];
   if (!fn) throw new Error(`未知 IMAGE_PROVIDER=${ACTIVE}。可选：${Object.keys(REGISTRY).join(', ')}`);
   log('debug', `[image] provider=${ACTIVE} size=${size}${model ? ` model=${model}` : ''}${referenceImage ? ' (i2i)' : ''}`);
-  // custom 支持完整 options 对象（referenceImage / model / inputFidelity），其他 provider 维持第三参 referenceImage
+  // custom 支持完整 options 对象（referenceImage / model / inputFidelity / background），其他 provider 维持第三参 referenceImage
   const thirdArg = ACTIVE === 'custom'
-    ? { referenceImage, ...(model ? { model } : {}), ...(inputFidelity ? { inputFidelity } : {}) }
+    ? {
+        referenceImage,
+        ...(model ? { model } : {}),
+        ...(inputFidelity ? { inputFidelity } : {}),
+        ...(background ? { background } : {}),
+      }
     : referenceImage;
   const rawUrl = await fn(prompt, size, thirdArg);
   if (skipBeautify) return rawUrl;

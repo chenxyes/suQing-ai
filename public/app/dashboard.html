@@ -621,6 +621,9 @@
                       <input id="input-upload-ref-portrait" type="file" accept="image/*" class="sr-only" />
                     </label>
                     <div class="flex items-center gap-1.5 flex-wrap">
+                      <button id="btn-wardrobe-suqing-pick" type="button" title="衣橱是苏晴的主场！让她按今天的心情、季节与日程自己挑穿搭和姿势" class="text-[11.5px] font-semibold text-white bg-gradient-to-r from-violet-400 to-sakura-deep rounded-full px-3 py-1.5 hover:shadow-sakura transition-all">
+                        👑 让苏晴自己搭
+                      </button>
                       <button id="btn-wardrobe-toggle-presets" type="button" class="text-[11.5px] font-semibold text-sakura-deep bg-white/85 border border-sakura/50 rounded-full px-3 py-1.5 hover:bg-sakura-soft/50 transition-all">
                         ✨ 服装灵感库
                       </button>
@@ -662,13 +665,13 @@
                           <div id="extract-items-list" class="flex-1 min-w-0 space-y-1.5"></div>
                         </div>
                         <div class="flex items-center gap-3 flex-wrap text-[11px]">
-                          <label class="inline-flex items-center gap-1 cursor-pointer font-medium text-ink">
-                            <input type="radio" name="extract-mode" value="raw" checked />
-                            <span>⚡ 原图快速入库（零生图费）</span>
+                          <label class="inline-flex items-center gap-1 cursor-pointer font-semibold text-sakura-deep">
+                            <input type="radio" name="extract-mode" value="flatlay" checked />
+                            <span>✨ 去人去背景透明平铺 PNG（推荐）</span>
                           </label>
-                          <label class="inline-flex items-center gap-1 cursor-pointer font-medium text-sakura-deep">
-                            <input type="radio" name="extract-mode" value="flatlay" />
-                            <span>✨ 去人去背景平铺图（更稳防串脸）</span>
+                          <label class="inline-flex items-center gap-1 cursor-pointer font-medium text-mute">
+                            <input type="radio" name="extract-mode" value="raw" />
+                            <span>⚡ 原图快速入库（零生图费）</span>
                           </label>
                         </div>
                         <div class="flex items-center justify-between gap-2 flex-wrap pt-1 border-t border-line/60">
@@ -1377,7 +1380,7 @@
   <div id="silent-orb" role="button" tabindex="0" aria-label="退出沉默陪伴模式" title="沉默陪伴模式开启中 · 点击退出"></div>
   <script src="/vendor/lucide.min.js" defer></script>
   <script src="/app/pose-previews.js?v=43" defer></script>
-  <script src="/app/dashboard.js?v=44" defer></script>
+  <script src="/app/dashboard.js?v=46" defer></script>
   <script src="/app/dashboard-model-drawer.js?v=35" defer></script>
   <script src="/app/stickers.js?v=35" defer></script>
 </body>

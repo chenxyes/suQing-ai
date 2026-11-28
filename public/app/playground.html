@@ -850,7 +850,12 @@
           const wItem = d.data.wardrobeAction.item;
           const card = appendDevelopingCard('正在换上「' + wItem.name + '」拍试穿照');
           fetch('/api/companions/' + companionId + '/wardrobe/' + wItem.id + '/tryon', {
-            method: 'POST', headers: authHeaders(), body: JSON.stringify({ compose_with_wearing: true }),
+            method: 'POST',
+            headers: authHeaders(),
+            body: JSON.stringify({
+              compose_with_wearing: true,
+              pose_id: d.data.wardrobeAction.poseId || undefined,
+            }),
           }).then(res => res.json().catch(() => ({}))).then(out => {
             if (out?.ok && out.data?.tryon_image_url) {
               resolveDevelopingCard(card, out.data.tryon_image_url, '👗 已收入数字衣橱 · 「' + wItem.name + '」试穿照');

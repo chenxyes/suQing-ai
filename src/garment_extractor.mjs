@@ -68,16 +68,32 @@ function sanitizeHexColor(raw, fallback = '#F4D8E6') {
   return /^#[0-9a-fA-F]{6}$/.test(s) ? s : fallback;
 }
 
+async function shrinkForVision(buffer, mime) {
+  try {
+    const out = await sharp(buffer)
+      .resize({ width: 768, height: 768, fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 80 })
+      .toBuffer();
+    return { buffer: out, mime: 'image/jpeg' };
+  } catch {
+    return { buffer, mime };
+  }
+}
+
 /**
- * Step 1：用 Vision 识别穿搭截图中的所有可拆解服饰单品（零生图成本）。
+ * Step 1：用 Vision 识别穿搭截图中的所有可拆解服饰单品（零生图成本；先压缩至 768px 防止大图中转超时）。
  */
 export async function detectOutfitsInScreenshot(buffer, mime = 'image/jpeg', deps = {}) {
   const recognize = deps.recognize || recognizeImage;
+  const slim = await shrinkForVision(buffer, mime);
   let parsed = null;
+  let visionFailed = false;
   try {
-    const raw = await recognize(buffer, mime, { prompt: SCREENSHOT_DECOMPOSE_PROMPT });
-    parsed = parseLooseJson(raw);
+    const raw = await recognize(slim.buffer, slim.mime, { prompt: SCREENSHOT_DECOMPOSE_PROMPT, timeoutMs: 55_000 });
+    if (typeof raw === 'string' && raw.includes('[图片识别失败]')) visionFailed = true;
+    else parsed = parseLooseJson(raw);
   } catch (e) {
+    visionFailed = true;
     log('warn', `[GarmentExtractor] Vision 拆解截图失败: ${e.message}`);
   }
 
@@ -121,11 +137,124 @@ export async function detectOutfitsInScreenshot(buffer, mime = 'image/jpeg', dep
       material: '',
       swatch: '#F5D8E6',
       styleTags: ['精选穿搭'],
-      descZh: '从穿搭截图提取的服饰灵感单品',
-      visualPrompt: 'stylish casual fashion garment from reference photo',
+      descZh: '从穿搭截图提取的透明平铺单品',
+      visualPrompt: 'the complete main fashion garment outfit worn by the person in Image 1 (preserving exact colors, collar, bow/buttons, fabric, and cut)',
+      visionFallback: visionFailed,
     });
   }
   return [...bySlot.values()];
+}
+
+/**
+ * 将纯白/浅灰影棚底的商品平铺图转为真正透明背景 RGBA PNG：
+ *   - 若模型已原生返回带透明通道的图片（边界已有明显透明像素），直接裁边保留；
+ *   - 否则从四条边框发起 4-连通 Flood-Fill，精准去除与边缘连通的纯白/浅灰背景并柔和羽化 1px 过渡边缘，
+ *     绝不误伤服装内部白色衬衫/领口/图案！
+ */
+export async function removeWhiteBackgroundToTransparentPng(inputBuffer) {
+  const { data, info } = await sharp(inputBuffer)
+    .resize({ width: 1024, height: 1024, fit: 'inside', withoutEnlargement: true })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const { width, height } = info;
+  const total = width * height;
+  if (total < 16) return inputBuffer;
+
+  // 1. 检查边缘是否已有原生透明通道（如 gpt-image-2 background=transparent）
+  let borderCount = 0;
+  let borderTransparent = 0;
+  for (let x = 0; x < width; x++) {
+    borderCount += 2;
+    if (data[(x) * 4 + 3] < 180) borderTransparent++;
+    if (data[((height - 1) * width + x) * 4 + 3] < 180) borderTransparent++;
+  }
+  for (let y = 1; y < height - 1; y++) {
+    borderCount += 2;
+    if (data[(y * width) * 4 + 3] < 180) borderTransparent++;
+    if (data[(y * width + width - 1) * 4 + 3] < 180) borderTransparent++;
+  }
+  if (borderTransparent / Math.max(1, borderCount) >= 0.25) {
+    return sharp(data, { raw: { width, height, channels: 4 } })
+      .png({ compressionLevel: 8 })
+      .toBuffer();
+  }
+
+  // 2. 采样四角背景基色（容忍轻微米白/浅灰影棚色温）
+  const corners = [0, width - 1, (height - 1) * width, (height - 1) * width + width - 1];
+  let bgR = 250; let bgG = 250; let bgB = 250;
+  let whiteCorners = 0;
+  for (const idx of corners) {
+    const r = data[idx * 4]; const g = data[idx * 4 + 1]; const b = data[idx * 4 + 2];
+    if (r >= 215 && g >= 215 && b >= 215 && (Math.max(r, g, b) - Math.min(r, g, b)) <= 28) {
+      whiteCorners++;
+      bgR = Math.round((bgR + r) / 2);
+      bgG = Math.round((bgG + g) / 2);
+      bgB = Math.round((bgB + b) / 2);
+    }
+  }
+  if (whiteCorners < 2) {
+    return sharp(data, { raw: { width, height, channels: 4 } }).png({ compressionLevel: 8 }).toBuffer();
+  }
+
+  const isBg = (p) => {
+    const o = p * 4;
+    const r = data[o]; const g = data[o + 1]; const b = data[o + 2];
+    const spread = Math.max(r, g, b) - Math.min(r, g, b);
+    const dist = Math.abs(r - bgR) + Math.abs(g - bgG) + Math.abs(b - bgB);
+    return dist <= 72 && spread <= 26 && r >= 210 && g >= 210 && b >= 210;
+  };
+
+  // 3. 边界 4-连通泛洪去背（只去外部背景，保护衣物内部白色领口/衬衫）
+  const visited = new Uint8Array(total);
+  const queue = new Int32Array(total);
+  let head = 0;
+  let tail = 0;
+  const pushIfBg = (p) => {
+    if (!visited[p] && isBg(p)) {
+      visited[p] = 1;
+      queue[tail++] = p;
+    }
+  };
+  for (let x = 0; x < width; x++) {
+    pushIfBg(x);
+    pushIfBg((height - 1) * width + x);
+  }
+  for (let y = 1; y < height - 1; y++) {
+    pushIfBg(y * width);
+    pushIfBg(y * width + width - 1);
+  }
+
+  while (head < tail) {
+    const p = queue[head++];
+    data[p * 4 + 3] = 0;
+    const x = p % width;
+    const y = (p - x) / width;
+    if (x > 0) pushIfBg(p - 1);
+    if (x + 1 < width) pushIfBg(p + 1);
+    if (y > 0) pushIfBg(p - width);
+    if (y + 1 < height) pushIfBg(p + width);
+  }
+
+  // 4. 对紧邻透明区的 1px 过渡抗锯齿亮边做柔和半透明羽化
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const p = y * width + x;
+      if (visited[p]) continue;
+      if (visited[p - 1] || visited[p + 1] || visited[p - width] || visited[p + width]) {
+        const o = p * 4;
+        const lum = (data[o] + data[o + 1] + data[o + 2]) / 3;
+        if (lum >= 220) {
+          data[o + 3] = Math.max(0, Math.min(255, Math.round((255 - lum) * 6.5)));
+        }
+      }
+    }
+  }
+
+  return sharp(data, { raw: { width, height, channels: 4 } })
+    .png({ compressionLevel: 8 })
+    .toBuffer();
 }
 
 export function buildFlatlayExtractionPrompt(itemSpec = {}) {
@@ -140,9 +269,9 @@ export function buildFlatlayExtractionPrompt(itemSpec = {}) {
         : 'garment';
   return [
     `GHOST-MANNEQUIN / E-COMMERCE FLAT-LAY EXTRACTION: Extract ONLY the ${itemType} described as "${nameOrDesc}" from Image 1.`,
-    'STRICT REMOVAL RULES: Completely remove ALL human anatomy (no head, no face, no neck, no hair, no hands, no arms, no legs, no skin), remove all other garments not specified above, and remove the entire original background.',
-    'PRODUCT PRESENTATION: Render ONLY the isolated single item neatly laid flat or on an invisible ghost mannequin, centered with generous clean margin on a pure solid white studio background (#FFFFFF).',
-    'DETAIL FIDELITY: Preserve 100% of the exact color, fabric texture, cut, collar, buttons, zippers, stitching, pattern, and proportions from Image 1; cleanly reconstruct any small area previously occluded by hair or arms.',
+    'STRICT REMOVAL RULES: Completely remove ALL human anatomy (no head, no face, no neck, no hair, no hands, no arms, no legs, no skin), remove all watermarks/text/logos from social media, remove all other garments not specified above, and remove the entire original background.',
+    'PRODUCT PRESENTATION: Render ONLY the isolated single item neatly laid flat or on an invisible ghost mannequin, centered with generous clean margin on a pure transparent or solid pure-white studio background (#FFFFFF).',
+    'DETAIL FIDELITY: Preserve 100% of the exact color, fabric texture, cut, collar, ribbon/bow, buttons, zippers, stitching, pattern, and proportions from Image 1; cleanly reconstruct any small area previously occluded by hair or arms.',
     'Clean high-resolution commercial catalog product photography, soft even shadowless studio lighting, no text, no watermark, no collage, single item only.',
   ].join('\n');
 }
@@ -162,8 +291,8 @@ async function decodeGeneratedToBuffer(rawUrl) {
 }
 
 /**
- * Step 2：把穿搭截图中的指定单品去除人物与背景，重构为纯白底电商平铺商品图。
- * 优先使用 GARMENT_EXTRACT_MODEL（低价轻量编辑模型），未配置时回落 IMAGE_MODEL 的 1024x1024 轻量档。
+ * Step 2：把穿搭截图中的指定单品去除人物与背景，重构为透明背景电商平铺 PNG 商品图。
+ * 优先请求原生 background=transparent，并通过 sharp 边界泛洪去背确保输出真透明通道 PNG。
  */
 export async function extractGarmentFlatlayImage(buffer, mime = 'image/jpeg', itemSpec = {}, deps = {}) {
   const gen = deps.generateImage || imageGenerate;
@@ -176,18 +305,16 @@ export async function extractGarmentFlatlayImage(buffer, mime = 'image/jpeg', it
     referenceImage: refDataUrl,
     model: extractModel,
     inputFidelity: 'low',
+    background: 'transparent',
     skipBeautify: true,
   });
 
   const decoded = await decodeGeneratedToBuffer(rawUrl);
   try {
-    const normalized = await sharp(decoded.buffer)
-      .resize({ width: 1024, height: 1024, fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 90, mozjpeg: true })
-      .toBuffer();
-    return { buffer: normalized, contentType: 'image/jpeg', ext: 'jpg', modelUsed: extractModel || 'default' };
+    const transparentPng = await removeWhiteBackgroundToTransparentPng(decoded.buffer);
+    return { buffer: transparentPng, contentType: 'image/png', ext: 'png', modelUsed: extractModel || 'default', transparent: true };
   } catch {
-    return { buffer: decoded.buffer, contentType: decoded.contentType || 'image/png', ext: 'png', modelUsed: extractModel || 'default' };
+    return { buffer: decoded.buffer, contentType: decoded.contentType || 'image/png', ext: 'png', modelUsed: extractModel || 'default', transparent: false };
   }
 }
 

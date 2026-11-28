@@ -21,6 +21,7 @@ import {
   getActiveWechatBinding,
   saveConversationTurn,
   saveMessage,
+  getAppSetting,
 } from './db.mjs';
 import { recognizeImage, generateImage } from './ai.mjs';
 import { ensureVisualIdentity, buildIdentityPrompt } from './visual_identity.mjs';
@@ -231,6 +232,14 @@ export function buildWardrobePromptBlock(companionId, { maxChars = 240 } = {}) {
         .map(it => `${SLOT_LABELS[it.slot] || it.category}「${it.name}」${it.gifted_by === 'user' ? '(他送的)' : ''}`)
         .join('、');
       lines.push(`今日穿搭：${desc}`);
+      try {
+        const rawNote = getAppSetting(`wardrobe_stylist_note:${companionId}`);
+        if (rawNote) {
+          const parsedNote = JSON.parse(rawNote);
+          const noteText = String(parsedNote?.note || '').trim().slice(0, 56);
+          if (noteText) lines.push(`搭配小心思：${noteText}`);
+        }
+      } catch { /* non-blocking */ }
     }
     if (inTransit.length) {
       const desc = inTransit.map(it => `「${it.name}」`).join('、');
@@ -330,6 +339,57 @@ export async function handleInboundWardrobeTurn({
 } = {}) {
   if (!companion?.id) return null;
   const hasInboundImage = Array.isArray(inboundImages) && inboundImages.length > 0;
+  if (!hasInboundImage) {
+    try {
+      const {
+        detectAutonomousStyleRequest,
+        detectTodayOotdPhotoRequest,
+        decideSuQingOutfitAndPose,
+        getWardrobeStylistNote,
+      } = await import('./wardrobe_stylist.mjs');
+      const autoReq = detectAutonomousStyleRequest(userText);
+      if (autoReq) {
+        const picked = await decideSuQingOutfitAndPose(companion, {
+          occasion: autoReq.occasion,
+          allowPresets: true,
+        });
+        if (picked?.items?.length) {
+          const names = picked.items.map(i => i.name).join(' + ');
+          const poseLbl = picked.pose?.label ? `，拍照姿势选了「${picked.pose.label}」` : '';
+          const noteLine = picked.stylistNote?.note ? `（你的搭配想法：${picked.stylistNote.note}）` : '';
+          return {
+            intent: 'autonomous_style',
+            item: picked.items[0],
+            items: picked.items,
+            poseId: picked.pose?.id || null,
+            stylistNote: picked.stylistNote,
+            shouldSendTryonPhoto: autoReq.wantPhoto,
+            contextNote: `[系统提示：作为衣橱主理人，你刚刚自己挑好了今天的穿搭「${names}」${poseLbl}${noteLine}。用你自己的第一人称自然和他分享你的搭配小心思。]`,
+          };
+        }
+      }
+      const ootdReq = detectTodayOotdPhotoRequest(userText);
+      if (ootdReq) {
+        const wearing = listWardrobeItems(companion.id, { status: 'wearing', limit: 6 }) || [];
+        if (wearing.length) {
+          const stylistNote = getWardrobeStylistNote(companion.id);
+          const names = wearing.map(i => i.name).join(' + ');
+          return {
+            intent: 'today_ootd_photo',
+            item: wearing[0],
+            items: wearing,
+            poseId: stylistNote?.poseId || null,
+            stylistNote,
+            shouldSendTryonPhoto: true,
+            contextNote: `[系统提示：他想看你今天身上这身穿搭「${names}」，系统马上会自动发一张你的今日穿搭照给他，自然聊聊这身穿搭和感受即可，不用口头说回头再拍。]`,
+          };
+        }
+      }
+    } catch (e) {
+      log('warn', `[Wardrobe] autonomous/ootd style turn failed companion=${companion.id}: ${e.message}`);
+    }
+  }
+
   const intent = detectGiftOrTryonIntent(userText, { hasInboundImage });
   if (!intent.kind) return null;
 
