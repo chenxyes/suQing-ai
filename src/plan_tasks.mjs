@@ -57,6 +57,7 @@ import { dispatchUrgentGoodnight, dispatchUrgentMorning } from './proactive.mjs'
 import { runAutonomousSurfTick } from './plugins/surf_engine.mjs';
 import { runAutonomousDouyinTick } from './plugins/publishers/douyin_autonomy.mjs';
 import { runWardrobeDeliveryTick } from './wardrobe.mjs';
+import { runDailyMorningOotdTick } from './wardrobe_stylist.mjs';
 import { buildWeekendWardrobeBoomerangHint, normalizePresenceMode } from './date_mode.mjs';
 
 const TZ = 'Asia/Shanghai';
@@ -80,6 +81,8 @@ async function tick(now = new Date()) {
   await runOnce(parts, 'daily-summary', parts.hour === 0 && parts.minute === 15, () => runDaily(parts.dateKey));
   // 00:30 — 为每个 companion 生成今日日程（消费 open_loops 今日约定 + 昨日日总结）
   await runOnce(parts, 'daily-schedule', parts.hour === 0 && parts.minute === 30, () => runDailySchedules(parts.dateKey, parts.weekdayLabel, parts.weekday));
+  // 07:30 — 衣橱主理人晨间自主选穿搭（结合季节、今日日程与心情自己挑今天要穿的衣服）
+  await runOnce(parts, 'daily-ootd', parts.hour === 7 && parts.minute === 30, () => runDailyMorningOotdTick(now));
   // #324 失忆修：次日 00:30 场景清场（current_scene 是当日态，跨日必清，防"昨天的图书馆"漏到今天）
   await runOnce(parts, 'scene-reset', parts.hour === 0 && parts.minute === 30, () => resetScenesForNewDay());
   // 02:00 — 日总结幂等补跑（若 00:15 已生成则 summaryMemoryExists 自动跳过）

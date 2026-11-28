@@ -8,6 +8,16 @@
 
 ### Added
 
+#### Phase 4-A++ · 真透明背景抠图平铺修复 + 苏晴「衣橱主理人」自主搭配与选姿势
+- **截图抠图透明背景 PNG 修复（`src/garment_extractor.mjs`、`src/providers/custom.mjs`、`src/providers/image.mjs`、`src/providers/vision.mjs`、`public/app/dashboard.html`、`public/app/dashboard.js`）**：
+  - 修复截图识别偶发 Vision 超时（压缩识别图至 768px 并将自定义 Vision 超时放宽至 55s）以及前端默认选中「原图快速入库」导致未触发抠图的问题：现默认选中「✨ 去人去背景透明平铺 PNG（推荐）」，并在超时或提取降级时向界面清晰提示原因、不再静默吞错。
+  - `customImage()` 支持透传 `background=transparent` 与 `output_format=png`（上游不支持时自动平滑重试）；新增 `removeWhiteBackgroundToTransparentPng()` 边界 4-连通泛洪去背与 1px 柔边羽化算法，确保输出真正的 RGBA 透明背景 PNG，同时完整保护服装内部的白色领口与内搭衬衫不被误抠。
+- **苏晴「衣橱主理人」自主穿搭与选姿势（`src/wardrobe_stylist.mjs`、`src/wardrobe.mjs`、`src/bot.mjs`、`src/plan_tasks.mjs`、`src/api.mjs`、`public/app/dashboard.*`、`public/app/playground.html`）**：
+  - 新增 `src/wardrobe_stylist.mjs`：由苏晴结合当前季节、心情、今日日程与衣橱/灵感库藏品，自主决定今天穿什么、如何叠穿、摆什么拍照姿势，并写下第一人称「主理人搭配笔记」。
+  - 接入每日 07:30 晨间自主换装（`plan_tasks.mjs`）、控制台展柜顶栏「👑 让苏晴自己搭」一键入口与今日上身台「主理人搭配笔记」展示，以及微信/网页聊天自然触发（如“今天穿什么你自己决定吧 / 你自己挑一身拍给我看”与“看看你今天穿了什么，拍一张给我”），自动沿用她自选的穿搭与姿势发来 OOTD 照；`buildWardrobePromptBlock()` 同步注入她的今日搭配小心思，且截图提取预览支持行内直接修改单品名称。
+- **中英文 README 重写（`README.md`、`README.en.md`）**：全面同步数字衣橱、主理人自主穿搭、透明背景抠图、可视化姿势库、Cloudflare R2 双模存储、三层虚拟约会与双人合影、极光/暗夜双玻璃主题及完整目录/验证指令，中英功能表行数与发布一致性门禁完全对齐。
+- **回归测试（`scripts/phase4_assets_check.mjs`）**：补充白底转真透明 PNG 边界泛洪不误伤内部白衬衫的像素级断言，以及苏晴自主搭配意图识别与决策落库断言。
+
 #### Phase 4-A+ · Cloudflare R2 云图床 + 截图一键扒同款 + 自定义实图姿势/服装库
 - **零依赖 Cloudflare R2 / 本地双模对象存储（`src/storage.mjs`）**：
   - 基于 Node 原生 `crypto` 实现标准 AWS SigV4（`PUT / GET / DELETE`）S3 协议客户端，自动兼容 `R2_ENDPOINT` 末尾带或不带 `/<bucket>` 的写法，支持 `R2_PUBLIC_URL` 自定义域 CDN 直链（如 `https://assets.charlexys.com`）与后端私密鉴权代理双模式，未配置 R2 时自动回落本地磁盘。

@@ -3678,7 +3678,7 @@ router.post('/companions/:id/gifts', requireAuth, (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 // GET /api/companions/:id/wardrobe
-router.get('/companions/:id/wardrobe', requireAuth, (req, res) => {
+router.get('/companions/:id/wardrobe', requireAuth, async (req, res) => {
   const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
   const c = requireOwnedCompanion(req, res, id); if (!c) return;
   const status = typeof req.query.status === 'string' && req.query.status.trim() ? req.query.status.trim() : null;
@@ -3689,7 +3689,57 @@ router.get('/companions/:id/wardrobe', requireAuth, (req, res) => {
   for (const it of items) {
     if (it.status === 'wearing') activeOutfit[it.slot] = it;
   }
-  return ok(res, { companion_id: id, total: items.length, active_outfit: activeOutfit, items });
+  let stylistNote = null;
+  try {
+    const { getWardrobeStylistNote } = await import('./wardrobe_stylist.mjs');
+    stylistNote = getWardrobeStylistNote(id);
+  } catch { /* non-blocking */ }
+  return ok(res, { companion_id: id, total: items.length, active_outfit: activeOutfit, items, stylist_note: stylistNote });
+});
+
+// POST /api/companions/:id/wardrobe/stylist-pick — 由苏晴作为衣橱主理人自己决定穿搭与姿势，并可选自动拍 OOTD
+router.post('/companions/:id/wardrobe/stylist-pick', requireAuth, async (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c = requireOwnedCompanion(req, res, id); if (!c) return;
+  try {
+    const occasion = typeof req.body?.occasion === 'string' ? req.body.occasion.trim().slice(0, 80) : '';
+    const autoTryon = req.body?.auto_tryon !== false;
+    const allowPresets = req.body?.allow_presets !== false;
+    const { decideSuQingOutfitAndPose } = await import('./wardrobe_stylist.mjs');
+    const picked = await decideSuQingOutfitAndPose(c, { occasion, allowPresets });
+    if (!picked.items?.length) {
+      return err(res, '衣橱和灵感库里还没有可选的衣服呢', 400);
+    }
+
+    let tryonOut = null;
+    let tryonError = null;
+    if (autoTryon) {
+      try {
+        const { generateOutfitTryonImage } = await import('./wardrobe.mjs');
+        tryonOut = await generateOutfitTryonImage(c, picked.items, {
+          primaryItemId: picked.items[0].id,
+          filePrefix: picked.items.length > 1 ? 'outfit' : `tryon_${picked.items[0].id}`,
+          poseId: picked.pose?.id || null,
+        });
+      } catch (e) {
+        tryonError = e.message;
+        log('warn', `[API] stylist-pick tryon failed companion=${id}: ${e.message}`);
+      }
+    }
+
+    return ok(res, {
+      items: picked.items,
+      pose: picked.pose ? { id: picked.pose.id, label: picked.pose.label, tag: picked.pose.tag } : null,
+      stylist_note: picked.stylistNote,
+      tryon_image_url: tryonOut?.fileName
+        ? `/api/companions/${id}/wardrobe/outfit-image/${encodeURIComponent(tryonOut.fileName)}?t=${Date.now()}`
+        : null,
+      tryon_error: tryonError,
+    });
+  } catch (e) {
+    log('error', `[API] stylist-pick failed companion=${id}: ${e.message}`);
+    return err(res, e.message || '自主搭配失败', 500);
+  }
 });
 
 // POST /api/companions/:id/wardrobe
@@ -3945,6 +3995,7 @@ router.post('/wardrobe/catalog/extract-save', requireAuth, async (req, res) => {
 
     const savedPresets = [];
     const savedWardrobeItems = [];
+    const flatlayWarnings = [];
     for (const rawIt of rawItems) {
       const slot = normalizeWardrobeSlot(rawIt.slot, rawIt.category, rawIt.name);
       const spec = {
@@ -3967,10 +4018,11 @@ router.post('/wardrobe/catalog/extract-save', requireAuth, async (req, res) => {
         try {
           const flat = await extractGarmentFlatlayImage(img.buffer, img.mime, spec);
           finalBuf = flat.buffer;
-          finalMime = flat.contentType || 'image/jpeg';
-          finalExt = flat.ext || 'jpg';
+          finalMime = flat.contentType || 'image/png';
+          finalExt = flat.ext || 'png';
         } catch (ex) {
           log('warn', `[API] flatlay 提取降级原图 name=${spec.name}: ${ex.message}`);
+          flatlayWarnings.push(`${spec.name}：${ex.message}`);
           effectiveMode = 'raw';
         }
       }
@@ -4013,8 +4065,8 @@ router.post('/wardrobe/catalog/extract-save', requireAuth, async (req, res) => {
       }
     }
 
-    log('info', `[API] extract-save completed count=${savedPresets.length} mode=${mode} wardrobeAdded=${savedWardrobeItems.length}`);
-    return ok(res, { presets: savedPresets, wardrobeItems: savedWardrobeItems }, 201);
+    log('info', `[API] extract-save completed count=${savedPresets.length} mode=${mode} warnings=${flatlayWarnings.length} wardrobeAdded=${savedWardrobeItems.length}`);
+    return ok(res, { presets: savedPresets, wardrobeItems: savedWardrobeItems, flatlay_warnings: flatlayWarnings }, 201);
   } catch (e) {
     log('error', `[API] extract-save failed: ${e.message}`);
     return err(res, e.message || '提取入库失败', 500);

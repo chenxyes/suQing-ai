@@ -209,7 +209,7 @@ export async function visionRecognize(imageBuffer, mimeType = 'image/jpeg', opts
     : buildVisionPrompt(opts?.mode);
 
   try {
-    if (name === 'custom') return await customVision(imageBuffer, mimeType, { prompt });
+    if (name === 'custom') return await customVision(imageBuffer, mimeType, { prompt, timeoutMs: opts?.timeoutMs || 55_000 });
     return await callVisionWithProvider(name, base64, dataUrl, mimeType, imageBuffer.length, prompt);
   } catch (err) {
     // v1.10.26: 限额类错误 → 自动 fallback 到 VISION_FALLBACK_PROVIDER（默认 minimax）

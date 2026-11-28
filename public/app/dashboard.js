@@ -1709,6 +1709,7 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
   const noteInput = document.getElementById('wardrobe-item-note');
   const addBtn = document.getElementById('btn-wardrobe-add');
   const refreshBtn = document.getElementById('btn-wardrobe-refresh');
+  const suqingPickBtn = document.getElementById('btn-wardrobe-suqing-pick');
   const togglePresetsBtn = document.getElementById('btn-wardrobe-toggle-presets');
   const closePresetsBtn = document.getElementById('btn-wardrobe-close-presets');
   const presetDrawer = document.getElementById('wardrobe-preset-drawer');
@@ -1743,6 +1744,7 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
   let pendingExtractDataUrl = '';
   let detectedExtractItems = [];
   let cachedItems = [];
+  let cachedStylistNote = null;
   let activeShelf = 'all';
   let selectedSoloPoseId = '';
   let activePresetSlot = 'all';
@@ -1969,6 +1971,13 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
             '</span>'
           ).join('') +
         '</div>' +
+        (cachedStylistNote?.note
+          ? '<div class="text-[11px] text-ink/85 bg-white/65 dark:bg-white/10 rounded-xl px-2.5 py-1.5 border border-sakura/25 leading-snug">' +
+              '<span class="font-bold text-sakura-deep">👑 主理人搭配笔记：</span>' +
+              escHtml(cachedStylistNote.note) +
+              (cachedStylistNote.poseLabel ? ' <span class="text-[10px] text-mute">（自选姿势：' + escHtml(cachedStylistNote.poseLabel) + '）</span>' : '') +
+            '</div>'
+          : '') +
       '</div>';
     const imgEl = ootdEl.querySelector('img[data-role="ootd-img"]');
     const thumbBox = ootdEl.querySelector('[data-role="ootd-thumb"]');
@@ -2455,6 +2464,7 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
       const d = await r.json();
       if (!r.ok || !d.ok) throw new Error(d.error || d.message || '加载失败');
       cachedItems = (d.data && d.data.items) || [];
+      cachedStylistNote = (d.data && d.data.stylist_note) || null;
       renderCabinet();
       if (typeof window.__refreshHeroStage === 'function') window.__refreshHeroStage();
     } catch (e) {
@@ -2484,6 +2494,43 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
   });
   closePresetsBtn?.addEventListener('click', () => presetDrawer?.classList.add('hidden'));
   toggleExtractBtn?.addEventListener('click', () => extractBoxEl?.classList.toggle('hidden'));
+
+  // ── 👑 衣橱主理人自主搭配（由苏晴自己决定穿什么、摆什么姿势） ───────────────
+  suqingPickBtn?.addEventListener('click', async () => {
+    if (!companionId) return;
+    suqingPickBtn.disabled = true;
+    const prevTxt = suqingPickBtn.textContent;
+    suqingPickBtn.textContent = '苏晴挑衣服中…';
+    msgEl.textContent = '👑 苏晴正在翻看她的衣橱与灵感库，结合今天的心情、季节与安排自己选穿搭和姿势（含自动试穿约 30-90 秒）…';
+    try {
+      const r = await fetch('/api/companions/' + companionId + '/wardrobe/stylist-pick', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ auto_tryon: true, allow_presets: true }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) throw new Error(d.error || d.message || ('HTTP ' + r.status));
+      const pickedItems = d.data?.items || [];
+      const pose = d.data?.pose || null;
+      const note = d.data?.stylist_note?.note || '';
+      if (pose?.id) {
+        selectedSoloPoseId = pose.id;
+        renderSoloPoseBar();
+      }
+      if (pickedItems[0]?.id && d.data?.tryon_image_url) {
+        cellViewMode.set(pickedItems[0].id, 'tryon');
+      }
+      const names = pickedItems.map(i => i.name).join(' + ');
+      msgEl.textContent = '👑 苏晴选好了「' + names + '」' + (pose?.label ? ' · 姿势「' + pose.label + '」' : '') + (note ? ' — “' + note + '”' : '') + (d.data?.tryon_error ? '（试穿生图失败：' + d.data.tryon_error + '）' : '');
+      activeShelf = 'all';
+      await loadWardrobe();
+    } catch (e) {
+      msgEl.textContent = '苏晴自主搭配失败：' + e.message;
+    } finally {
+      suqingPickBtn.disabled = false;
+      suqingPickBtn.textContent = prevTxt;
+    }
+  });
 
   // ── 上传自定义单人姿势参考图 ────────────────────────────────────────────────
   soloPoseUploadInput?.addEventListener('change', async () => {
@@ -2530,17 +2577,21 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
       detectedExtractItems = Array.isArray(d.data?.items) ? d.data.items : [];
       if (extractItemsListEl) {
         extractItemsListEl.innerHTML = detectedExtractItems.map((it, idx) =>
-          '<label class="flex items-center gap-2 rounded-xl border border-line bg-white/80 dark:bg-white/10 px-2.5 py-1.5 cursor-pointer">' +
-            '<input type="checkbox" data-ex-idx="' + idx + '" checked />' +
+          '<div class="flex items-center gap-2 rounded-xl border border-line bg-white/80 dark:bg-white/10 px-2.5 py-1.5">' +
+            '<input type="checkbox" data-ex-idx="' + idx + '" checked class="cursor-pointer" />' +
             '<span class="w-3 h-3 rounded-full shrink-0 border border-black/15" style="background:' + escHtml(it.swatch || '#F5D8E6') + '"></span>' +
-            '<span class="text-[11px] font-semibold text-ink truncate flex-1">' + escHtml((SLOT_EMOJI[it.slot] || '👗') + ' ' + it.name) + '</span>' +
+            '<span class="text-[11px] shrink-0">' + escHtml(SLOT_EMOJI[it.slot] || '👗') + '</span>' +
+            '<input type="text" data-ex-name="' + idx + '" value="' + escHtml(it.name) + '" maxlength="40" title="可自由修改单品名称" class="text-[11px] font-semibold text-ink bg-transparent border-b border-transparent focus:border-sakura-deep focus:outline-none flex-1 min-w-0" />' +
             '<span class="text-[10px] text-mute shrink-0">' + escHtml(SLOT_TEXT[it.slot] || it.category) + '</span>' +
-          '</label>'
+          '</div>'
         ).join('');
       }
       extractPreviewWrap?.classList.remove('hidden');
+      const hadFallback = detectedExtractItems.some(x => x.visionFallback);
       if (extractStatusMsg) {
-        extractStatusMsg.textContent = '✓ 已识别 ' + detectedExtractItems.length + ' 件单品！勾选想扒的单品，选择「原图直存」或「去人去背景平铺图」入库：';
+        extractStatusMsg.textContent = hadFallback
+          ? '⚠️ 视觉识别暂时超时，已按整套穿搭预选；直接保持勾选「✨ 去人去背景透明平铺 PNG」点击提取即可自动抠出无人透明服装图！'
+          : '✓ 已识别 ' + detectedExtractItems.length + ' 件单品！勾选想扒的单品并点击下方提取（默认去除人物与背景生成透明平铺 PNG）：';
       }
     } catch (e) {
       pendingExtractDataUrl = '';
@@ -2560,7 +2611,11 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
       if (extractStatusMsg) extractStatusMsg.textContent = '请至少勾选一件要提取的单品';
       return;
     }
-    const chosenItems = checkedIndices.map(i => detectedExtractItems[i]);
+    const chosenItems = checkedIndices.map(i => {
+      const base = detectedExtractItems[i];
+      const editedName = (extractItemsListEl?.querySelector('input[data-ex-name="' + i + '"]')?.value || '').trim();
+      return editedName ? { ...base, name: editedName } : base;
+    });
     const mode = document.querySelector('input[name="extract-mode"]:checked')?.value === 'flatlay' ? 'flatlay' : 'raw';
     const alsoWear = Boolean(extractAlsoWearEl?.checked && companionId);
 
@@ -2587,13 +2642,16 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
       const d = await r.json().catch(() => ({}));
       if (!r.ok || !d.ok) throw new Error(d.error || d.message || ('HTTP ' + r.status));
       const cnt = (d.data?.presets || []).length;
+      const warnList = Array.isArray(d.data?.flatlay_warnings) ? d.data.flatlay_warnings : [];
       pendingExtractDataUrl = '';
       detectedExtractItems = [];
       extractPreviewWrap?.classList.add('hidden');
       extractBoxEl?.classList.add('hidden');
       await window.__loadPoseOutfitCatalog(true);
       renderPresetDrawer();
-      msgEl.textContent = '✓ 已成功提取并入库 ' + cnt + ' 件单品到精选服装库' + (alsoWear ? '，并同步为苏晴换上！' : '！');
+      msgEl.textContent = warnList.length
+        ? '⚠️ 已入库 ' + cnt + ' 件，但透明平铺图提取失败已回落原图（' + warnList.join('；') + '）'
+        : '✓ 已成功提取并入库 ' + cnt + ' 件' + (mode === 'flatlay' ? '透明背景平铺单品' : '单品') + '到精选服装库' + (alsoWear ? '，并同步为苏晴换上！' : '！');
       if (alsoWear) await loadWardrobe();
     } catch (e) {
       if (extractStatusMsg) extractStatusMsg.textContent = '提取入库失败：' + e.message;

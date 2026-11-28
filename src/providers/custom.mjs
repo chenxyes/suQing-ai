@@ -149,7 +149,7 @@ export async function customImage(prompt, size = '1024x1024', optionsOrRef = {})
   if (refs.length > 0 && editEnabled) {
     const blobs = refs.map((r, i) => dataUrlToBlob(r, `ref_${i + 1}.png`)).filter(Boolean);
     if (blobs.length > 0) {
-      const tryEdit = async (withHighFidelity) => {
+      const tryEdit = async ({ withHighFidelity = false, withTransparent = false } = {}) => {
         const editResp = await post('image', '/images/edits', c => {
           const form = new FormData();
           form.append('model', options.model || c.model);
@@ -157,6 +157,10 @@ export async function customImage(prompt, size = '1024x1024', optionsOrRef = {})
           form.append('size', size);
           form.append('n', '1');
           if (withHighFidelity) form.append('input_fidelity', 'high');
+          if (withTransparent) {
+            form.append('background', 'transparent');
+            form.append('output_format', 'png');
+          }
           const fieldName = blobs.length > 1 ? 'image[]' : 'image';
           for (const item of blobs) form.append(fieldName, item.blob, item.filename);
           return form;
@@ -166,14 +170,15 @@ export async function customImage(prompt, size = '1024x1024', optionsOrRef = {})
       const wantFidelity = options.inputFidelity
         ? options.inputFidelity === 'high'
         : String(process.env.IMAGE_EDIT_FIDELITY || 'high').toLowerCase() === 'high';
+      const wantTransparent = options.background === 'transparent';
       try {
-        const editUrl = await tryEdit(wantFidelity);
+        const editUrl = await tryEdit({ withHighFidelity: wantFidelity, withTransparent: wantTransparent });
         if (editUrl) return editUrl;
       } catch (err) {
-        if (wantFidelity) {
+        if (wantFidelity || wantTransparent) {
           try {
-            log('info', `[image] custom /images/edits(input_fidelity=high) 未被上游接受(${err.message.slice(0, 90)})，重试标准 /images/edits`);
-            const retryUrl = await tryEdit(false);
+            log('info', `[image] custom /images/edits 扩展参数未被上游接受(${err.message.slice(0, 90)})，重试标准 /images/edits`);
+            const retryUrl = await tryEdit({ withHighFidelity: false, withTransparent: false });
             if (retryUrl) return retryUrl;
           } catch (retryErr) {
             log('warn', `[image] custom /images/edits 不可用(${retryErr.message.slice(0, 120)})，降级 /images/generations`);

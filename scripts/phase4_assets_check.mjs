@@ -178,8 +178,78 @@ try {
   assert.equal(capturedGenOpts.model, 'gpt-image-1-mini', '配置 GARMENT_EXTRACT_MODEL 后应优先走低价独立模型');
   assert.equal(capturedGenOpts.size, '1024x1024', '平铺提取应使用 1024x1024 轻量尺寸');
   assert.equal(capturedGenOpts.inputFidelity, 'low', '平铺提取应使用低成本档');
+  assert.equal(capturedGenOpts.background, 'transparent', '平铺提取应优先请求原生透明背景');
   assert.equal(capturedGenOpts.skipBeautify, true, '纯白底平铺商品图应跳过人像美颜滤镜');
   assert.ok(flatOut.buffer.length > 0);
+
+  // ── 4b. 边界泛洪白底转真透明 PNG 校验（外部纯白变透明，内部白衬衫保持不透明）─
+  const sharp = (await import('sharp')).default;
+  const w = 32; const h = 32;
+  const rawImg = Buffer.alloc(w * h * 3, 255); // 全白背景
+  // 中央画一个深色边框包围的白衬衫区域（模拟海军领黑西装 + 白内搭）
+  for (let y = 8; y < 24; y++) {
+    for (let x = 8; x < 24; x++) {
+      const isBorder = y <= 10 || y >= 21 || x <= 10 || x >= 21;
+      const o = (y * w + x) * 3;
+      if (isBorder) { rawImg[o] = 25; rawImg[o + 1] = 35; rawImg[o + 2] = 60; }
+      else { rawImg[o] = 255; rawImg[o + 1] = 255; rawImg[o + 2] = 255; } // 内部白色衬衫
+    }
+  }
+  const syntheticWhitePng = await sharp(rawImg, { raw: { width: w, height: h, channels: 3 } }).png().toBuffer();
+  const transparentOut = await extractor.removeWhiteBackgroundToTransparentPng(syntheticWhitePng);
+  const { data: outRgba } = await sharp(transparentOut).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  assert.equal(outRgba[3], 0, '左上角纯白背景像素必须被抠成 alpha=0 透明');
+  const centerIdx = (16 * w + 16) * 4;
+  assert.equal(outRgba[centerIdx + 3], 255, '被深色衣领包围的内部白色衬衫必须保持完全不透明');
+
+  // ── 4c. 衣橱主理人自主搭配（SuQing Stylist Autonomy）校验 ──────────────────
+  const stylist = await import('../src/wardrobe_stylist.mjs');
+  assert.equal(stylist.detectAutonomousStyleRequest('今天穿什么你自己决定吧，拍一张给我看')?.wantPhoto, true);
+  assert.equal(stylist.detectAutonomousStyleRequest('你自己挑一身喜欢的穿搭')?.kind, 'autonomous_style');
+  assert.equal(stylist.detectAutonomousStyleRequest('今天天气不错'), null);
+
+  db.pragma('foreign_keys = OFF');
+  db.prepare("INSERT INTO users (id, wechat_user_id) VALUES (99, 'wx_stylist_test')").run();
+  db.prepare("INSERT INTO companions (id, user_id, bot_id, name, current_mood) VALUES (99, 99, 'bot99', '苏晴', '开心')").run();
+  const comp99 = database.getCompanionById(99);
+  const ownedA = database.createWardrobeItem({
+    companionId: 99, slot: 'top', category: '上衣', name: '白衬衫', visualPrompt: 'white shirt', status: 'wearing',
+  });
+  const ownedB = database.createWardrobeItem({
+    companionId: 99, slot: 'outerwear', category: '外套', name: '奶白开衫', visualPrompt: 'cream cardigan', status: 'owned',
+  });
+  const ownedC = database.createWardrobeItem({
+    companionId: 99, slot: 'bottom_or_dress', category: '裙子', name: '藏青百褶裙', visualPrompt: 'navy pleated skirt', status: 'owned',
+  });
+  const picked = await stylist.decideSuQingOutfitAndPose(comp99, { occasion: '校园日常' }, {
+    extractJson: async () => JSON.stringify({
+      source: 'wardrobe',
+      wardrobe_ids: [ownedB.id, ownedC.id],
+      preset_id: '',
+      pose_id: 'mirror_peace',
+      stylist_note: '今天想走温柔学院风，自己把奶白开衫和藏青百褶裙搭一块啦～',
+    }),
+  });
+  assert.equal(picked.items.length, 2, '苏晴应自主选中 2 件叠穿');
+  assert.equal(picked.pose?.id, 'mirror_peace', '苏晴应自主选定拍照姿势');
+  assert.equal(database.getWardrobeItem(99, ownedA.id).status, 'owned', '自主换装应自动脱下旧穿搭');
+  assert.equal(database.getWardrobeItem(99, ownedB.id).status, 'wearing');
+  assert.equal(database.getWardrobeItem(99, ownedC.id).status, 'wearing');
+  assert.ok(stylist.getWardrobeStylistNote(99)?.note.includes('温柔学院风'), '应持久化主理人搭配笔记');
+  assert.ok(!JSON.stringify(picked).includes('用户'), '主理人搭配输出严禁包含禁用称谓');
+
+  // 验证主理人搭配笔记写入常驻衣橱 Prompt，且“看看今天穿了什么拍张照”触发 today_ootd_photo 并带自选姿势
+  const promptBlock = wardrobe.buildWardrobePromptBlock(99);
+  assert.ok(promptBlock.includes('搭配小心思：') && promptBlock.includes('温柔学院风'), '常驻衣橱 Prompt 应包含苏晴的今日搭配小心思');
+  assert.ok(stylist.detectTodayOotdPhotoRequest('看看你今天穿了什么，拍一张给我')?.kind === 'today_ootd_photo');
+  const ootdTurn = await wardrobe.handleInboundWardrobeTurn({
+    companion: comp99,
+    userText: '拍张今日穿搭给我看看呗',
+    inboundImages: [],
+  });
+  assert.equal(ootdTurn?.intent, 'today_ootd_photo');
+  assert.equal(ootdTurn?.shouldSendTryonPhoto, true);
+  assert.equal(ootdTurn?.poseId, 'mirror_peace', '今日穿搭拍照应自动沿用苏晴自己选定的姿势');
 
   // ── 5. 实图姿势参考编号绑定与防串脸校验 ─────────────────────────────────────
   const soloPoseRefPrompt = wardrobe.buildLayeredTryonPrompt({
