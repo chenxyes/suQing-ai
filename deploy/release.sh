@@ -65,6 +65,40 @@ trap finish EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+backup_state() {
+  local ts backup_root backup_dir old_dir
+  ts=$(date -u +%Y%m%dT%H%M%SZ)
+  backup_root="$project_dir/.release/backups"
+  backup_dir="$backup_root/${ts}-$$"
+  (
+    umask 077
+    mkdir -p "$backup_dir"
+    if [[ -f "$project_dir/data/bot.db" ]]; then
+      if command -v sqlite3 >/dev/null 2>&1 && sqlite3 "$project_dir/data/bot.db" ".backup '$backup_dir/bot.db'" 2>/dev/null; then
+        :
+      else
+        cp -p "$project_dir/data/bot.db" "$backup_dir/bot.db"
+        [[ -f "$project_dir/data/bot.db-wal" ]] && cp -p "$project_dir/data/bot.db-wal" "$backup_dir/bot.db-wal"
+        [[ -f "$project_dir/data/bot.db-shm" ]] && cp -p "$project_dir/data/bot.db-shm" "$backup_dir/bot.db-shm"
+      fi
+    fi
+    [[ -f "$project_dir/.env" ]] && cp -p "$project_dir/.env" "$backup_dir/.env"
+    [[ -f "$project_dir/docker-compose.yml" ]] && cp -p "$project_dir/docker-compose.yml" "$backup_dir/docker-compose.yml"
+    printf '%s\n' "$old_image" > "$backup_dir/previous-image-id"
+    printf '%s\n' "$rollback_image" > "$backup_dir/rollback-image-tag"
+    printf '%s\n' "$backup_dir" > "$project_dir/.release/last-backup"
+  )
+  # Retain latest 5 backups to prevent unbounded disk growth
+  local count=0
+  for old_dir in $(ls -1dt "$backup_root"/*/ 2>/dev/null || true); do
+    count=$((count + 1))
+    if (( count > 5 )); then
+      rm -rf "$old_dir"
+    fi
+  done
+  echo "Pre-release backup saved to $backup_dir"
+}
+
 docker compose version >/dev/null
 "${compose[@]}" config --quiet
 existing=$("${compose[@]}" ps -q xiyu-ai)
@@ -80,6 +114,7 @@ rollback_image="xiyu-release-rollback:$(date +%s)-$$"
 docker image tag "$old_image" "$rollback_image"
 # Pull before replacing any running service; registry login is an operator prerequisite.
 docker pull "$candidate"
+backup_state
 mutated=1
 "${compose[@]}" up -d --no-deps --no-build --pull never xiyu-ai
 if ! healthy; then echo 'Candidate did not become healthy' >&2; exit 1; fi
