@@ -5511,14 +5511,16 @@ export function startApiServer() {
     app.set('trust proxy', process.env.TRUST_PROXY === 'true' ? 'loopback' : process.env.TRUST_PROXY);
   }
 
-  // Full memory migrations may exceed the ordinary chat/config body size.
-  // Authenticate before allocating the larger import body; the default stays bounded.
-  app.post('/api/companions/import', requireAuth, express.json({ limit: MAX_IMPORT_BYTES }));
+  // Image/media upload endpoints require 10mb JSON bodies before the global 2mb limit.
   app.post('/api/companions/:id/wardrobe', requireAuth, express.json({ limit: '10mb' }));
   app.post('/api/companions/:id/visual-identity/upload-reference', requireAuth, express.json({ limit: '10mb' }));
   app.post('/api/companions/:id/user-visual-reference', requireAuth, express.json({ limit: '10mb' }));
   app.post('/api/companions/:id/date-mode/cyber-photo', requireAuth, express.json({ limit: '10mb' }));
   app.post('/api/companions/:id/playground-chat', requireAuth, express.json({ limit: '10mb' }));
+
+  // Full memory migrations may exceed the ordinary chat/config body size.
+  // Authenticate before allocating the larger import body; the default stays bounded.
+  app.post('/api/companions/import', requireAuth, express.json({ limit: MAX_IMPORT_BYTES }));
   app.use(express.json({ limit: '2mb' }));
   app.use(express.urlencoded({ extended: false, limit: '2mb' }));   // 支付宝异步通知用 form 编码
   app.use((req, _res, next) => { log('debug', `[API] ${req.method} ${req.path}`); next(); });
