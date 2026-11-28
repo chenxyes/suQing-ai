@@ -1692,6 +1692,1014 @@ document.getElementById('silent-orb')?.addEventListener('keydown', (e) => {
 });
 
 // ─── 控制台 5 分区原生 Tab + 手风琴折叠交互（全部原地切换，不割裂跳页） ──────
+// ─── 数字衣橱 · 精品玻璃展示柜（Tab 3） ────────────────────────────────────────
+(function initWardrobePanel() {
+  const refInput = document.getElementById('input-upload-ref-portrait');
+  const refStatus = document.getElementById('wardrobe-ref-status');
+  const refDot = document.getElementById('wardrobe-ref-dot');
+  const subEl = document.getElementById('acc-sub-wardrobe');
+  const drawer = document.getElementById('wardrobe-add-drawer');
+  const toggleAddBtn = document.getElementById('btn-wardrobe-toggle-add');
+  const closeAddBtn = document.getElementById('btn-wardrobe-close-add');
+  const fileInput = document.getElementById('wardrobe-file-input');
+  const fileNameEl = document.getElementById('wardrobe-file-name');
+  const nameInput = document.getElementById('wardrobe-item-name');
+  const slotSelect = document.getElementById('wardrobe-item-slot');
+  const statusSelect = document.getElementById('wardrobe-item-status');
+  const noteInput = document.getElementById('wardrobe-item-note');
+  const addBtn = document.getElementById('btn-wardrobe-add');
+  const refreshBtn = document.getElementById('btn-wardrobe-refresh');
+  const msgEl = document.getElementById('wardrobe-status-msg');
+  const ootdEl = document.getElementById('wardrobe-ootd-stage');
+  const shelfBarEl = document.getElementById('wardrobe-shelf-bar');
+  const listEl = document.getElementById('wardrobe-list');
+  const lightboxEl = document.getElementById('wardrobe-lightbox');
+  const lbImg = document.getElementById('wardrobe-lb-img');
+  const lbTitle = document.getElementById('wardrobe-lb-title');
+  const lbMeta = document.getElementById('wardrobe-lb-meta');
+  const lbTabs = document.getElementById('wardrobe-lb-tabs');
+  const lbClose = document.getElementById('wardrobe-lb-close');
+  if (!listEl) return;
+
+  let pendingImageDataUrl = '';
+  let cachedItems = [];
+  let activeShelf = 'all';
+  const blobUrlCache = new Map();
+  const cellViewMode = new Map(); // itemId -> 'tryon' | 'source'
+
+  const escHtml = s => String(s ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+  const STATUS_TEXT = {
+    wearing: '✨ 在穿',
+    in_transit: '📦 在途',
+    owned: '💎 珍藏',
+    tryon_only: '🪞 试穿',
+    archived: '已收起',
+  };
+  const SLOT_TEXT = {
+    outerwear: '外套',
+    top: '上衣',
+    bottom_or_dress: '裙装/下装',
+    shoes: '鞋袜',
+    bag: '包包',
+    accessory: '配饰',
+  };
+  const SLOT_EMOJI = {
+    outerwear: '🧥',
+    top: '👚',
+    bottom_or_dress: '👗',
+    shoes: '👟',
+    bag: '👜',
+    accessory: '🎀',
+  };
+  const SHELVES = [
+    { key: 'all', label: '全部藏品', match: () => true },
+    { key: 'wearing', label: '✨ 今日在穿', match: it => it.status === 'wearing' },
+    { key: 'tops', label: '🧥 上衣外套', match: it => it.slot === 'top' || it.slot === 'outerwear' },
+    { key: 'dress', label: '👗 裙装下装', match: it => it.slot === 'bottom_or_dress' },
+    { key: 'shoes', label: '👟 鞋袜', match: it => it.slot === 'shoes' },
+    { key: 'bag', label: '👜 包包', match: it => it.slot === 'bag' },
+    { key: 'accessory', label: '🎀 配饰', match: it => it.slot === 'accessory' },
+    { key: 'transit', label: '📦 快递在途', match: it => it.status === 'in_transit' },
+  ];
+
+  function fileToCompressedDataUrl(file, maxEdge = 1280) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('读取图片失败'));
+      reader.onload = () => {
+        const img = new Image();
+        img.onerror = () => resolve(String(reader.result || ''));
+        img.onload = () => {
+          const scale = Math.min(1, maxEdge / Math.max(img.width || 1, img.height || 1));
+          const w = Math.max(1, Math.round(img.width * scale));
+          const h = Math.max(1, Math.round(img.height * scale));
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+          resolve(canvas.toDataURL('image/jpeg', 0.88));
+        };
+        img.src = String(reader.result || '');
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function fetchAuthedBlobUrl(url) {
+    if (!url) return '';
+    if (blobUrlCache.has(url)) return blobUrlCache.get(url);
+    try {
+      const r = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
+      if (!r.ok) return '';
+      const blob = await r.blob();
+      if (blob.size < 64) return '';
+      const objUrl = URL.createObjectURL(blob);
+      blobUrlCache.set(url, objUrl);
+      return objUrl;
+    } catch {
+      return '';
+    }
+  }
+
+  function itemImageUrl(it, kind) {
+    if (kind === 'tryon' && it.tryon_image_path) {
+      return '/api/companions/' + companionId + '/wardrobe/' + it.id + '/image?kind=tryon&t=' + encodeURIComponent(it.updated_at || '');
+    }
+    if (kind === 'source' && it.source_image_path) {
+      return '/api/companions/' + companionId + '/wardrobe/' + it.id + '/image?kind=source';
+    }
+    return '';
+  }
+
+  async function openLightbox(it, initialKind) {
+    if (!lightboxEl || !lbImg) return;
+    const hasTryon = !!it.tryon_image_path;
+    const hasSource = !!it.source_image_path;
+    let activeKind = initialKind || (hasTryon ? 'tryon' : 'source');
+    if (activeKind === 'tryon' && !hasTryon) activeKind = 'source';
+    if (activeKind === 'source' && !hasSource) activeKind = 'tryon';
+
+    lbTitle.textContent = it.name;
+    lbMeta.textContent = [
+      SLOT_TEXT[it.slot] || it.category,
+      it.color,
+      '穿戴 ' + Number(it.wear_count || 0) + ' 次',
+      it.gifted_note ? '· ' + it.gifted_note : '',
+    ].filter(Boolean).join(' · ');
+
+    async function showKind(kind) {
+      const url = itemImageUrl(it, kind);
+      const blobUrl = await fetchAuthedBlobUrl(url);
+      if (blobUrl) lbImg.src = blobUrl;
+      Array.from(lbTabs.querySelectorAll('button')).forEach(b => {
+        const on = b.dataset.kind === kind;
+        b.className = on
+          ? 'text-[11px] font-semibold px-3 py-1 rounded-full bg-sakura-deep text-white'
+          : 'text-[11px] font-semibold px-3 py-1 rounded-full bg-white/10 text-white/80 hover:bg-white/20';
+      });
+    }
+
+    lbTabs.innerHTML = '';
+    if (hasTryon) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.dataset.kind = 'tryon';
+      btn.textContent = '✨ 试穿照';
+      btn.addEventListener('click', () => showKind('tryon'));
+      lbTabs.appendChild(btn);
+    }
+    if (hasSource) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.dataset.kind = 'source';
+      btn.textContent = '🛍️ 原图';
+      btn.addEventListener('click', () => showKind('source'));
+      lbTabs.appendChild(btn);
+    }
+
+    lightboxEl.classList.remove('hidden');
+    await showKind(activeKind);
+  }
+
+  lbClose?.addEventListener('click', () => lightboxEl?.classList.add('hidden'));
+  lightboxEl?.addEventListener('click', (e) => { if (e.target === lightboxEl) lightboxEl.classList.add('hidden'); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && lightboxEl && !lightboxEl.classList.contains('hidden')) {
+      lightboxEl.classList.add('hidden');
+    }
+  });
+
+  async function loadRefStatus() {
+    if (!companionId || !refStatus) return;
+    try {
+      const r = await fetch('/api/companions/' + companionId + '/visual-identity/status', {
+        headers: { Authorization: 'Bearer ' + token },
+      });
+      const d = await r.json();
+      if (r.ok && d.ok && d.data) {
+        refDot?.classList.toggle('is-locked', !!d.data.locked);
+        refStatus.textContent = d.data.locked
+          ? '已锁脸（' + d.data.reference_count + ' 张定妆照）'
+          : '未上传人物定妆参考图';
+      }
+    } catch { /* ignore */ }
+  }
+
+  function renderOotdStage(items) {
+    if (!ootdEl) return;
+    const wearing = items.filter(it => it.status === 'wearing');
+    if (!wearing.length) {
+      ootdEl.classList.add('hidden');
+      ootdEl.innerHTML = '';
+      return;
+    }
+    const hero = wearing.find(it => it.tryon_image_path) || wearing.find(it => it.source_image_path) || wearing[0];
+    const heroKind = hero.tryon_image_path ? 'tryon' : 'source';
+    ootdEl.classList.remove('hidden');
+    ootdEl.innerHTML =
+      '<div class="wardrobe-ootd-thumb" data-role="ootd-thumb">' +
+        '<img data-role="ootd-img" class="hidden" alt="今日上身" />' +
+      '</div>' +
+      '<div class="min-w-0 flex-1 space-y-1.5">' +
+        '<div class="flex items-center justify-between gap-2 flex-wrap">' +
+          '<div class="flex items-center gap-1.5">' +
+            '<span class="text-[11px] font-bold text-sakura-deep">✨ 今日上身展示台</span>' +
+            '<span class="text-[10.5px] text-mute">共 ' + wearing.length + ' 件（不同部位可自由叠穿）</span>' +
+          '</div>' +
+          '<button type="button" data-act="outfit-tryon" class="text-[11px] font-semibold text-white bg-gradient-to-r from-sakura to-sakura-deep rounded-full px-3 py-1 hover:shadow-sakura transition-all">' +
+            (wearing.length > 1 ? '✨ 拍整套叠穿大片' : '📸 拍今日穿搭照') +
+          '</button>' +
+        '</div>' +
+        '<div class="flex flex-wrap gap-1.5">' +
+          wearing.map(it =>
+            '<span class="text-[11px] font-medium px-2 py-0.5 rounded-full bg-white/85 border border-sakura/35 text-ink">' +
+              escHtml((SLOT_EMOJI[it.slot] || '👗') + ' ' + (SLOT_TEXT[it.slot] || it.category) + ' · ' + it.name) +
+            '</span>'
+          ).join('') +
+        '</div>' +
+      '</div>';
+    const imgEl = ootdEl.querySelector('img[data-role="ootd-img"]');
+    const thumbBox = ootdEl.querySelector('[data-role="ootd-thumb"]');
+    const heroUrl = itemImageUrl(hero, heroKind);
+    if (imgEl && heroUrl) {
+      fetchAuthedBlobUrl(heroUrl).then(blobUrl => {
+        if (blobUrl) { imgEl.src = blobUrl; imgEl.classList.remove('hidden'); }
+      });
+      thumbBox?.addEventListener('click', () => openLightbox(hero, heroKind));
+    }
+    ootdEl.querySelector('[data-act="outfit-tryon"]')?.addEventListener('click', async (ev) => {
+      const btn = ev.currentTarget;
+      btn.disabled = true;
+      btn.textContent = '合拍中…';
+      msgEl.textContent = '正在锁定人物定妆照并合成「' + wearing.map(i => i.name).join(' + ') + '」叠穿大片（约 30-90 秒）…';
+      try {
+        const resp = await fetch('/api/companions/' + companionId + '/wardrobe/outfit-tryon', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ item_ids: wearing.map(i => i.id) }),
+        });
+        const out = await resp.json().catch(() => ({}));
+        if (!resp.ok || !out.ok) throw new Error(out.error || out.message || ('HTTP ' + resp.status));
+        cellViewMode.set(wearing[0].id, 'tryon');
+        msgEl.textContent = '✓ 整套叠穿大片已生成并上架展柜！';
+        await loadWardrobe();
+      } catch (e) {
+        msgEl.textContent = '叠穿合拍失败：' + e.message;
+        btn.disabled = false;
+        btn.textContent = wearing.length > 1 ? '✨ 拍整套叠穿大片' : '📸 拍今日穿搭照';
+      }
+    });
+  }
+
+  function renderShelfBar(items) {
+    if (!shelfBarEl) return;
+    shelfBarEl.innerHTML = '';
+    for (const shelf of SHELVES) {
+      const count = items.filter(shelf.match).length;
+      if (shelf.key !== 'all' && count === 0) continue;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'wardrobe-shelf-tab' + (activeShelf === shelf.key ? ' active' : '');
+      btn.textContent = shelf.label + ' ' + count;
+      btn.addEventListener('click', () => {
+        activeShelf = shelf.key;
+        renderCabinet();
+      });
+      shelfBarEl.appendChild(btn);
+    }
+  }
+
+  function renderCabinet() {
+    const items = cachedItems;
+    if (subEl) {
+      const wearingCount = items.filter(it => it.status === 'wearing').length;
+      subEl.textContent = items.length
+        ? '已珍藏 ' + items.length + ' 件藏品 · 今日在穿 ' + wearingCount + ' 件'
+        : '精品玻璃陈列柜 · 衣服/包包/鞋子收藏与试穿买家秀';
+    }
+    renderOotdStage(items);
+    renderShelfBar(items);
+
+    const shelfDef = SHELVES.find(s => s.key === activeShelf) || SHELVES[0];
+    const visible = items.filter(shelfDef.match);
+    listEl.innerHTML = '';
+
+    if (!visible.length) {
+      const empty = document.createElement('div');
+      empty.className = 'wardrobe-empty-slot';
+      empty.innerHTML = items.length
+        ? '<p>这层展架暂时空着，换个分类看看或放一件新礼物进来～</p>'
+        : '<div class="text-[24px] mb-1">🪞</div><p class="font-semibold text-ink mb-1">展示柜还是空的</p><p>点击右上角「＋ 放入新礼物」，把衣服、包包或鞋子摆进玻璃柜吧～</p>';
+      listEl.appendChild(empty);
+      return;
+    }
+
+    for (const it of visible) {
+      const hasTryon = !!it.tryon_image_path;
+      const hasSource = !!it.source_image_path;
+      const defaultMode = hasTryon ? 'tryon' : 'source';
+      const curMode = cellViewMode.get(it.id) || defaultMode;
+      const otherMode = curMode === 'tryon' ? 'source' : 'tryon';
+      const canSwap = hasTryon && hasSource;
+
+      const cell = document.createElement('div');
+      cell.className = 'wardrobe-cell' + (it.status === 'wearing' ? ' is-wearing' : '');
+      const statusCls = it.status === 'wearing'
+        ? 'is-wearing'
+        : it.status === 'in_transit' ? 'is-transit' : 'is-owned';
+      const modeTag = curMode === 'tryon' && hasTryon
+        ? '试穿照'
+        : hasSource ? '商品图' : '';
+
+      cell.innerHTML =
+        '<div class="wardrobe-stage">' +
+          '<span class="wardrobe-status-pill ' + statusCls + '">' + escHtml(STATUS_TEXT[it.status] || it.status) + '</span>' +
+          (modeTag ? '<span class="wardrobe-mode-tag">' + modeTag + '</span>' : '') +
+          '<img data-role="main-img" class="wardrobe-stage-img hidden" alt="' + escHtml(it.name) + '" />' +
+          '<div data-role="placeholder" class="wardrobe-stage-placeholder">' +
+            '<span class="text-[28px]">' + (SLOT_EMOJI[it.slot] || '👗') + '</span>' +
+            '<span>' + (hasTryon || hasSource ? '展灯加载中…' : '暂无图片') + '</span>' +
+          '</div>' +
+          (canSwap
+            ? '<button type="button" data-act="swap" class="wardrobe-swap-pip" title="切换查看' + (otherMode === 'source' ? '原商品图' : '试穿照') + '">' +
+                '<img data-role="pip-img" alt="切换对比" />' +
+              '</button>'
+            : '') +
+        '</div>' +
+        '<div class="wardrobe-plaque">' +
+          '<div class="wardrobe-plaque-title" title="' + escHtml(it.name) + '">' + escHtml(it.name) + '</div>' +
+          '<div class="wardrobe-plaque-meta flex items-center justify-between gap-1">' +
+            '<select data-act="slot" title="调整部位（不同部位可自由叠穿）" class="bg-transparent text-[10.5px] text-mute hover:text-sakura-deep focus:outline-none cursor-pointer max-w-[92px]">' +
+              Object.entries(SLOT_TEXT).map(([k, lbl]) =>
+                '<option value="' + k + '"' + (it.slot === k ? ' selected' : '') + '>' + (SLOT_EMOJI[k] || '') + ' ' + lbl + '</option>'
+              ).join('') +
+            '</select>' +
+            '<span class="shrink-0">穿 ' + Number(it.wear_count || 0) + ' 次</span>' +
+          '</div>' +
+          '<div class="wardrobe-plaque-actions">' +
+            (it.status !== 'wearing'
+              ? '<button type="button" data-act="wear" class="wardrobe-mini-btn is-primary">👗 穿上</button>'
+              : '<button type="button" data-act="unwear" class="wardrobe-mini-btn is-primary" title="脱下此部位（不影响其他叠穿部位）">↩ 脱下</button>') +
+            '<button type="button" data-act="tryon" class="wardrobe-mini-btn is-ghost" title="结合当前其他在穿部位进行局部换装/叠穿">' + (hasTryon ? '📸 重拍' : '📸 试穿') + '</button>' +
+            '<button type="button" data-act="del" class="wardrobe-del-btn" title="移出展示柜">🗑</button>' +
+          '</div>' +
+        '</div>';
+
+      const mainImg = cell.querySelector('img[data-role="main-img"]');
+      const placeholder = cell.querySelector('[data-role="placeholder"]');
+      const mainUrl = itemImageUrl(it, curMode);
+      if (mainImg && mainUrl) {
+        fetchAuthedBlobUrl(mainUrl).then(blobUrl => {
+          if (blobUrl) {
+            mainImg.src = blobUrl;
+            mainImg.classList.remove('hidden');
+            placeholder?.classList.add('hidden');
+          }
+        });
+        mainImg.addEventListener('click', () => openLightbox(it, curMode));
+      }
+
+      if (canSwap) {
+        const pipImg = cell.querySelector('img[data-role="pip-img"]');
+        const pipUrl = itemImageUrl(it, otherMode);
+        if (pipImg && pipUrl) {
+          fetchAuthedBlobUrl(pipUrl).then(blobUrl => { if (blobUrl) pipImg.src = blobUrl; });
+        }
+        cell.querySelector('[data-act="swap"]')?.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          cellViewMode.set(it.id, otherMode);
+          renderCabinet();
+        });
+      }
+
+      cell.querySelector('[data-act="slot"]')?.addEventListener('change', async (ev) => {
+        const newSlot = ev.currentTarget.value;
+        msgEl.textContent = '已调整「' + it.name + '」部位为 ' + (SLOT_TEXT[newSlot] || newSlot) + '…';
+        const resp = await fetch('/api/companions/' + companionId + '/wardrobe/' + it.id, {
+          method: 'PATCH',
+          headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ slot: newSlot }),
+        });
+        if (resp.ok) { msgEl.textContent = '✓ 已调整部位（不同部位可自由叠穿）'; loadWardrobe(); }
+      });
+
+      cell.querySelector('[data-act="wear"]')?.addEventListener('click', async () => {
+        msgEl.textContent = '正在换上「' + it.name + '」…';
+        const resp = await fetch('/api/companions/' + companionId + '/wardrobe/' + it.id, {
+          method: 'PATCH',
+          headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'wear' }),
+        });
+        if (resp.ok) { msgEl.textContent = '✓ 已换上「' + it.name + '」（其他部位自动保留叠穿）'; loadWardrobe(); }
+      });
+
+      cell.querySelector('[data-act="unwear"]')?.addEventListener('click', async () => {
+        msgEl.textContent = '正在脱下「' + it.name + '」…';
+        const resp = await fetch('/api/companions/' + companionId + '/wardrobe/' + it.id, {
+          method: 'PATCH',
+          headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'unwear' }),
+        });
+        if (resp.ok) { msgEl.textContent = '✓ 已将「' + it.name + '」收回展柜珍藏'; loadWardrobe(); }
+      });
+
+      cell.querySelector('[data-act="tryon"]')?.addEventListener('click', async (ev) => {
+        const btn = ev.currentTarget;
+        btn.disabled = true;
+        btn.textContent = '拍摄中…';
+        msgEl.textContent = '正在结合人物定妆照与商品图拍摄「' + it.name + '」试穿照（约 30-90 秒）…';
+        try {
+          const resp = await fetch('/api/companions/' + companionId + '/wardrobe/' + it.id + '/tryon', {
+            method: 'POST',
+            headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+          });
+          const out = await resp.json().catch(() => ({}));
+          if (!resp.ok || !out.ok) throw new Error(out.error || out.message || ('HTTP ' + resp.status));
+          cellViewMode.set(it.id, 'tryon');
+          msgEl.textContent = '✓ 「' + it.name + '」试穿买家秀已上架展柜！';
+          await loadWardrobe();
+        } catch (e) {
+          msgEl.textContent = '试穿生图失败：' + e.message;
+          btn.disabled = false;
+          btn.textContent = hasTryon ? '📸 重拍' : '📸 试穿';
+        }
+      });
+
+      cell.querySelector('[data-act="del"]')?.addEventListener('click', async () => {
+        const resp = await fetch('/api/companions/' + companionId + '/wardrobe/' + it.id, {
+          method: 'DELETE',
+          headers: { Authorization: 'Bearer ' + token },
+        });
+        if (resp.ok) { msgEl.textContent = '已移出展示柜'; loadWardrobe(); }
+      });
+
+      listEl.appendChild(cell);
+    }
+  }
+
+  async function loadWardrobe() {
+    if (!companionId) return;
+    loadRefStatus();
+    if (!cachedItems.length) {
+      listEl.innerHTML = '<div class="wardrobe-empty-slot">正在点亮展示柜…</div>';
+    }
+    try {
+      const r = await fetch('/api/companions/' + companionId + '/wardrobe', {
+        headers: { Authorization: 'Bearer ' + token },
+      });
+      const d = await r.json();
+      if (!r.ok || !d.ok) throw new Error(d.error || d.message || '加载失败');
+      cachedItems = (d.data && d.data.items) || [];
+      renderCabinet();
+      if (typeof window.__refreshHeroStage === 'function') window.__refreshHeroStage();
+    } catch (e) {
+      listEl.innerHTML = '<div class="wardrobe-empty-slot text-red-600">加载展示柜失败：' + escHtml(e.message) + '</div>';
+    }
+  }
+
+  toggleAddBtn?.addEventListener('click', () => drawer?.classList.toggle('hidden'));
+  closeAddBtn?.addEventListener('click', () => drawer?.classList.add('hidden'));
+
+  refInput?.addEventListener('change', async () => {
+    const file = refInput.files && refInput.files[0];
+    if (!file || !companionId) return;
+    refStatus.textContent = '正在锁定人物参考图…';
+    try {
+      const dataUrl = await fileToCompressedDataUrl(file, 1280);
+      const r = await fetch('/api/companions/' + companionId + '/visual-identity/upload-reference', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: dataUrl, replace: true }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || (!d.ok && !d.success)) throw new Error(d.error || d.message || ('HTTP ' + r.status));
+      msgEl.textContent = '✓ 人物定妆参考图已锁定';
+      await loadRefStatus();
+    } catch (e) {
+      msgEl.textContent = '参考图上传失败：' + e.message;
+      await loadRefStatus();
+    } finally {
+      refInput.value = '';
+    }
+  });
+
+  fileInput?.addEventListener('change', async () => {
+    const file = fileInput.files && fileInput.files[0];
+    if (!file) { pendingImageDataUrl = ''; fileNameEl.textContent = '未选择图片'; return; }
+    fileNameEl.textContent = '处理中：' + file.name;
+    try {
+      pendingImageDataUrl = await fileToCompressedDataUrl(file, 1280);
+      fileNameEl.textContent = '✓ 已选：' + file.name;
+    } catch (e) {
+      pendingImageDataUrl = '';
+      fileNameEl.textContent = '图片读取失败：' + e.message;
+    }
+  });
+
+  addBtn?.addEventListener('click', async () => {
+    if (!companionId) return;
+    const name = (nameInput?.value || '').trim();
+    if (!name && !pendingImageDataUrl) {
+      msgEl.textContent = '请至少上传一张商品图，或填写单品名称';
+      return;
+    }
+    addBtn.disabled = true;
+    msgEl.textContent = pendingImageDataUrl && !name ? '正在识别商品图并上架展示柜…' : '正在上架展示柜…';
+    try {
+      const r = await fetch('/api/companions/' + companionId + '/wardrobe', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          slot: slotSelect?.value || undefined,
+          status: statusSelect?.value || 'wearing',
+          gifted_note: (noteInput?.value || '').trim(),
+          image: pendingImageDataUrl || undefined,
+          auto_analyze: true,
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || (!d.ok && !d.success)) throw new Error(d.error || d.message || ('HTTP ' + r.status));
+      const createdItem = (d.data && d.data.item) || d.item || null;
+      if (nameInput) nameInput.value = '';
+      if (noteInput) noteInput.value = '';
+      pendingImageDataUrl = '';
+      if (fileInput) fileInput.value = '';
+      if (fileNameEl) fileNameEl.textContent = '未选择图片（上传后可自动识别名称与款式）';
+      drawer?.classList.add('hidden');
+      activeShelf = 'all';
+      msgEl.textContent = '✓ 已摆进展示柜：「' + (createdItem ? createdItem.name : '新藏品') + '」';
+      await loadWardrobe();
+    } catch (e) {
+      msgEl.textContent = '上架失败：' + e.message;
+    } finally {
+      addBtn.disabled = false;
+    }
+  });
+
+  refreshBtn?.addEventListener('click', loadWardrobe);
+  document.querySelector('[data-acc="wardrobe"] .dash-acc-head')?.addEventListener('click', () => {
+    setTimeout(() => {
+      const body = document.querySelector('[data-acc="wardrobe"] .dash-acc-body');
+      if (body && !body.hidden) loadWardrobe();
+    }, 30);
+  });
+})();
+
+// ─── 三层相处框架：相处底盘 & 可结算约会剧场 & 赛博合影 ────────────────────────
+(function initDateModePanel() {
+  const escHtml = (s) => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+  const pmodeBtns = Array.from(document.querySelectorAll('#presence-mode-options .pmode-opt'));
+  const pmodeDesc = document.getElementById('presence-mode-desc');
+  const pmodeMsg = document.getElementById('presence-mode-msg');
+  const badgeEl = document.getElementById('datemode-badge');
+  const subEl = document.getElementById('acc-sub-datemode');
+  const activeBox = document.getElementById('datemode-active-box');
+  const idleBox = document.getElementById('datemode-idle-box');
+  const activeTitle = document.getElementById('datemode-active-title');
+  const activeScene = document.getElementById('datemode-active-scene');
+  const activeOutfit = document.getElementById('datemode-active-outfit');
+  const activePhotos = document.getElementById('datemode-active-photos');
+  const endNoteInput = document.getElementById('datemode-end-note');
+  const customTitleInput = document.getElementById('datemode-custom-title');
+  const statusMsg = document.getElementById('datemode-status-msg');
+  const historyEl = document.getElementById('datemode-history');
+  const cyberFile = document.getElementById('cyber-photo-file');
+  const cyberFname = document.getElementById('cyber-photo-fname');
+  const cyberNote = document.getElementById('cyber-photo-note');
+  const cyberBtn = document.getElementById('btn-cyber-photo-gen');
+  const cyberResult = document.getElementById('cyber-photo-result');
+  const userRefInput = document.getElementById('input-upload-user-portrait');
+  const userRefStatus = document.getElementById('user-ref-status');
+  const userRefThumb = document.getElementById('user-ref-thumb');
+
+  const PMODE_DESC = {
+    ldr: '异地恋日常（推荐）：保留校园/生活烟火气，自然接受平时不在同一座城市，不把物理距离当爽约；想沉浸约会时再开剧场。',
+    digital: '清醒跨次元：坦然接纳隔着屏幕相伴，发现实菜单/街景照时像带你一起看世界，无违和感。',
+    local: '经典同城模式：保持原有默认叙事逻辑，不注入额外距离提示。',
+  };
+
+  let pendingCyberDataUrl = '';
+  let currentActiveSessionId = null;
+
+  async function loadAuthedDateImg(imgEl, linkEl, url) {
+    try {
+      const r = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
+      if (!r.ok) return;
+      const blob = await r.blob();
+      const objUrl = URL.createObjectURL(blob);
+      imgEl.src = objUrl;
+      imgEl.classList.remove('hidden');
+      if (linkEl) linkEl.href = objUrl;
+    } catch { /* ignore */ }
+  }
+
+  function compressImageToDataUrl(file, maxEdge = 1280) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('读取图片失败'));
+      reader.onload = () => {
+        const img = new Image();
+        img.onerror = () => resolve(String(reader.result || ''));
+        img.onload = () => {
+          const ratio = Math.min(1, maxEdge / Math.max(img.width, img.height, 1));
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(img.width * ratio));
+          canvas.height = Math.max(1, Math.round(img.height * ratio));
+          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL('image/jpeg', 0.86));
+        };
+        img.src = String(reader.result || '');
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function renderPresenceMode(mode) {
+    const m = PMODE_DESC[mode] ? mode : 'local';
+    pmodeBtns.forEach(btn => {
+      const active = btn.dataset.pmode === m;
+      btn.classList.toggle('bg-sakura-soft', active);
+      btn.classList.toggle('border-sakura-deep', active);
+      btn.classList.toggle('text-sakura-deep', active);
+      btn.classList.toggle('text-mute', !active);
+    });
+    if (pmodeDesc) pmodeDesc.textContent = PMODE_DESC[m];
+  }
+
+  function renderDateOverview(data) {
+    if (!data) return;
+    renderPresenceMode(data.presence_mode || 'local');
+    if (userRefStatus) {
+      userRefStatus.textContent = data.hasUserPortrait
+        ? '✓ 已锁定本人形象（双人同框已就绪）'
+        : '未上传本人形象照（上传后合影将包含你）';
+    }
+    if (userRefThumb) {
+      if (data.hasUserPortrait && data.userPortraitUrl) {
+        loadAuthedDateImg(userRefThumb, null, data.userPortraitUrl);
+      } else {
+        userRefThumb.classList.add('hidden');
+      }
+    }
+    const active = data.activeSession || null;
+    currentActiveSessionId = active?.id || null;
+
+    if (active) {
+      badgeEl.textContent = '约会中';
+      badgeEl.className = 'text-[11px] px-2 py-0.5 rounded-full bg-sakura-deep text-white font-semibold';
+      if (subEl) subEl.textContent = `正在约会中：${active.title}`;
+      activeBox?.classList.remove('hidden');
+      idleBox?.classList.add('hidden');
+      if (activeTitle) activeTitle.textContent = active.title;
+      if (activeScene) activeScene.textContent = '场景：' + active.scene;
+      const outfits = (active.outfit_snapshot || []).map(it => (it.color || '') + (it.name || '')).filter(Boolean);
+      if (activeOutfit) {
+        activeOutfit.textContent = outfits.length
+          ? '👗 本次联动衣橱穿搭：' + outfits.join('、')
+          : '👗 衣橱暂未选定单品，按平时风格赴约';
+      }
+      if (activePhotos) {
+        const photos = Array.isArray(active.photo_paths) ? active.photo_paths : [];
+        activePhotos.innerHTML = '';
+        for (const fn of photos) {
+          const url = '/api/companions/' + companionId + '/date-mode/image/' + encodeURIComponent(fn.split(/[\\/]/).pop());
+          const a = document.createElement('a');
+          a.target = '_blank';
+          a.className = 'block w-16 h-16 rounded-xl overflow-hidden border border-sakura/30 bg-white';
+          const img = document.createElement('img');
+          img.alt = '约会照';
+          img.className = 'hidden w-full h-full object-cover';
+          a.appendChild(img);
+          activePhotos.appendChild(a);
+          loadAuthedDateImg(img, a, url);
+        }
+      }
+    } else {
+      badgeEl.textContent = '未开启';
+      badgeEl.className = 'text-[11px] px-2 py-0.5 rounded-full bg-white/80 text-mute';
+      if (subEl) subEl.textContent = '异地恋防内耗底盘、可结算逛街吃饭剧场与赛博合影';
+      activeBox?.classList.add('hidden');
+      idleBox?.classList.remove('hidden');
+    }
+
+    if (historyEl) {
+      const list = (data.recentSessions || []).filter(s => s.status !== 'active').slice(0, 5);
+      if (!list.length) {
+        historyEl.innerHTML = '<p class="text-mute/80">还没有已结算的约会记录。</p>';
+      } else {
+        historyEl.innerHTML = list.map(s => {
+          const loops = Array.isArray(s.resolved_loops) && s.resolved_loops.length
+            ? ` · 核销约定 ${s.resolved_loops.length} 条`
+            : '';
+          const tag = s.status === 'settled' ? '已存记忆' : '已结束';
+          const dateStr = String(s.started_at || '').slice(0, 10);
+          return `<div class="rounded-lg bg-white/60 border border-line px-2.5 py-1.5 flex items-center justify-between gap-2">
+            <span class="text-ink font-medium truncate">${escHtml(s.title)}</span>
+            <span class="text-mute shrink-0">${escHtml(dateStr)} · ${tag}${loops}</span>
+          </div>`;
+        }).join('');
+      }
+    }
+  }
+
+  async function loadDateMode() {
+    if (!companionId) return;
+    try {
+      const r = await fetch('/api/companions/' + companionId + '/date-mode', {
+        headers: { Authorization: 'Bearer ' + token },
+      });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.ok && d.data) {
+        renderDateOverview(d.data);
+        if (typeof window.__refreshHeroStage === 'function') window.__refreshHeroStage();
+      }
+    } catch (e) {
+      if (statusMsg) statusMsg.textContent = '加载失败：' + e.message;
+    }
+  }
+
+  pmodeBtns.forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!companionId) return;
+      const mode = btn.dataset.pmode;
+      pmodeMsg.textContent = '保存中…';
+      try {
+        const r = await fetch('/api/companions/' + companionId + '/presence-mode', {
+          method: 'PUT',
+          headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ presence_mode: mode }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d.ok) throw new Error(d.error || d.message || ('HTTP ' + r.status));
+        renderPresenceMode(d.data?.presence_mode || mode);
+        pmodeMsg.textContent = '✓ 已切换';
+      } catch (e) {
+        pmodeMsg.textContent = '切换失败：' + e.message;
+      }
+    });
+  });
+
+  async function startDate(payload) {
+    if (!companionId) return;
+    statusMsg.textContent = '正在开启约会剧场…';
+    try {
+      const r = await fetch('/api/companions/' + companionId + '/date-mode/start', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) throw new Error(d.error || d.message || ('HTTP ' + r.status));
+      statusMsg.textContent = '✓ 已进入约会剧场，快去和她聊天吧！';
+      if (customTitleInput) customTitleInput.value = '';
+      await loadDateMode();
+    } catch (e) {
+      statusMsg.textContent = '开启失败：' + e.message;
+    }
+  }
+
+  document.querySelectorAll('#datemode-presets .dtype-btn').forEach(btn => {
+    btn.addEventListener('click', () => startDate({ activity_type: btn.dataset.dtype || 'custom' }));
+  });
+
+  document.getElementById('btn-datemode-custom-start')?.addEventListener('click', () => {
+    const title = (customTitleInput?.value || '').trim();
+    if (!title) { statusMsg.textContent = '请输入约会主题或直接点上面的快捷场景'; return; }
+    startDate({ activity_type: 'custom', title, scene: '和他一起' + title });
+  });
+
+  document.getElementById('btn-datemode-end')?.addEventListener('click', async () => {
+    if (!companionId) return;
+    statusMsg.textContent = '正在结算约会记忆与核销约定…';
+    try {
+      const r = await fetch('/api/companions/' + companionId + '/date-mode/end', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: currentActiveSessionId,
+          note: (endNoteInput?.value || '').trim(),
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) throw new Error(d.error || d.message || ('HTTP ' + r.status));
+      if (endNoteInput) endNoteInput.value = '';
+      const resolved = d.data?.resolvedLoops || [];
+      const loopTip = resolved.length ? `，并核销了 ${resolved.length} 条关联约定` : '';
+      statusMsg.textContent = `✓ 已圆满结算并写入长期记忆${loopTip}`;
+      await loadDateMode();
+    } catch (e) {
+      statusMsg.textContent = '结算失败：' + e.message;
+    }
+  });
+
+  document.getElementById('btn-datemode-photo')?.addEventListener('click', async (ev) => {
+    if (!companionId) return;
+    const btn = ev.currentTarget;
+    btn.disabled = true;
+    statusMsg.textContent = '正在结合人物参考图与衣橱穿搭拍约会打卡照…';
+    try {
+      const r = await fetch('/api/companions/' + companionId + '/date-mode/photo', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note: (endNoteInput?.value || '').trim() }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) throw new Error(d.error || d.message || ('HTTP ' + r.status));
+      statusMsg.textContent = '✓ 约会打卡照已生成';
+      await loadDateMode();
+    } catch (e) {
+      statusMsg.textContent = '打卡照生成失败：' + e.message;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  cyberFile?.addEventListener('change', async () => {
+    const file = cyberFile.files && cyberFile.files[0];
+    if (!file) { pendingCyberDataUrl = ''; cyberFname.textContent = '未选择图片'; return; }
+    cyberFname.textContent = '处理中：' + file.name;
+    try {
+      pendingCyberDataUrl = await compressImageToDataUrl(file, 1280);
+      cyberFname.textContent = '✓ 已选：' + file.name;
+    } catch (e) {
+      pendingCyberDataUrl = '';
+      cyberFname.textContent = '读取失败：' + e.message;
+    }
+  });
+
+  cyberBtn?.addEventListener('click', async () => {
+    if (!companionId) return;
+    if (!pendingCyberDataUrl) { statusMsg.textContent = '请先选择一张现实环境照（如餐桌空座/街景）'; return; }
+    cyberBtn.disabled = true;
+    statusMsg.textContent = '正在合成赛博合影（结合人物参考图 + 当前衣橱穿搭）…';
+    try {
+      const r = await fetch('/api/companions/' + companionId + '/date-mode/cyber-photo', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          image: pendingCyberDataUrl,
+          note: (cyberNote?.value || '').trim(),
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) throw new Error(d.error || d.message || ('HTTP ' + r.status));
+      statusMsg.textContent = '✓ 赛博合影已生成！';
+      const imgUrl = d.data?.image_url;
+      if (cyberResult && imgUrl) {
+        cyberResult.classList.remove('hidden');
+        cyberResult.innerHTML = '';
+        const a = document.createElement('a');
+        a.target = '_blank';
+        a.className = 'inline-block rounded-xl overflow-hidden border border-sakura/40 max-w-[220px]';
+        const img = document.createElement('img');
+        img.alt = '赛博合影';
+        img.className = 'hidden w-full h-auto block';
+        a.appendChild(img);
+        cyberResult.appendChild(a);
+        loadAuthedDateImg(img, a, imgUrl);
+      }
+      await loadDateMode();
+    } catch (e) {
+      statusMsg.textContent = '赛博合影失败：' + e.message;
+    } finally {
+      cyberBtn.disabled = false;
+    }
+  });
+
+  userRefInput?.addEventListener('change', async () => {
+    const file = userRefInput.files && userRefInput.files[0];
+    if (!file || !companionId) return;
+    if (userRefStatus) userRefStatus.textContent = '正在上传并锁定本人形象照…';
+    try {
+      const dataUrl = await compressImageToDataUrl(file, 1280);
+      const r = await fetch('/api/companions/' + companionId + '/user-visual-reference', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: dataUrl }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) throw new Error(d.error || d.message || ('HTTP ' + r.status));
+      statusMsg.textContent = '✓ 本人形象照已锁定，现在拍约会照/赛博合影就会双人同框啦！';
+      await loadDateMode();
+    } catch (e) {
+      if (userRefStatus) userRefStatus.textContent = '上传失败：' + e.message;
+    } finally {
+      userRefInput.value = '';
+    }
+  });
+
+  document.getElementById('btn-datemode-refresh')?.addEventListener('click', loadDateMode);
+  document.querySelector('[data-acc="datemode"] .dash-acc-head')?.addEventListener('click', () => {
+    setTimeout(() => {
+      const body = document.querySelector('[data-acc="datemode"] .dash-acc-body');
+      if (body && !body.hidden) loadDateMode();
+    }, 30);
+  });
+})();
+
+// ─── 清透极光 / 暗夜液态玻璃切换 + 左侧角色光影大舞台 ──────────────────────────
+(function initAuroraThemeAndHeroStage() {
+  const themeBtn = document.getElementById('btn-dash-theme');
+  function syncThemeLabel() {
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    if (themeBtn) themeBtn.textContent = isDark ? '🌌 暗夜玻璃' : '✨ 极光玻璃';
+  }
+  syncThemeLabel();
+  themeBtn?.addEventListener('click', () => {
+    const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    try { localStorage.setItem('xiyu_theme', next); } catch {}
+    syncThemeLabel();
+  });
+
+  async function refreshHeroStage() {
+    const stage = document.getElementById('dash-hero-stage');
+    const imgEl = document.getElementById('dash-hero-img');
+    const badgeEl = document.getElementById('dash-hero-badge');
+    const capEl = document.getElementById('dash-hero-caption');
+    const chipsEl = document.getElementById('dash-hero-chips');
+    if (!stage || !imgEl || !companionId || !token) return;
+
+    try {
+      const [wRes, dRes] = await Promise.all([
+        fetch('/api/companions/' + companionId + '/wardrobe', { headers: { Authorization: 'Bearer ' + token } }),
+        fetch('/api/companions/' + companionId + '/date-mode', { headers: { Authorization: 'Bearer ' + token } }),
+      ]);
+      const wJson = await wRes.json().catch(() => ({}));
+      const dJson = await dRes.json().catch(() => ({}));
+      const items = (wJson.ok && wJson.data && wJson.data.items) || [];
+      const wearing = items.filter(it => it.status === 'wearing');
+      const heroItem = wearing.find(it => it.tryon_image_path)
+        || wearing.find(it => it.source_image_path)
+        || items.find(it => it.tryon_image_path)
+        || null;
+      const activeDate = (dJson.ok && dJson.data && dJson.data.activeSession) || null;
+
+      let imgUrl = '';
+      if (heroItem && heroItem.tryon_image_path) {
+        imgUrl = '/api/companions/' + companionId + '/wardrobe/' + heroItem.id + '/image?kind=tryon&t=' + Date.now();
+      } else if (heroItem && heroItem.source_image_path) {
+        imgUrl = '/api/companions/' + companionId + '/wardrobe/' + heroItem.id + '/image?kind=source&t=' + Date.now();
+      } else {
+        imgUrl = '/api/companions/' + companionId + '/visual-identity/reference-image?t=' + Date.now();
+      }
+
+      const imgResp = await fetch(imgUrl, { headers: { Authorization: 'Bearer ' + token } });
+      if (!imgResp.ok) return;
+      const blob = await imgResp.blob();
+      if (blob.size < 64) return;
+      if (imgEl.dataset.blobUrl) {
+        try { URL.revokeObjectURL(imgEl.dataset.blobUrl); } catch {}
+      }
+      const nextBlobUrl = URL.createObjectURL(blob);
+      imgEl.dataset.blobUrl = nextBlobUrl;
+      imgEl.src = nextBlobUrl;
+      stage.classList.remove('hidden');
+
+      if (badgeEl) {
+        if (activeDate) {
+          badgeEl.textContent = '💕 约会中 · ' + activeDate.title;
+          badgeEl.classList.add('is-dating');
+        } else {
+          badgeEl.textContent = heroItem ? '✨ 今日穿搭大片' : '✨ 人物定妆照';
+          badgeEl.classList.remove('is-dating');
+        }
+      }
+      if (capEl) {
+        capEl.textContent = wearing.length
+          ? '今日在穿：' + wearing.map(i => i.name).join(' + ')
+          : (heroItem ? '最近试穿：' + heroItem.name : '点击进入展示柜为她挑新穿搭');
+      }
+      if (chipsEl) {
+        chipsEl.innerHTML = wearing.slice(0, 4).map(i =>
+          '<span class="text-[10px] px-2 py-0.5 rounded-full bg-white/20 backdrop-blur border border-white/25">' +
+          String(i.name || '').replace(/[&<>"']/g, '') + '</span>'
+        ).join('');
+      }
+    } catch { /* ignore */ }
+  }
+
+  document.getElementById('dash-hero-stage')?.addEventListener('click', () => {
+    document.querySelector('.dash-tab[data-dash-tab="tools"]')?.click();
+    const acc = document.querySelector('[data-acc="wardrobe"]');
+    const body = acc?.querySelector('.dash-acc-body');
+    if (body && body.hidden) acc.querySelector('.dash-acc-head')?.click();
+  });
+
+  window.__refreshHeroStage = refreshHeroStage;
+
+  // 延迟等待 load() 拿到 companionId 后自动点亮角色大舞台
+  let tries = 0;
+  const timer = setInterval(() => {
+    tries++;
+    if (companionId) { clearInterval(timer); refreshHeroStage(); }
+    else if (tries > 25) clearInterval(timer);
+  }, 200);
+})();
+
 (function initDashboardWorkspace() {
   const tabs = Array.from(document.querySelectorAll('.dash-tab[data-dash-tab]'));
   const ALL_TABS = ['settings', 'stories', 'tools', 'stickers', 'models'];

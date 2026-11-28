@@ -278,6 +278,8 @@ jobs:
           node scripts/scene_state_smoke.mjs
           node scripts/activity_time_check.mjs
           node scripts/suqing_memory_continuity_check.mjs
+          node scripts/wardrobe_tryon_check.mjs
+          node scripts/date_mode_check.mjs
 
       - name: proactive 三桶心跳 emit↔parse 契约（2026-06-13 deadman 信号分离·防"永远无心跳"漂移）
         run: node scripts/proactive_heartbeat_smoke.mjs

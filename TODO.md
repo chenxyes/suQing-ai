@@ -1,44 +1,66 @@
 # TODO · 苏晴体验升级路线清单
 
-> 记录基于 2026-11-28 线上排查与社区方案调研整理的新功能规划，按优先级迭代。
+> 记录基于 2026-11-28 线上排查与架构评审确定的「数字衣橱」与「三层虚拟约会框架」联合拆分清单。
 
 ---
 
-## 1. 送礼物与数字衣橱系统（衣服、包包、鞋子等）
+## 任务 1：数字衣橱 + 发图送礼试穿系统（衣服、包包、鞋子等）
 
-**背景与目标**：当前 `companion_gifts` 表仅有 4 个固定小物与静态模板回复，未接入微信聊天、长期记忆与图像换装。目标是建立「发图送礼 → 拆箱互动 → 永久衣橱记忆 → 试穿返图 → 后续主动穿戴回访」的完整情感闭环。
+详细架构见 [docs/WARDROBE_AND_TRYON_ARCHITECTURE.md](docs/WARDROBE_AND_TRYON_ARCHITECTURE.md)。
 
-- [ ] **P1 · 数据层：数字衣橱与礼物背包（扩展 `companion_gifts` / 新增 `companion_wardrobe`）**
-  - 字段：`category`（上衣 / 裙子 / 外套 / 鞋子 / 包包 / 配饰）、`name`、`visual_prompt`（英文生图描述）、`source_image_path`（原商品图）、`status`（`in_transit` 快递中 / `owned` 已收纳 / `wearing` 当前穿戴）、`wear_count`、`gifted_note`、`gifted_at`。
-  - 在 `buildSystemPrompt` / `buildReplyPersona` 常驻注入精简状态块（约 80 token）：`【你的今日穿搭】` + `【哥哥送过的珍藏物品】`，彻底避免“衣橱失忆（Wardrobe Amnesia）”。
-- [ ] **P1 · 微信交互：发商品图直接送礼 + Vision 细节解析**
-  - 支持直接发淘宝/得物/小红书商品截图并附言（如“给小晴买的新裙子/包/鞋”）。
-  - 复用 Vision 模型提取品类、颜色、材质、版型与风格，生成符合苏晴人设的个性化拆箱/评价反应并入库。
-- [ ] **P2 · 视觉闭环：参考图换装 / 虚拟试穿返图**
-  - 先在 `data/companion_visuals/1/identity.json` 的 `referenceImages` 固化 1～3 张苏晴定妆参考图。
-  - 接入多图参考编辑模型（如 `gpt-image-2` image edit / Flux Kontext / SeedEdit；后续可选本地 ComfyUI `FaceID + CatVTON/OOTDiffusion`），将商品图穿戴到苏晴身上生成“试穿买家秀 / 对镜自拍”发回微信。
-- [ ] **P2 · 仪式感状态机：快递延迟 + 主动穿戴回访**
-  - 下单后先进入 `in_transit`（不秒收秒穿），1～2 天后通过 `proactive` 触发“快递到啦去驿站取件 → 试穿返图 → 转 `owned`”。
-  - 后续周末/约会日程按权重抽选已获赠衣物作为当日穿搭，在主动消息中自然提及。
+- [x] **1-A · 架构与数据闭环**
+  - [x] 输出完整数据模型、状态机、微信连发图片融合、多图参考编辑与按品类机位路由方案
+  - [x] `companion_wardrobe` 数据库表、槽位唯一 `wearing` 切换与级联清理（`src/db.mjs`）
+  - [x] `src/wardrobe.mjs`：意图识别（即时试穿 / 直接赠送 / 下单等快递 / 换穿点名）、Vision 结构化单品解析、原图落盘、≤80 token Prompt 注入块、按品类机位路由
+  - [x] 多图参考生图能力：`customImage` 支持 `/images/edits`（`image[]` 多图输入，失败自动 fail-open 降级 `/images/generations`），`openrouter`/`302ai`/`photo_sender` 同步支持多参考图
+- [x] **1-B · 双端与异步任务接入**
+  - [x] 微信连发图片融合：`bot.mjs` 的 `pendingBursts` 携带图片 Buffer，自动承接“先发商品图 + 再发文字”的微信习惯并触发衣橱入库与试穿返图
+  - [x] 快递拆箱定时任务：`plan_tasks.mjs` 每 10 分钟巡检 `in_transit` 到期包裹，自动转为 `wearing` 并主动推送拆箱消息与试穿返图
+  - [x] REST API：`GET/POST/PATCH/DELETE /api/companions/:id/wardrobe`、单品图片接口、一键试穿接口、人物参考图上传接口
+  - [x] Dashboard「👗 衣橱与工具」可视化衣橱卡片（原商品图 + 试穿图 + 一键换穿/试穿 + 人物参考图上传）与网页 Playground 同步接入
+- [x] **1-C · 测试与联动彩蛋**
+  - [x] 自动化回归测试并接入 CI（`scripts/wardrobe_tryon_check.mjs`）
+  - [x] 周末日程穿戴回访彩蛋（与任务 2-C 一起落地：“今天出门背了你送的那个小包”）
+- [ ] **待用户提供素材**
+  - [ ] 上传并锁定苏晴正式人物参考图（已就绪：`POST /api/companions/:id/visual-identity/upload-reference` 与 Dashboard 一键上传按钮）
 
 ---
 
-## 2. 陪逛街 / 陪吃饭等虚拟约会体验方案
+## 任务 2：三层虚拟约会与相处框架（异地恋底盘 + 拍图云约会 + 可结算约会剧场）
 
-**背景与目标**：苏晴默认同城现实人设会频繁发起线下逛街、吃饭邀约，而虚拟角色无法物理赴约，长期容易造成“放鸽子”的 `open_loops` 积压与出戏。需从世界观、交互模式和约会闭环三层解决。
+详细架构见 [docs/VIRTUAL_DATING_AND_RELATIONSHIP_ARCHITECTURE.md](docs/VIRTUAL_DATING_AND_RELATIONSHIP_ARCHITECTURE.md)。
 
-- [ ] **P1 · 世界观对齐（可配置相处框架）**
-  - 在人设配置中提供可选模式：
-    1. **异地恋模式**：保持各自真实生活，但约定自然偏向云逛街、连麦吃饭、拍菜单/橱窗互选、一起打游戏与长假见面；
-    2. **清醒跨次元模式**：坦诚数字生命边界，不因无法物理见面指责爽约，主动引导把手机当眼睛的赛博互动。
-  - 在 `persona_prompt` 与 `open_loops` 约束中明确不把“无法线下物理见面”误判为失约。
-- [ ] **P1 · 显式「约会剧场模式（Date RP Mode）」**
-  - 支持通过快捷指令或自然语言触发开启/结束约会剧场（例如“开始约会：周末商场逛街” / “结束约会”）。
-  - 开启期间：锁定 `current_scene` 为共同约会场景、暂停独立日程覆写与严苛的离线动作拦截、允许轻度场景描写并在关键节点生成约会现场图。
-  - 结束时：自动汇总本次约会经历写入共同记忆，并将关联的 `open_loops`（如“周末陪买裙子”）自动核销为 `resolved`。
-- [ ] **P2 · 现实携行“云约会”与赛博合影**
-  - 强化微信发图逛街/干饭体验：发菜单、橱窗、试衣镜或双杯饮品照片时，苏晴进入“专属买手/饭搭子”模式给具体建议与点评。
-  - 支持“赛博合影”能力：用户发餐厅对面空座/街景照，利用图像编辑模型结合苏晴定妆参考图生成自然同框打卡照。
-- [ ] **P2 · 高频可落地的线上约会仪式**
-  - 联动 `current_works` 实现同步追番/看剧/听歌单吐槽。
-  - 联动“电商云逛街 + 送礼换装”，把“陪挑衣服/鞋子”转化为双方真实能完成的线上买单与返图互动。
+核心组合：**「异地恋」做底盘防内耗 +「送礼换装 & 随手拍图/赛博合影」承接日常逛街吃饭欲 +「有进有出、带记忆结算的约会剧场」承接高甜沉浸时刻。**
+
+- [x] **2-A · 技术架构与联合任务拆分**
+  - [x] 沉淀三层相处框架架构文档（`docs/VIRTUAL_DATING_AND_RELATIONSHIP_ARCHITECTURE.md`）并与数字衣橱完成联动设计
+- [x] **2-B · 数据模型与核心服务（`src/db.mjs` + `src/persona_export.mjs` + `src/date_mode.mjs`）**
+  - [x] `companions.presence_mode`（`local` / `ldr` / `digital`）增量迁移与导入导出字段对齐
+  - [x] `companion_date_sessions` 表、索引、级联清理与完整 CRUD 封装
+  - [x] `src/date_mode.mjs`：底盘提示词、云约会拍图识别（饭搭子/云逛街/赛博合影）、约会剧场启停与数字衣橱穿搭快照、多图赛博合影/约会打卡照生成、结束自动结算（写入高权重记忆 + 核销关联 `open_loops` + 重置场景）、周末衣橱穿戴回访提示
+- [x] **2-C · 运行时全链路集成**
+  - [x] `companion.mjs` / `reply_prompt.mjs` / `reply_pipeline.mjs` 注入 `presenceHint` 与 `dateSession`
+  - [x] `reply_review.mjs` 在 `dateSession` 进行期间放行剧场互动（跳过独处日程覆写与动作旁白裁切），非约会状态保持零回归
+  - [x] `plan_tasks.mjs` 注入 `presence_mode` 约束与周末数字衣橱穿戴回访彩蛋
+  - [x] `bot.mjs` 与 `playground.mjs` 接入约会剧场自然触发/结算、云约会上下文与微信赛博合影异步返图
+- [x] **2-D · REST API 与 Web Dashboard 控制台**
+  - [x] `src/api.mjs`：`presence-mode` 切换、`date-mode` 状态/开启/结算/打卡照/赛博合影/图片接口，同步补充 `companionSummary.presence_mode`
+  - [x] Dashboard「💕 相处底盘 & 约会剧场」折叠卡片（底盘切换 + 快捷开启/结算约会 + 穿搭联动展示 + 一键赛博合影）
+- [x] **2-E · 自动化测试与 CI 闭环**
+  - [x] 新增 `scripts/date_mode_check.mjs` 并接入 `.github/workflows/ci.yml`
+  - [x] 登记 `CHANGELOG.md` 并通过全量本地 CI 回归检查
+
+---
+
+## 任务 3（Phase 4）：姿势库 & 精选服装预设库 & 360° 旋转展台规划
+
+借鉴社区高星方案 `atuizz/posewear`（姿势与服装参考库）与 `Arekejoker/sprite-turntable`（360° 手办旋转展台）：
+
+- [ ] **Phase 4-A（即将开工）· 姿势库 + 精选服装预设库（零额外模型依赖）**
+  - [ ] 内置双语「单人试穿姿势库」（对镜比耶、回眸一笑、侧身秀包、慵懒靠墙、元气街拍、插兜酷girl、窗边托腮、轻撩头发等）
+  - [ ] 内置双语「双人约会合影姿势库」（并肩比耶、靠肩自拍、面对面吃漂亮饭、街角牵手回眸、夕阳剪影漫步等）
+  - [ ] 内置「精选服装灵感预设库」（学院 JK、秋冬毛呢/羽绒外套、温柔针织开衫、百褶裙、复古腋下包、马丁靴/小白鞋、精致配饰等），一键收入展柜或直接试穿
+  - [ ] 打通展示柜试穿、整套叠穿 OOTD 合拍与约会/双人合影接口的 `pose_id` 精准控姿参数，并接入 Dashboard & Playground 可视化选择器
+- [ ] **Phase 4-B（TODO 备选）· 试穿大片 360° 旋转展示台**
+  - [ ] 轻量版：复用现有生图模型生成 8 视角环绕定妆拼图 + `sharp` 切片 + HTML5 Canvas 拖拽旋转展台（零 GPU）
+  - [ ] 旗舰版（待有视频生成资源后接入）：对接首尾帧 360° Orbit 视频模型 + 透明抠图 72 帧序列导入与 Canvas 无极旋转

@@ -1,31 +1,132 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <script>(function(){try{var p=localStorage.getItem('xiyu_theme')||'auto';var d=p==='dark'||(p==='auto'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.setAttribute('data-theme',d?'dark':'light');}catch(e){}})();</script>
+  <script>(function(){try{var p=localStorage.getItem('xiyu_theme')||'light';var d=p==='dark'||(p==='auto'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.setAttribute('data-theme',d?'dark':'light');}catch(e){}})();</script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5" />
   <meta name="color-scheme" content="light dark" />
   <meta name="theme-color" content="#FFB6D9" media="(prefers-color-scheme: light)" />
-  <meta name="theme-color" content="#0F0F12" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#0B0B11" media="(prefers-color-scheme: dark)" />
   <meta name="robots" content="noindex, nofollow" />
-  <meta name="description" content="在浏览器中直接与溪语 AI 伴侣对话、测试人设与语音。" />
-  <title>聊天测试 · 溪语 AI</title>
+  <meta name="description" content="在浏览器中直接与溪语 AI 伴侣对话、约会剧场、发图送礼试穿与双人赛博合影。" />
+  <title>沉浸对话 · 溪语 AI</title>
   <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
   <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
 
-  <link rel="stylesheet" href="/app/tailwind.css" />
-  <link rel="stylesheet" href="/app/glass.css" />
+  <link rel="stylesheet" href="/app/tailwind.css?v=38" />
+  <link rel="stylesheet" href="/app/glass.css?v=38" />
   <style>
-    body { background: linear-gradient(180deg, #FFF7FB 0%, #FFFFFF 100%); }
-    .card { background: #fff; border: 1px solid #F0F0F2; border-radius: 18px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
-    .bubble-them { background: #fff; border: 1px solid #F0F0F2; border-radius: 4px 16px 16px 16px; padding: 10px 14px; max-width: 80%; word-wrap: break-word; }
-    .bubble-me { background: #FF8FB8; color: #fff; border-radius: 16px 4px 16px 16px; padding: 10px 14px; max-width: 80%; word-wrap: break-word; }
-    .typing-dots span { display: inline-block; width: 6px; height: 6px; background: #FFB6D9; border-radius: 50%; margin: 0 2px; animation: typing 1.4s infinite; }
+    /* 清透极光玻璃（默认浅色） + 暗夜液态玻璃（深色）双主题 */
+    body {
+      min-height: 100vh;
+      background:
+        radial-gradient(ellipse 68% 45% at 12% 0%, rgba(255, 198, 229, 0.42) 0%, transparent 62%),
+        radial-gradient(ellipse 58% 42% at 92% 8%, rgba(196, 224, 255, 0.36) 0%, transparent 60%),
+        radial-gradient(ellipse 60% 45% at 50% 100%, rgba(255, 232, 244, 0.38) 0%, transparent 65%),
+        #FAFBFD;
+      transition: background 0.35s ease, color 0.25s ease;
+    }
+    body.is-dating {
+      background:
+        radial-gradient(ellipse 75% 48% at 18% 0%, rgba(255, 166, 210, 0.48) 0%, transparent 64%),
+        radial-gradient(ellipse 60% 45% at 88% 12%, rgba(255, 214, 178, 0.42) 0%, transparent 60%),
+        radial-gradient(ellipse 62% 48% at 50% 100%, rgba(255, 200, 228, 0.42) 0%, transparent 66%),
+        #FFF9FC;
+    }
+    html[data-theme="dark"] body {
+      background:
+        radial-gradient(ellipse 65% 42% at 15% 0%, rgba(255, 126, 179, 0.16) 0%, transparent 62%),
+        radial-gradient(ellipse 58% 40% at 88% 10%, rgba(124, 148, 255, 0.14) 0%, transparent 60%),
+        #0B0B11;
+      color: #F4F4F6;
+    }
+    html[data-theme="dark"] body.is-dating {
+      background:
+        radial-gradient(ellipse 72% 46% at 20% 0%, rgba(255, 118, 176, 0.22) 0%, transparent 62%),
+        radial-gradient(ellipse 55% 44% at 85% 15%, rgba(251, 166, 128, 0.16) 0%, transparent 60%),
+        #0D0A10;
+    }
+    .pg-glass {
+      background: rgba(255, 255, 255, 0.72);
+      backdrop-filter: blur(22px) saturate(180%);
+      -webkit-backdrop-filter: blur(22px) saturate(180%);
+      border: 1px solid rgba(255, 255, 255, 0.85);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95), 0 8px 28px -14px rgba(31, 38, 135, 0.12);
+    }
+    html[data-theme="dark"] .pg-glass {
+      background: rgba(20, 20, 28, 0.74);
+      border-color: rgba(255, 255, 255, 0.10);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 12px 32px -16px rgba(0, 0, 0, 0.65);
+    }
+    .bubble-them {
+      background: rgba(255, 255, 255, 0.86);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.9);
+      box-shadow: 0 6px 20px -12px rgba(31, 38, 135, 0.14);
+      border-radius: 6px 18px 18px 18px;
+      padding: 10px 14px;
+      max-width: 82%;
+      word-wrap: break-word;
+    }
+    html[data-theme="dark"] .bubble-them {
+      background: rgba(30, 30, 40, 0.88);
+      border-color: rgba(255, 255, 255, 0.09);
+      color: #F4F4F6;
+    }
+    .bubble-me {
+      background: linear-gradient(135deg, #FF9BC2 0%, #F46AA0 100%);
+      color: #fff;
+      box-shadow: 0 8px 20px -10px rgba(244, 106, 160, 0.55);
+      border-radius: 18px 6px 18px 18px;
+      padding: 10px 14px;
+      max-width: 82%;
+      word-wrap: break-word;
+    }
+    .typing-dots span { display: inline-block; width: 6px; height: 6px; background: #FF8FB8; border-radius: 50%; margin: 0 2px; animation: typing 1.4s infinite; }
     .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
     .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
     @keyframes typing { 0%, 60%, 100% { opacity: 0.3; } 30% { opacity: 1; } }
-    .pill { background: #FFE8F2; color: #FF8FB8; padding: 2px 10px; border-radius: 9999px; font-size: 11px; font-weight: 600; }
+    .pill { background: rgba(255, 232, 242, 0.9); color: #E25B90; padding: 2px 10px; border-radius: 9999px; font-size: 11px; font-weight: 600; }
+    html[data-theme="dark"] .pill { background: rgba(255, 143, 184, 0.18); color: #FFB6D9; }
+    .dock-pill {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 5px 11px; border-radius: 9999px; font-size: 11.5px; font-weight: 600;
+      background: rgba(255, 255, 255, 0.78); border: 1px solid rgba(255, 182, 217, 0.42);
+      color: #4A4449; cursor: pointer; transition: all 0.16s ease; white-space: nowrap;
+    }
+    .dock-pill:hover { background: #FFF0F7; border-color: #FF8FB8; color: #E0578A; transform: translateY(-1px); }
+    .dock-pill.is-active { background: linear-gradient(135deg, #FF9BC2 0%, #F46AA0 100%); border-color: transparent; color: #fff; }
+    html[data-theme="dark"] .dock-pill { background: rgba(255, 255, 255, 0.07); border-color: rgba(255, 255, 255, 0.12); color: #E2E2E8; }
+    html[data-theme="dark"] .dock-pill:hover { background: rgba(255, 143, 184, 0.2); border-color: #FF8FB8; color: #FFB6D9; }
+    .photo-developing {
+      position: relative; overflow: hidden; border-radius: 16px; width: 220px; padding: 16px;
+      background: linear-gradient(135deg, rgba(255, 240, 248, 0.92), rgba(236, 244, 255, 0.88));
+      border: 1px solid rgba(255, 182, 217, 0.45);
+    }
+    html[data-theme="dark"] .photo-developing {
+      background: linear-gradient(135deg, rgba(38, 30, 44, 0.92), rgba(24, 30, 44, 0.92));
+      border-color: rgba(255, 143, 184, 0.35);
+    }
+    .photo-developing::after {
+      content: ''; position: absolute; inset: 0;
+      background: linear-gradient(110deg, transparent 30%, rgba(255,255,255,0.45) 50%, transparent 70%);
+      animation: shimmer 1.6s infinite;
+    }
+    @keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+    .pg-sheet {
+      position: fixed; bottom: 118px; left: 50%; transform: translateX(-50%);
+      width: calc(100% - 24px); max-width: 720px; z-index: 30;
+      border-radius: 22px; padding: 14px 16px;
+    }
+    .pg-sheet.hidden { display: none; }
+    .pg-lightbox {
+      position: fixed; inset: 0; z-index: 80; display: flex; align-items: center; justify-content: center;
+      padding: 18px; background: rgba(10, 10, 16, 0.8); backdrop-filter: blur(12px);
+    }
+    .pg-lightbox.hidden { display: none; }
+    .pg-lightbox img { max-width: 92vw; max-height: 86vh; border-radius: 16px; box-shadow: 0 24px 64px rgba(0,0,0,0.55); }
   </style>
   <script src="/app/theme.js" defer></script>
   <script src="/app/i18n.js" defer></script>
@@ -34,64 +135,212 @@
   <a href="#msgs" class="skip-link">跳到对话内容</a>
 
   <!-- Top bar -->
-  <header class="sticky top-0 z-10 bg-white/85 backdrop-blur border-b border-line">
-    <div class="max-w-3xl mx-auto px-4 py-3 flex items-center gap-3">
+  <header class="sticky top-0 z-20 pg-glass border-b border-line/60">
+    <div class="max-w-3xl mx-auto px-4 py-2.5 flex items-center gap-3">
       <a href="/app/dashboard.html" aria-label="返回控制台" class="text-mute hover:text-ink text-[20px] leading-none px-1 py-0.5 rounded-lg">‹</a>
-      <img id="c-avatar" src="/default-avatar.webp" alt="" class="w-10 h-10 rounded-full" />
+      <img id="c-avatar" src="/default-avatar.webp" alt="" class="w-10 h-10 rounded-full object-cover ring-2 ring-sakura/50" />
       <div class="flex-1 min-w-0">
-        <p id="c-name" class="text-[15px] font-bold truncate">—</p>
+        <div class="flex items-center gap-2">
+          <p id="c-name" class="text-[15px] font-bold truncate">—</p>
+          <span id="pg-date-pill" class="hidden text-[10.5px] font-bold px-2 py-0.5 rounded-full bg-gradient-to-r from-sakura to-sakura-deep text-white">💕 约会中</span>
+        </div>
         <p class="text-[11px] text-mute flex items-center gap-2">
           <span id="c-stage" class="pill">陌生</span>
           <span id="c-affection">— / 100</span>
           <span id="c-mood" class="text-sakura-deep">—</span>
         </p>
       </div>
-      <a href="/app/dashboard.html" class="text-[12px] text-mute hover:text-ink whitespace-nowrap">控制台</a>
+      <button type="button" id="btn-pg-theme" title="切换清透极光 / 暗夜液态玻璃" class="dock-pill">🌓 极光</button>
+      <a href="/app/dashboard.html" class="text-[12px] font-medium text-mute hover:text-sakura-deep whitespace-nowrap">控制台</a>
     </div>
   </header>
 
-  <!-- Banner: 解释这是浏览器测试，不是微信 -->
-  <div class="max-w-3xl mx-auto px-4 pt-4">
-    <div class="card p-3 text-[12px] text-mute flex items-start gap-2">
-      <span class="text-sakura-deep" aria-hidden="true">🧪</span>
-      <span><b>⚠️ 你正在与 AI 对话</b>——「她」由人工智能生成、非真人。这是浏览器内 playground，跑的是和微信入站消息**完全相同**的 AI 管线（人设、记忆、心情、好感度都生效），只是不发到微信。</span>
+  <!-- 进行中的约会剧场氛围横幅 -->
+  <div id="pg-date-banner" class="hidden max-w-3xl mx-auto px-4 pt-3">
+    <div class="pg-glass rounded-2xl p-3 flex items-center justify-between gap-2 flex-wrap border-sakura/50">
+      <div class="min-w-0">
+        <div class="text-[12.5px] font-bold text-sakura-deep truncate" id="pg-date-title">💕 约会剧场进行中</div>
+        <div class="text-[11px] text-mute truncate" id="pg-date-sub">—</div>
+      </div>
+      <div class="flex items-center gap-1.5 flex-wrap">
+        <button type="button" id="btn-pg-snap-couple" class="dock-pill is-active">📸 拍约会合影</button>
+        <button type="button" id="btn-pg-end-date" class="dock-pill">✨ 结束并结算记忆</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Banner -->
+  <div class="max-w-3xl mx-auto px-4 pt-3">
+    <div class="pg-glass rounded-2xl p-2.5 text-[11.5px] text-mute flex items-center justify-between gap-2 flex-wrap">
+      <span>✨ 网页沉浸对话（与微信共享同一套记忆、衣橱与约会剧场）· 底部可直接 <b>开启约会 / 发图送礼 / 传背景拍双人合影</b></span>
     </div>
   </div>
 
   <!-- Messages -->
-  <main id="msgs" aria-live="polite" class="max-w-3xl mx-auto px-4 py-5 space-y-3 pb-36"></main>
+  <main id="msgs" aria-live="polite" class="max-w-3xl mx-auto px-4 py-4 space-y-3 pb-52"></main>
 
-  <!-- Input -->
-  <footer class="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur border-t border-line z-10">
-    <form id="chat-form" class="max-w-3xl mx-auto px-4 py-3 flex items-end gap-2">
-      <textarea id="chat-input" rows="1" aria-label="输入消息" placeholder="说点什么…(Enter 发送 / Shift+Enter 换行)"
-        class="flex-1 resize-none bg-cloud border border-line rounded-2xl px-4 py-2.5 text-[14px] focus:outline-none focus:border-sakura placeholder:text-mute"
-        maxlength="2000"></textarea>
-      <button type="button" id="mic-btn" title="按住说话（识别为文字发送）" aria-label="按住说话（识别为文字发送）"
-        class="flex-shrink-0 w-10 h-10 grid place-items-center text-sakura-deep border border-sakura-soft rounded-full hover:bg-sakura-soft transition-all">
-        🎙️
-      </button>
-      <button type="submit" id="send-btn"
-        class="flex-shrink-0 px-5 py-2.5 bg-gradient-to-r from-sakura to-sakura-deep text-white text-[13px] font-semibold rounded-full disabled:opacity-50 disabled:cursor-not-allowed">
-        发送
-      </button>
-    </form>
+  <!-- 约会剧场 & 双人合影快捷浮层 -->
+  <div id="pg-date-sheet" class="pg-sheet pg-glass hidden">
+    <div class="flex items-center justify-between mb-2">
+      <span class="text-[13px] font-bold">💕 约会剧场 & 双人合影</span>
+      <button type="button" id="btn-close-date-sheet" class="text-[12px] text-mute hover:text-ink">收起 ✕</button>
+    </div>
+
+    <!-- 本人形象照状态（用于双人同框合影） -->
+    <div class="rounded-xl border border-sakura-soft/70 bg-white/50 dark:bg-white/5 p-2.5 mb-2.5 flex items-center justify-between gap-2 flex-wrap">
+      <div class="text-[11.5px]">
+        <span class="font-semibold">🧑 我的形象照（双人合影同框用）：</span>
+        <span id="pg-user-ref-status" class="text-mute">检测中…</span>
+      </div>
+      <label class="dock-pill cursor-pointer">
+        📷 上传我的照片
+        <input id="pg-user-ref-input" type="file" accept="image/*" class="sr-only" />
+      </label>
+    </div>
+
+    <div id="pg-sheet-idle" class="space-y-2">
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+        <button type="button" data-dtype="shopping" class="pg-preset dock-pill justify-center py-2">🛍️ 周末逛商场</button>
+        <button type="button" data-dtype="dining" class="pg-preset dock-pill justify-center py-2">🍜 吃漂亮饭</button>
+        <button type="button" data-dtype="walk" class="pg-preset dock-pill justify-center py-2">🌆 傍晚压马路</button>
+        <button type="button" data-dtype="movie" class="pg-preset dock-pill justify-center py-2">🎬 一起看电影</button>
+      </div>
+      <div class="flex items-center gap-2">
+        <input id="pg-custom-date-title" type="text" maxlength="50" placeholder="或输入自定义约会场景（如：去海边看日落）"
+               class="flex-1 text-[12px] rounded-xl border border-line bg-white/80 dark:bg-white/10 px-3 py-1.5 focus:outline-none focus:border-sakura-deep" />
+        <button type="button" id="btn-pg-custom-start" class="dock-pill is-active px-3.5 py-1.5">开启约会</button>
+      </div>
+      <p class="text-[11px] text-mute">提示：也可以直接在对话框说「开启约会模式，带你去吃火锅」或「到你楼下啦走吧一起逛街」自然进入！</p>
+    </div>
+
+    <div id="pg-sheet-active" class="hidden space-y-2">
+      <p class="text-[12px] text-mute" id="pg-sheet-active-desc">—</p>
+      <div class="flex items-center gap-2 flex-wrap">
+        <button type="button" id="btn-sheet-snap" class="dock-pill is-active">📸 拍约会双人合影</button>
+        <label class="dock-pill cursor-pointer">
+          🌄 传约会背景照合影
+          <input id="pg-sheet-bg-file" type="file" accept="image/*" class="sr-only" />
+        </label>
+        <button type="button" id="btn-sheet-end" class="dock-pill">✨ 结束约会并结算记忆</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bottom Input & Action Dock -->
+  <footer class="fixed bottom-0 left-0 right-0 pg-glass border-t border-line/60 z-20">
+    <div class="max-w-3xl mx-auto px-4 pt-2 pb-3 space-y-2">
+      <!-- 快捷工具条 -->
+      <div class="flex items-center gap-1.5 overflow-x-auto pb-0.5" style="scrollbar-width:none;">
+        <button type="button" id="btn-dock-date" class="dock-pill">💕 约会剧场</button>
+        <label class="dock-pill cursor-pointer" title="发送衣服/包包/鞋子商品图，自动收入衣橱并生成试穿照">
+          🎁 发图送礼
+          <input id="pg-gift-file" type="file" accept="image/*" class="sr-only" />
+        </label>
+        <label class="dock-pill cursor-pointer" title="上传餐厅/街景/风景照，把你们俩（或她）放进现实背景里拍合影">
+          🌄 传背景合影
+          <input id="pg-bg-file" type="file" accept="image/*" class="sr-only" />
+        </label>
+        <button type="button" id="btn-dock-couple" class="dock-pill" title="立即拍一张当前场景的约会双人合影">📸 拍约会合影</button>
+      </div>
+
+      <!-- 已选图片预览条 -->
+      <div id="pg-attach-preview" class="hidden flex items-center gap-2.5 rounded-xl bg-white/75 dark:bg-white/10 border border-sakura/40 px-2.5 py-1.5">
+        <img id="pg-attach-thumb" alt="待发图片" class="w-10 h-10 rounded-lg object-cover border border-line" />
+        <div class="flex-1 min-w-0">
+          <div id="pg-attach-label" class="text-[11.5px] font-semibold truncate">已附图片</div>
+          <div class="text-[10.5px] text-mute">写句话一起发，或直接点发送</div>
+        </div>
+        <button type="button" id="btn-clear-attach" class="text-[12px] text-mute hover:text-ink px-1.5">✕</button>
+      </div>
+
+      <form id="chat-form" class="flex items-end gap-2">
+        <textarea id="chat-input" rows="1" aria-label="输入消息" placeholder="和她说点什么…（也可说「开启约会模式」或点上方送礼/传背景）"
+          class="flex-1 resize-none bg-white/80 dark:bg-white/10 border border-line rounded-2xl px-4 py-2.5 text-[14px] focus:outline-none focus:border-sakura placeholder:text-mute"
+          maxlength="2000"></textarea>
+        <button type="button" id="mic-btn" title="按住说话（识别为文字发送）" aria-label="按住说话（识别为文字发送）"
+          class="flex-shrink-0 w-10 h-10 grid place-items-center text-sakura-deep border border-sakura-soft rounded-full hover:bg-sakura-soft transition-all">
+          🎙️
+        </button>
+        <button type="submit" id="send-btn"
+          class="flex-shrink-0 px-5 py-2.5 bg-gradient-to-r from-sakura to-sakura-deep text-white text-[13px] font-semibold rounded-full disabled:opacity-50 disabled:cursor-not-allowed shadow-sakura">
+          发送
+        </button>
+      </form>
+    </div>
   </footer>
 
+  <!-- 高清灯箱 -->
+  <div id="pg-lightbox" class="pg-lightbox hidden" role="dialog" aria-modal="true">
+    <img id="pg-lb-img" alt="高清预览" />
+  </div>
+
   <script>
-    // ─── auth ──────────────────────────────────────────────────────────────
     const userRaw = localStorage.getItem('xiyu_user');
     const token = localStorage.getItem('xiyu_token');
     if (!userRaw || !token) { location.href = '/app/auth.html'; }
+    const companionId = Number(localStorage.getItem('xiyu_companion_id'));
+    if (!companionId) { location.href = '/app/dashboard.html'; }
 
     function authHeaders() {
       return { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' };
     }
 
-    const companionId = Number(localStorage.getItem('xiyu_companion_id'));
-    if (!companionId) { location.href = '/app/dashboard.html'; }
+    // ─── 清透极光 / 暗夜液态玻璃一键切换 ───────────────────────────────────
+    const themeBtn = document.getElementById('btn-pg-theme');
+    function syncThemeBtn() {
+      const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      if (themeBtn) themeBtn.textContent = isDark ? '🌌 暗夜' : '✨ 极光';
+    }
+    syncThemeBtn();
+    themeBtn?.addEventListener('click', () => {
+      const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      try { localStorage.setItem('xiyu_theme', next); } catch {}
+      syncThemeBtn();
+    });
 
-    // ─── companion 头部 ────────────────────────────────────────────────────
+    // ─── 图片压缩 + 鉴权图片加载 + 灯箱 ────────────────────────────────────
+    function compressFile(file, maxEdge = 1280) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error('读取图片失败'));
+        reader.onload = () => {
+          const img = new Image();
+          img.onerror = () => resolve(String(reader.result || ''));
+          img.onload = () => {
+            const ratio = Math.min(1, maxEdge / Math.max(img.width || 1, img.height || 1));
+            const c = document.createElement('canvas');
+            c.width = Math.max(1, Math.round(img.width * ratio));
+            c.height = Math.max(1, Math.round(img.height * ratio));
+            c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+            resolve(c.toDataURL('image/jpeg', 0.88));
+          };
+          img.src = String(reader.result || '');
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    const pgLb = document.getElementById('pg-lightbox');
+    const pgLbImg = document.getElementById('pg-lb-img');
+    pgLb?.addEventListener('click', () => pgLb.classList.add('hidden'));
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') pgLb?.classList.add('hidden'); });
+    function openPhotoZoom(src) {
+      if (!pgLb || !pgLbImg || !src) return;
+      pgLbImg.src = src;
+      pgLb.classList.remove('hidden');
+    }
+
+    async function fetchAuthedBlob(url) {
+      const r = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
+      if (!r.ok) return '';
+      return URL.createObjectURL(await r.blob());
+    }
+
+    // ─── Companion & Date Mode 状态同步 ────────────────────────────────────
+    let activeDateSession = null;
+    let hasUserPortrait = false;
+
     async function loadCompanion() {
       try {
         const r = await fetch('/api/companions/' + companionId, { headers: authHeaders() });
@@ -108,6 +357,39 @@
       } catch {}
     }
 
+    async function loadDateOverview() {
+      try {
+        const r = await fetch('/api/companions/' + companionId + '/date-mode', { headers: authHeaders() });
+        const d = await r.json();
+        if (!r.ok || !d.ok || !d.data) return;
+        hasUserPortrait = !!d.data.hasUserPortrait;
+        const uStatus = document.getElementById('pg-user-ref-status');
+        if (uStatus) {
+          uStatus.textContent = hasUserPortrait
+            ? '✓ 已锁定本人形象（合影将自动双人同框）'
+            : '未上传（上传后约会合影就会把你和她画在一起！）';
+        }
+        renderDateState(d.data.activeSession || null);
+      } catch {}
+    }
+
+    function renderDateState(session) {
+      activeDateSession = session && session.status === 'active' ? session : null;
+      const on = !!activeDateSession;
+      document.body.classList.toggle('is-dating', on);
+      document.getElementById('pg-date-pill')?.classList.toggle('hidden', !on);
+      document.getElementById('pg-date-banner')?.classList.toggle('hidden', !on);
+      document.getElementById('btn-dock-date')?.classList.toggle('is-active', on);
+      document.getElementById('pg-sheet-idle')?.classList.toggle('hidden', on);
+      document.getElementById('pg-sheet-active')?.classList.toggle('hidden', !on);
+      if (on) {
+        const outfits = (activeDateSession.outfit_snapshot || []).map(it => (it.color || '') + (it.name || '')).filter(Boolean);
+        document.getElementById('pg-date-title').textContent = '💕 正在约会：' + activeDateSession.title;
+        document.getElementById('pg-date-sub').textContent = activeDateSession.scene + (outfits.length ? ' · 👗 ' + outfits.join('、') : '');
+        document.getElementById('pg-sheet-active-desc').textContent = '当前场景：' + activeDateSession.scene + (outfits.length ? '（穿搭：' + outfits.join('、') + '）' : '');
+      }
+    }
+
     function updateState(state) {
       if (!state) return;
       if (state.mood) document.getElementById('c-mood').textContent = state.mood;
@@ -115,18 +397,33 @@
       if (state.relationship_stage) document.getElementById('c-stage').textContent = state.relationship_stage;
     }
 
-    // ─── 渲染消息 ──────────────────────────────────────────────────────────
+    // ─── 消息渲染 ──────────────────────────────────────────────────────────
     const msgs = document.getElementById('msgs');
-    function appendUser(text) {
+    function scrollEnd() { requestAnimationFrame(() => window.scrollTo(0, document.body.scrollHeight)); }
+
+    function appendUser(text, previewDataUrl = '') {
       const row = document.createElement('div');
       row.className = 'flex justify-end';
       const b = document.createElement('div');
-      b.className = 'bubble-me whitespace-pre-wrap text-[14px]';
-      b.textContent = text;
+      b.className = 'bubble-me whitespace-pre-wrap text-[14px] space-y-1.5';
+      if (previewDataUrl) {
+        const img = document.createElement('img');
+        img.src = previewDataUrl;
+        img.alt = '发送的图片';
+        img.className = 'rounded-xl max-w-[200px] max-h-[240px] object-cover cursor-zoom-in block';
+        img.onclick = () => openPhotoZoom(previewDataUrl);
+        b.appendChild(img);
+      }
+      if (text) {
+        const p = document.createElement('div');
+        p.textContent = text;
+        b.appendChild(p);
+      }
       row.appendChild(b);
       msgs.appendChild(row);
       scrollEnd();
     }
+
     function appendThem(text) {
       if (!text) return;
       const row = document.createElement('div');
@@ -135,7 +432,6 @@
       b.className = 'bubble-them whitespace-pre-wrap text-[14px]';
       b.textContent = text;
       row.appendChild(b);
-      // v1.4.0 Sprint 2.5 / v1.4.2: 朗读按钮（TTS 未配时直接不渲染）
       if (window.__CAPS?.tts) {
         const playBtn = document.createElement('button');
         playBtn.type = 'button';
@@ -148,6 +444,38 @@
       msgs.appendChild(row);
       scrollEnd();
     }
+
+    function appendDevelopingCard(label) {
+      const row = document.createElement('div');
+      row.className = 'flex justify-start';
+      row.innerHTML = '<div class="photo-developing"><div class="text-[12px] font-bold text-sakura-deep mb-1">📷 ' + label + '</div><div class="text-[11px] text-mute">正在暗房显影（锁脸 + 穿搭合成，约 30-90 秒）…</div></div>';
+      msgs.appendChild(row);
+      scrollEnd();
+      return row;
+    }
+
+    async function resolveDevelopingCard(row, apiUrl, caption) {
+      const blobUrl = await fetchAuthedBlob(apiUrl);
+      if (!blobUrl) { row.remove(); return; }
+      row.innerHTML = '';
+      const wrap = document.createElement('div');
+      wrap.className = 'bubble-them space-y-1.5';
+      const img = document.createElement('img');
+      img.src = blobUrl;
+      img.alt = caption || '照片';
+      img.className = 'rounded-xl max-w-[240px] max-h-[320px] object-cover cursor-zoom-in block';
+      img.onclick = () => openPhotoZoom(blobUrl);
+      wrap.appendChild(img);
+      if (caption) {
+        const cap = document.createElement('div');
+        cap.className = 'text-[12px] text-mute';
+        cap.textContent = caption;
+        wrap.appendChild(cap);
+      }
+      row.appendChild(wrap);
+      scrollEnd();
+    }
+
     function appendSticker(s) {
       const row = document.createElement('div');
       row.className = 'flex justify-start';
@@ -166,6 +494,7 @@
       msgs.appendChild(row);
       scrollEnd();
     }
+
     function showTyping() {
       const row = document.createElement('div');
       row.id = 'typing-row';
@@ -177,24 +506,18 @@
       msgs.appendChild(row);
       scrollEnd();
     }
-    function hideTyping() {
-      document.getElementById('typing-row')?.remove();
-    }
-    function scrollEnd() {
-      requestAnimationFrame(() => window.scrollTo(0, document.body.scrollHeight));
-    }
+    function hideTyping() { document.getElementById('typing-row')?.remove(); }
     function appendSystem(text) {
       const row = document.createElement('div');
       row.className = 'flex justify-center';
       const b = document.createElement('div');
-      b.className = 'text-[11px] text-mute py-1 px-3 bg-cloud rounded-full';
+      b.className = 'text-[11px] text-mute py-1 px-3 pg-glass rounded-full';
       b.textContent = text;
       row.appendChild(b);
       msgs.appendChild(row);
       scrollEnd();
     }
 
-    // ─── 加载最近对话历史 ─────────────────────────────────────────────────
     async function loadHistory() {
       try {
         const r = await fetch('/api/companions/' + companionId + '/context?limit=20', { headers: authHeaders() });
@@ -204,26 +527,164 @@
         for (const t of turns) {
           if (t.role === 'user') appendUser(t.content);
           else if (t.role === 'assistant') {
-            // 历史 assistant 内容可能含 || 分段，拆开展示更自然
             const segs = String(t.content || '').split(/\s*(?:\|\||｜｜)\s*/g).map(s => s.trim()).filter(Boolean);
             if (segs.length) for (const s of segs) appendThem(s);
             else appendThem(t.content);
           }
         }
-        if (turns.length === 0) appendSystem('打个招呼，开始聊天吧');
+        if (turns.length === 0) appendSystem('打个招呼，或点下方「💕 约会剧场 / 🎁 发图送礼」开始体验吧');
       } catch {}
     }
 
-    // ─── 发送 ──────────────────────────────────────────────────────────────
+    // ─── 约会剧场浮层 + 合影/结算动作 ──────────────────────────────────────
+    const dateSheet = document.getElementById('pg-date-sheet');
+    document.getElementById('btn-dock-date')?.addEventListener('click', () => {
+      dateSheet?.classList.toggle('hidden');
+      loadDateOverview();
+    });
+    document.getElementById('btn-close-date-sheet')?.addEventListener('click', () => dateSheet?.classList.add('hidden'));
+
+    document.getElementById('pg-user-ref-input')?.addEventListener('change', async (ev) => {
+      const file = ev.target.files?.[0];
+      if (!file) return;
+      appendSystem('正在上传并锁定你的本人形象照…');
+      try {
+        const dataUrl = await compressFile(file, 1280);
+        const r = await fetch('/api/companions/' + companionId + '/user-visual-reference', {
+          method: 'POST', headers: authHeaders(), body: JSON.stringify({ image: dataUrl }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d.ok) throw new Error(d.error || '上传失败');
+        appendSystem('✓ 你的本人形象照已锁定！之后拍约会合影会自动把你和她画在同一画面里～');
+        await loadDateOverview();
+      } catch (e) {
+        appendSystem('❌ 上传本人形象照失败：' + e.message);
+      } finally { ev.target.value = ''; }
+    });
+
+    async function startDateFromChat(payload) {
+      dateSheet?.classList.add('hidden');
+      try {
+        const r = await fetch('/api/companions/' + companionId + '/date-mode/start', {
+          method: 'POST', headers: authHeaders(), body: JSON.stringify(payload),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d.ok) throw new Error(d.error || '开启失败');
+        renderDateState(d.data.session);
+        const outfitNames = (d.data.session?.outfit_snapshot || []).map(i => i.name).filter(Boolean);
+        appendSystem('💕 已开启约会剧场「' + d.data.session.title + '」' + (outfitNames.length ? ' · 联动穿搭：' + outfitNames.join('、') : ''));
+      } catch (e) { appendSystem('❌ 开启约会失败：' + e.message); }
+    }
+
+    document.querySelectorAll('.pg-preset').forEach(btn => {
+      btn.addEventListener('click', () => startDateFromChat({ activity_type: btn.dataset.dtype || 'custom' }));
+    });
+    document.getElementById('btn-pg-custom-start')?.addEventListener('click', () => {
+      const title = (document.getElementById('pg-custom-date-title')?.value || '').trim();
+      if (!title) return;
+      startDateFromChat({ activity_type: 'custom', title, scene: '和他一起' + title });
+      document.getElementById('pg-custom-date-title').value = '';
+    });
+
+    async function endDateFromChat() {
+      dateSheet?.classList.add('hidden');
+      try {
+        const r = await fetch('/api/companions/' + companionId + '/date-mode/end', {
+          method: 'POST', headers: authHeaders(), body: JSON.stringify({ session_id: activeDateSession?.id }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d.ok) throw new Error(d.error || '结算失败');
+        renderDateState(null);
+        const loops = d.data?.resolvedLoops || [];
+        appendSystem('✨ 约会剧场已圆满结算并写入高权重共同记忆' + (loops.length ? '，同时核销了 ' + loops.length + ' 条约定！' : '！'));
+      } catch (e) { appendSystem('❌ 结算失败：' + e.message); }
+    }
+    document.getElementById('btn-pg-end-date')?.addEventListener('click', endDateFromChat);
+    document.getElementById('btn-sheet-end')?.addEventListener('click', endDateFromChat);
+
+    async function triggerDatePhotoInChat(bgDataUrl = '', note = '') {
+      dateSheet?.classList.add('hidden');
+      const card = appendDevelopingCard(hasUserPortrait ? '正在拍摄双人同框约会合影' : '正在拍摄约会打卡照');
+      try {
+        const endpoint = bgDataUrl
+          ? '/api/companions/' + companionId + '/date-mode/cyber-photo'
+          : '/api/companions/' + companionId + '/date-mode/photo';
+        const body = bgDataUrl
+          ? { image: bgDataUrl, note, include_user: true }
+          : { note, include_user: true };
+        const r = await fetch(endpoint, { method: 'POST', headers: authHeaders(), body: JSON.stringify(body) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d.ok) throw new Error(d.error || '拍照失败');
+        const cap = d.data?.has_user_ref
+          ? '💕 我们的双人约会合影（点击可放大）'
+          : '📷 约会打卡照（点「💕 约会剧场 → 上传我的照片」即可拍双人同框合影）';
+        await resolveDevelopingCard(card, d.data.image_url, cap);
+      } catch (e) {
+        card.remove();
+        appendSystem('❌ 拍照失败：' + e.message);
+      }
+    }
+
+    document.getElementById('btn-pg-snap-couple')?.addEventListener('click', () => triggerDatePhotoInChat());
+    document.getElementById('btn-sheet-snap')?.addEventListener('click', () => triggerDatePhotoInChat());
+    document.getElementById('btn-dock-couple')?.addEventListener('click', () => {
+      if (!activeDateSession) {
+        appendSystem('💡 请先点「💕 约会剧场」开启约会，或点「🌄 传背景合影」直接传一张现实背景照拍合影！');
+        return;
+      }
+      triggerDatePhotoInChat();
+    });
+
+    // ─── 图片附件（发图送礼 / 传约会背景合影） ────────────────────────────
+    let attachedImage = '';
+    let attachedPurpose = 'auto'; // 'gift' | 'couple_photo'
+    const attachPreview = document.getElementById('pg-attach-preview');
+    const attachThumb = document.getElementById('pg-attach-thumb');
+    const attachLabel = document.getElementById('pg-attach-label');
+
+    function clearAttach() {
+      attachedImage = '';
+      attachedPurpose = 'auto';
+      attachPreview?.classList.add('hidden');
+    }
+    document.getElementById('btn-clear-attach')?.addEventListener('click', clearAttach);
+
+    async function handlePickAttach(file, purpose, labelText) {
+      if (!file) return;
+      try {
+        attachedImage = await compressFile(file, 1280);
+        attachedPurpose = purpose;
+        attachThumb.src = attachedImage;
+        attachLabel.textContent = labelText + '：' + file.name;
+        attachPreview?.classList.remove('hidden');
+      } catch (e) {
+        appendSystem('❌ 图片读取失败：' + e.message);
+      }
+    }
+    document.getElementById('pg-gift-file')?.addEventListener('change', (ev) => {
+      handlePickAttach(ev.target.files?.[0], 'gift', '🎁 送礼/试穿商品图');
+      ev.target.value = '';
+    });
+    document.getElementById('pg-bg-file')?.addEventListener('change', (ev) => {
+      handlePickAttach(ev.target.files?.[0], 'couple_photo', '🌄 约会背景照（发送后生成合影）');
+      ev.target.value = '';
+    });
+    document.getElementById('pg-sheet-bg-file')?.addEventListener('change', async (ev) => {
+      const f = ev.target.files?.[0];
+      ev.target.value = '';
+      if (!f) return;
+      const dataUrl = await compressFile(f, 1280);
+      appendUser('我们在这合个影吧！', dataUrl);
+      triggerDatePhotoInChat(dataUrl, '在这个场景一起开心合影');
+    });
+
+    // ─── 发送消息（支持文字 + 送礼图 + 约会背景合影图） ────────────────────
     const form = document.getElementById('chat-form');
     const input = document.getElementById('chat-input');
     const sendBtn = document.getElementById('send-btn');
 
     input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        form.requestSubmit();
-      }
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); }
     });
     input.addEventListener('input', () => {
       input.style.height = 'auto';
@@ -235,40 +696,68 @@
       e.preventDefault();
       if (busy) return;
       const text = input.value.trim();
-      if (!text) return;
+      const imgToSend = attachedImage;
+      const purposeToSend = attachedPurpose;
+      if (!text && !imgToSend) return;
+
       busy = true;
       sendBtn.disabled = true;
       sendBtn.textContent = '发送中…';
-      appendUser(text);
+      appendUser(text || (purposeToSend === 'gift' ? '送你这个试试看～' : '我们在这拍张合影吧！'), imgToSend);
       input.value = '';
       input.style.height = 'auto';
+      clearAttach();
       showTyping();
 
       try {
         const r = await fetch('/api/companions/' + companionId + '/playground-chat', {
           method: 'POST',
           headers: authHeaders(),
-          body: JSON.stringify({ text }),
+          body: JSON.stringify({
+            text: text || (purposeToSend === 'gift' ? '送你这个试试看' : '坐我旁边合个影吧'),
+            image: imgToSend || undefined,
+            image_purpose: imgToSend ? purposeToSend : undefined,
+          }),
         });
         const d = await r.json();
         hideTyping();
         if (!r.ok || !d.ok) throw new Error(d.message || d.error || '请求失败');
         if (d.data?.sleeping) {
-          appendSystem('💤 她睡着了，现在是她的睡眠时间。消息已收到，她起床后会回你～想现在叫醒她，去控制台点「📞 打电话叫醒她」。');
+          appendSystem('💤 她睡着了，现在是她的睡眠时间。消息已收到，她起床后会回你～');
           return;
         }
         const segs = d.data?.segments || [];
-        // 逐条展示，模拟"先发一条再发下一条"
         for (let i = 0; i < segs.length; i++) {
           const seg = segs[i];
-          if (i > 0) {
-            // 段间小停顿
-            await new Promise(rr => setTimeout(rr, 350 + Math.random() * 500));
-          }
+          if (i > 0) await new Promise(rr => setTimeout(rr, 320 + Math.random() * 420));
           if (seg.text) appendThem(seg.text);
           for (const s of seg.stickers || []) appendSticker(s);
         }
         updateState(d.data?.state);
+        if (d.data?.dateSession) renderDateState(d.data.dateSession);
+        else if (d.data?.settledDate) {
+          renderDateState(null);
+          appendSystem('✨ 本次约会已结算入长期记忆' + (d.data.settledDate.resolvedLoops?.length ? '，并核销关联约定 ' + d.data.settledDate.resolvedLoops.length + ' 条' : ''));
+        }
+
+        // 若本轮触发了送礼试穿：自动异步在对话流里显影试穿照！
+        if (d.data?.wardrobeAction?.item && d.data.wardrobeAction.shouldSendTryonPhoto) {
+          const wItem = d.data.wardrobeAction.item;
+          const card = appendDevelopingCard('正在换上「' + wItem.name + '」拍试穿照');
+          fetch('/api/companions/' + companionId + '/wardrobe/' + wItem.id + '/tryon', {
+            method: 'POST', headers: authHeaders(), body: JSON.stringify({ compose_with_wearing: true }),
+          }).then(res => res.json().catch(() => ({}))).then(out => {
+            if (out?.ok && out.data?.tryon_image_url) {
+              resolveDevelopingCard(card, out.data.tryon_image_url, '👗 已收入数字衣橱 · 「' + wItem.name + '」试穿照');
+            } else {
+              card.remove();
+            }
+          }).catch(() => card.remove());
+        } else if (d.data?.shouldTriggerCyberPhoto && imgToSend) {
+          triggerDatePhotoInChat(imgToSend, text || '开心约会合影');
+        } else if (d.data?.shouldTriggerDatePhoto) {
+          triggerDatePhotoInChat('', text || '开心约会合影');
+        }
       } catch (err) {
         hideTyping();
         appendSystem('❌ ' + err.message);
@@ -280,28 +769,18 @@
       }
     });
 
-    // ─── v1.4.0 Sprint 2.5: 朗读 & 录音 ──────────────────────────────────────
-    // 朗读：调 /tts-preview 拿 mp3，浏览器 Audio 播。多次点击不会叠播。
+    // ─── 朗读 & 录音 ──────────────────────────────────────────────────────
     let _voiceAudio = null;
     async function playTextAsVoice(text, btnEl) {
       try {
-        if (!text || text.length > 100) {
-          // 超长截断到 100 字（与后端路由上限一致）
-          text = String(text).slice(0, 100);
-        }
+        text = String(text || '').slice(0, 100);
         if (_voiceAudio) { _voiceAudio.pause(); _voiceAudio = null; }
         if (btnEl) btnEl.style.opacity = '0.4';
         const r = await fetch('/api/companions/' + companionId + '/tts-preview', {
-          method: 'POST',
-          headers: authHeaders(),
-          body: JSON.stringify({ text }),
+          method: 'POST', headers: authHeaders(), body: JSON.stringify({ text }),
         });
-        if (!r.ok) {
-          const j = await r.json().catch(() => ({}));
-          throw new Error(j.error || ('HTTP ' + r.status));
-        }
-        const blob = await r.blob();
-        const url = URL.createObjectURL(blob);
+        if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || ('HTTP ' + r.status)); }
+        const url = URL.createObjectURL(await r.blob());
         _voiceAudio = new Audio(url);
         _voiceAudio.onended = _voiceAudio.onerror = () => { if (btnEl) btnEl.style.opacity = ''; };
         await _voiceAudio.play();
@@ -311,28 +790,13 @@
       }
     }
 
-    // 录音：MediaRecorder API → base64 → /asr-transcribe → 把文本填进输入框 + 自动发
     const micBtn = document.getElementById('mic-btn');
-    let mediaRec = null;
-    let micChunks = [];
-    let micStream = null;
+    let mediaRec = null, micChunks = [], micStream = null;
     micBtn.addEventListener('click', async () => {
-      if (mediaRec && mediaRec.state === 'recording') {
-        // 第二次点击 → 停止录音
-        try { mediaRec.stop(); } catch {}
-        return;
-      }
-      if (!navigator.mediaDevices?.getUserMedia) {
-        appendSystem('❌ 浏览器不支持麦克风');
-        return;
-      }
-      try {
-        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      } catch (e) {
-        appendSystem('❌ 无法访问麦克风：' + (e.message || '已拒绝授权'));
-        return;
-      }
-      // 选 mime：优先 webm/opus（ASR 普遍支持），fallback 浏览器默认
+      if (mediaRec && mediaRec.state === 'recording') { try { mediaRec.stop(); } catch {} return; }
+      if (!navigator.mediaDevices?.getUserMedia) { appendSystem('❌ 浏览器不支持麦克风'); return; }
+      try { micStream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+      catch (e) { appendSystem('❌ 无法访问麦克风：' + (e.message || '已拒绝授权')); return; }
       let mime = 'audio/webm;codecs=opus';
       if (!MediaRecorder.isTypeSupported(mime)) mime = 'audio/webm';
       if (!MediaRecorder.isTypeSupported(mime)) mime = '';
@@ -340,62 +804,43 @@
       micChunks = [];
       mediaRec.ondataavailable = e => { if (e.data.size) micChunks.push(e.data); };
       mediaRec.onstop = async () => {
-        // 关麦克风
         for (const t of micStream.getTracks()) t.stop();
         const blob = new Blob(micChunks, { type: mediaRec.mimeType || 'audio/webm' });
         micBtn.textContent = '🎙️';
         micBtn.classList.remove('bg-sakura-soft');
         if (blob.size < 300) { appendSystem('录音太短了～'); return; }
         if (blob.size > 1.5 * 1024 * 1024) { appendSystem('录音太长了，请保持在一分钟内'); return; }
-        // base64
-        const b64 = await blobToBase64(blob);
+        const b64 = await new Promise((res, rej) => {
+          const fr = new FileReader();
+          fr.onloadend = () => { const s = String(fr.result || ''); res(s.slice(s.indexOf(',') + 1)); };
+          fr.onerror = rej;
+          fr.readAsDataURL(blob);
+        });
         micBtn.disabled = true;
         try {
           const r = await fetch('/api/companions/' + companionId + '/asr-transcribe', {
-            method: 'POST',
-            headers: authHeaders(),
-            body: JSON.stringify({ audio_base64: b64, mime: blob.type.split(';')[0] }),
+            method: 'POST', headers: authHeaders(), body: JSON.stringify({ audio_base64: b64, mime: blob.type.split(';')[0] }),
           });
           const d = await r.json();
           if (!r.ok || !d.ok) throw new Error(d.error || '识别失败');
-          const text = (d.data?.text || '').trim();
-          if (!text) { appendSystem('没识别到内容～'); return; }
-          input.value = text;
+          const txt = (d.data?.text || '').trim();
+          if (!txt) { appendSystem('没识别到内容～'); return; }
+          input.value = txt;
           input.dispatchEvent(new Event('input'));
           form.requestSubmit();
-        } catch (e) {
-          appendSystem('❌ 识别失败：' + e.message);
-        } finally {
-          micBtn.disabled = false;
-        }
+        } catch (e) { appendSystem('❌ 识别失败：' + e.message); }
+        finally { micBtn.disabled = false; }
       };
       mediaRec.start();
       micBtn.textContent = '⏹️';
       micBtn.classList.add('bg-sakura-soft');
     });
-    function blobToBase64(blob) {
-      return new Promise((resolve, reject) => {
-        const r = new FileReader();
-        r.onloadend = () => {
-          const s = String(r.result || '');
-          const i = s.indexOf(',');
-          resolve(i >= 0 ? s.slice(i + 1) : s);
-        };
-        r.onerror = reject;
-        r.readAsDataURL(blob);
-      });
-    }
 
-    // ─── go ────────────────────────────────────────────────────────────────
-    // v1.4.2: 探测能力，决定 🔊/🎙️ 是否渲染
     window.__CAPS = { tts: false };
     fetch('/api/me/capabilities', { headers: { Authorization: 'Bearer ' + token } })
-      .then(r => r.json()).then(d => {
-        if (d?.ok) window.__CAPS = d.data || window.__CAPS;
-        // mic 按钮：TTS 没配也允许（ASR 是另一回事）；只在 ASR 调用失败时报错。这里暂不藏 mic
-      })
+      .then(r => r.json()).then(d => { if (d?.ok) window.__CAPS = d.data || window.__CAPS; })
       .catch(() => {})
-      .finally(() => loadCompanion().then(() => loadHistory()));
+      .finally(() => Promise.all([loadCompanion(), loadDateOverview()]).then(() => loadHistory()));
   </script>
 </body>
 </html>

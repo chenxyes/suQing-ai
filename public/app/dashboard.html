@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <script>(function(){try{var p=localStorage.getItem('xiyu_theme')||'auto';var d=p==='dark'||(p==='auto'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.setAttribute('data-theme',d?'dark':'light');}catch(e){}})();</script>
+  <script>(function(){try{var p=localStorage.getItem('xiyu_theme')||'light';var d=p==='dark'||(p==='auto'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.setAttribute('data-theme',d?'dark':'light');}catch(e){}})();</script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5" />
   <meta name="color-scheme" content="light dark" />
@@ -14,9 +14,9 @@
   <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
   <link rel="manifest" href="/manifest.webmanifest" />
-  <link rel="stylesheet" href="/app/tailwind.css?v=35" />
-  <link rel="stylesheet" href="/app/glass.css?v=35" />
-  <link rel="stylesheet" href="/app/dashboard.css?v=35" />
+  <link rel="stylesheet" href="/app/tailwind.css?v=38" />
+  <link rel="stylesheet" href="/app/glass.css?v=38" />
+  <link rel="stylesheet" href="/app/dashboard.css?v=38" />
   <link rel="stylesheet" href="/app/stickers.css?v=35" />
   <script src="/app/theme.js" defer></script>
   <script src="/app/shared.js" defer></script>
@@ -34,7 +34,8 @@
         <img src="/logo-256.webp?v=2" alt="溪语AI" class="w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex-shrink-0" />
         <span class="text-[15px] font-semibold tracking-tight whitespace-nowrap">溪语AI</span>
       </a>
-      <div class="flex items-center gap-2 sm:gap-4 flex-shrink min-w-0">
+      <div class="flex items-center gap-2 sm:gap-3 flex-shrink min-w-0">
+        <button type="button" id="btn-dash-theme" class="aurora-theme-btn" title="切换清透极光玻璃 / 暗夜液态玻璃">✨ 极光玻璃</button>
         <span id="user-name" class="hidden sm:inline text-[13px] font-medium text-mute truncate max-w-[120px]"></span>
         <span id="plan-badge" class="text-[11px] font-bold px-2 py-0.5 rounded-full pro-chip whitespace-nowrap flex-shrink-0">开源版</span>
         <button type="button" id="btn-logout" class="text-[13px] font-medium text-mute hover:text-ink transition-colors whitespace-nowrap flex-shrink-0">登出</button>
@@ -97,6 +98,16 @@
               你好，<span id="greet-name" class="bg-gradient-to-r from-sakura-deep to-rose-500 bg-clip-text text-transparent">朋友</span>
             </h1>
             <p class="text-[11px] text-mute font-medium truncate" id="greet-subtitle">这是你和她共同的小世界 ✿</p>
+          </div>
+
+          <!-- 角色光影大舞台（展示她的最新 OOTD 试穿大片或定妆照） -->
+          <div id="dash-hero-stage" class="dash-hero-stage hidden" title="点击进入衣橱展示柜">
+            <img id="dash-hero-img" alt="她的今日穿搭舞台" />
+            <span id="dash-hero-badge" class="dash-hero-badge">✨ 今日形象</span>
+            <div class="dash-hero-overlay">
+              <div id="dash-hero-caption" class="text-[11.5px] font-semibold truncate">今日穿搭已点亮</div>
+              <div id="dash-hero-chips" class="flex flex-wrap gap-1"></div>
+            </div>
           </div>
 
           <!-- 头像与身份 -->
@@ -248,7 +259,7 @@
             <span aria-hidden="true">💞</span> 故事与情绪
           </button>
           <button type="button" role="tab" class="dash-tab" data-dash-tab="tools" aria-selected="false">
-            <span aria-hidden="true">🧰</span> 胶囊与备份
+            <span aria-hidden="true">👗</span> 衣橱与工具
           </button>
           <button type="button" role="tab" class="dash-tab" data-dash-tab="stickers" aria-selected="false">
             <span aria-hidden="true">😊</span> 表情包
@@ -585,9 +596,235 @@
           </section>
         </div>
 
-        <!-- ── Tab 3: 胶囊与备份（全部默认折叠，点击展开） ── -->
+        <!-- ── Tab 3: 衣橱与工具（数字衣橱 + 胶囊与备份） ── -->
         <div id="dash-tab-tools" class="dash-tab-panel hidden mt-3.5">
           <div class="dash-acc-list">
+
+            <!-- 数字衣橱 · 精品玻璃展示柜 -->
+            <div class="dash-acc-item" data-acc="wardrobe">
+              <div class="dash-acc-head" role="button" tabindex="0" aria-expanded="false">
+                <span class="dash-acc-icon" aria-hidden="true">👗</span>
+                <div class="dash-acc-info">
+                  <div class="dash-acc-title">数字衣橱展示柜</div>
+                  <div class="dash-acc-sub" id="acc-sub-wardrobe">精品玻璃陈列柜 · 衣服/包包/鞋子收藏与试穿买家秀</div>
+                </div>
+                <span class="dash-acc-arrow" aria-hidden="true">›</span>
+              </div>
+              <div class="dash-acc-body" hidden>
+                <div class="wardrobe-cabinet">
+                  <!-- 展柜顶栏：参考图锁脸状态 + 折叠送礼按钮 -->
+                  <div class="wardrobe-topbar">
+                    <label class="wardrobe-ref-pill" title="点击上传或更换人物定妆参考图">
+                      <span id="wardrobe-ref-dot" class="wardrobe-ref-dot"></span>
+                      <span id="wardrobe-ref-status">人物参考图检测中…</span>
+                      <span class="text-sakura-deep">更换</span>
+                      <input id="input-upload-ref-portrait" type="file" accept="image/*" class="sr-only" />
+                    </label>
+                    <div class="flex items-center gap-1.5">
+                      <button id="btn-wardrobe-toggle-add" type="button" class="text-[11.5px] font-semibold text-white bg-gradient-to-r from-sakura to-sakura-deep rounded-full px-3.5 py-1.5 hover:shadow-sakura transition-all">
+                        ＋ 放入新礼物
+                      </button>
+                      <button id="btn-wardrobe-refresh" type="button" class="text-[11px] text-mute hover:text-sakura-deep px-2 py-1" title="刷新展示柜">↻</button>
+                    </div>
+                  </div>
+
+                  <!-- 可折叠：送礼/入库抽屉（默认收起，不遮挡展柜视野） -->
+                  <div id="wardrobe-add-drawer" class="hidden rounded-2xl border border-sakura-soft bg-white/85 p-3 mb-3 space-y-2">
+                    <div class="flex items-center justify-between">
+                      <span class="text-[12px] font-bold text-ink">🎁 放一件新藏品进展示柜</span>
+                      <button id="btn-wardrobe-close-add" type="button" class="text-[11px] text-mute hover:text-ink">收起</button>
+                    </div>
+                    <div class="flex items-center gap-2 flex-wrap">
+                      <label class="text-[12px] rounded-xl border border-dashed border-sakura-deep/50 bg-white px-3 py-1.5 cursor-pointer hover:border-sakura-deep transition-colors">
+                        🖼️ 选择商品图
+                        <input id="wardrobe-file-input" type="file" accept="image/*" class="sr-only" />
+                      </label>
+                      <span id="wardrobe-file-name" class="text-[11px] text-mute">未选择图片（上传后可自动识别名称与款式）</span>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      <input id="wardrobe-item-name" type="text" maxlength="60"
+                             placeholder="单品名称（留空自动识别）"
+                             class="w-full text-[12px] rounded-xl border border-line bg-white px-3 py-2 focus:outline-none focus:border-sakura-deep" />
+                      <select id="wardrobe-item-slot" class="w-full text-[12px] rounded-xl border border-line bg-white px-3 py-2 focus:outline-none focus:border-sakura-deep">
+                        <option value="" selected>部位：自动识别</option>
+                        <option value="top">👚 内搭 / 上衣</option>
+                        <option value="outerwear">🧥 外套（可叠穿）</option>
+                        <option value="bottom_or_dress">👗 裙装 / 下装</option>
+                        <option value="shoes">👟 鞋袜</option>
+                        <option value="bag">👜 包包</option>
+                        <option value="accessory">🎀 配饰</option>
+                      </select>
+                      <select id="wardrobe-item-status" class="w-full text-[12px] rounded-xl border border-line bg-white px-3 py-2 focus:outline-none focus:border-sakura-deep">
+                        <option value="wearing" selected>立即送给她并穿上</option>
+                        <option value="in_transit">刚下单，等快递拆箱</option>
+                        <option value="tryon_only">先云试穿看看效果</option>
+                        <option value="owned">收入展柜珍藏</option>
+                      </select>
+                    </div>
+                    <input id="wardrobe-item-note" type="text" maxlength="160"
+                           placeholder="（可选）附言，比如：周末陪你逛街前先换上这件试试"
+                           class="w-full text-[12px] rounded-xl border border-line bg-white px-3 py-2 focus:outline-none focus:border-sakura-deep" />
+                    <div class="flex items-center gap-2 flex-wrap">
+                      <button id="btn-wardrobe-add" type="button" class="text-[12px] font-semibold text-white bg-gradient-to-r from-sakura to-sakura-deep rounded-full px-4 py-1.5 hover:shadow-sakura transition-all">
+                        ✨ 放入展示柜
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- 状态反馈条 -->
+                  <div id="wardrobe-status-msg" class="text-[11px] text-sakura-deep font-medium mb-2 empty:hidden"></div>
+
+                  <!-- 今日上身陈列台（有在穿单品时自动点亮） -->
+                  <div id="wardrobe-ootd-stage" class="wardrobe-ootd hidden"></div>
+
+                  <!-- 分层展示架筛选条 -->
+                  <div id="wardrobe-shelf-bar" class="wardrobe-shelf-bar" role="tablist" aria-label="衣橱分类展架"></div>
+
+                  <!-- 2~3 列精品玻璃展示格 -->
+                  <div id="wardrobe-list" class="wardrobe-grid">
+                    <div class="wardrobe-empty-slot">展开后点亮展示柜…</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 展柜高清灯箱 Modal -->
+            <div id="wardrobe-lightbox" class="wardrobe-lightbox hidden" role="dialog" aria-modal="true" aria-label="藏品高清预览">
+              <div class="wardrobe-lightbox-card">
+                <div class="wardrobe-lightbox-imgwrap">
+                  <img id="wardrobe-lb-img" alt="藏品大图" />
+                  <button id="wardrobe-lb-close" type="button" class="absolute top-3 right-3 w-8 h-8 rounded-full bg-black/55 text-white text-[16px] flex items-center justify-center hover:bg-black/75">✕</button>
+                </div>
+                <div class="p-3.5 flex items-center justify-between gap-2 flex-wrap">
+                  <div class="min-w-0">
+                    <div id="wardrobe-lb-title" class="text-[14px] font-bold truncate">—</div>
+                    <div id="wardrobe-lb-meta" class="text-[11px] text-white/70 truncate">—</div>
+                  </div>
+                  <div id="wardrobe-lb-tabs" class="flex items-center gap-1.5"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 相处底盘 & 约会剧场 & 赛博合影 -->
+            <div class="dash-acc-item" data-acc="datemode">
+              <div class="dash-acc-head" role="button" tabindex="0" aria-expanded="false">
+                <span class="dash-acc-icon" aria-hidden="true">💕</span>
+                <div class="dash-acc-info">
+                  <div class="dash-acc-title">相处底盘 & 约会剧场</div>
+                  <div class="dash-acc-sub" id="acc-sub-datemode">异地恋防内耗底盘、可结算逛街吃饭剧场与赛博合影</div>
+                </div>
+                <span class="dash-acc-arrow" aria-hidden="true">›</span>
+              </div>
+              <div class="dash-acc-body" hidden>
+                <!-- Layer 1：相处物理距离底盘 -->
+                <div class="rounded-xl border border-line bg-white/50 p-3 mb-3 space-y-2">
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="text-[12px] font-semibold text-ink">相处底盘模式</span>
+                    <span id="presence-mode-msg" class="text-[11px] text-mute"></span>
+                  </div>
+                  <div class="grid grid-cols-3 gap-2" id="presence-mode-options">
+                    <button type="button" data-pmode="ldr" class="pmode-opt py-2 px-2 text-[12px] font-semibold rounded-xl border border-sakura-soft text-mute transition-all">异地恋(推荐)</button>
+                    <button type="button" data-pmode="digital" class="pmode-opt py-2 px-2 text-[12px] font-semibold rounded-xl border border-sakura-soft text-mute transition-all">清醒跨次元</button>
+                    <button type="button" data-pmode="local" class="pmode-opt py-2 px-2 text-[12px] font-semibold rounded-xl border border-sakura-soft text-mute transition-all">经典同城</button>
+                  </div>
+                  <p id="presence-mode-desc" class="text-[11px] text-mute leading-relaxed"></p>
+                </div>
+
+                <!-- Layer 3：可结算约会剧场 -->
+                <div class="rounded-xl border border-sakura-soft bg-sakura-soft/20 p-3 mb-3 space-y-2.5">
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="text-[12px] font-semibold text-ink">约会剧场（陪逛街 / 陪吃饭）</span>
+                    <span id="datemode-badge" class="text-[11px] px-2 py-0.5 rounded-full bg-white/80 text-mute">未开启</span>
+                  </div>
+
+                  <!-- 进行中视图 -->
+                  <div id="datemode-active-box" class="hidden space-y-2.5">
+                    <div class="rounded-xl bg-white/80 border border-sakura/30 p-2.5 space-y-1">
+                      <div class="text-[13px] font-bold text-ink" id="datemode-active-title">—</div>
+                      <div class="text-[11px] text-mute" id="datemode-active-scene">—</div>
+                      <div class="text-[11px] text-sakura-deep font-medium" id="datemode-active-outfit">—</div>
+                    </div>
+                    <input id="datemode-end-note" type="text" maxlength="100"
+                           placeholder="（可选）收尾小记，比如：挑到一件超好看的外套，还喝了芋泥波波"
+                           class="w-full text-[12px] rounded-xl border border-line bg-white/80 px-3 py-2 focus:outline-none focus:border-sakura-deep" />
+                    <div class="flex items-center gap-2 flex-wrap">
+                      <button id="btn-datemode-photo" type="button" class="text-[12px] font-semibold rounded-full px-3.5 py-1.5 bg-white border border-sakura-deep/40 text-sakura-deep hover:bg-sakura-soft/40 transition-all">
+                        📷 拍约会打卡照
+                      </button>
+                      <button id="btn-datemode-end" type="button" class="text-[12px] font-semibold text-white bg-gradient-to-r from-sakura to-sakura-deep rounded-full px-4 py-1.5 hover:shadow-sakura transition-all">
+                        ✨ 结束约会并结算记忆
+                      </button>
+                    </div>
+                    <div id="datemode-active-photos" class="flex gap-2 flex-wrap"></div>
+                  </div>
+
+                  <!-- 未开启视图 -->
+                  <div id="datemode-idle-box" class="space-y-2">
+                    <p class="text-[11px] text-mute leading-relaxed">
+                      开启后自动绑定她衣橱里的当前穿搭、锁定场景且不被独处日程打断；结束时自动写入高权重共同记忆并核销关联约定。
+                    </p>
+                    <div class="grid grid-cols-2 gap-2" id="datemode-presets">
+                      <button type="button" data-dtype="shopping" class="dtype-btn py-2 px-3 text-[12px] font-semibold rounded-xl bg-white/80 border border-line hover:border-sakura-deep text-ink transition-all text-left">🛍️ 周末逛商场</button>
+                      <button type="button" data-dtype="dining" class="dtype-btn py-2 px-3 text-[12px] font-semibold rounded-xl bg-white/80 border border-line hover:border-sakura-deep text-ink transition-all text-left">🍜 一起吃漂亮饭</button>
+                      <button type="button" data-dtype="walk" class="dtype-btn py-2 px-3 text-[12px] font-semibold rounded-xl bg-white/80 border border-line hover:border-sakura-deep text-ink transition-all text-left">🌆 傍晚压马路</button>
+                      <button type="button" data-dtype="movie" class="dtype-btn py-2 px-3 text-[12px] font-semibold rounded-xl bg-white/80 border border-line hover:border-sakura-deep text-ink transition-all text-left">🎬 一起看电影</button>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      <input id="datemode-custom-title" type="text" maxlength="50"
+                             placeholder="或输入自定义约会主题（如：去海边看日落）"
+                             class="flex-1 text-[12px] rounded-xl border border-line bg-white/80 px-3 py-1.5 focus:outline-none focus:border-sakura-deep" />
+                      <button id="btn-datemode-custom-start" type="button" class="text-[12px] font-semibold text-white bg-gradient-to-r from-sakura to-sakura-deep rounded-full px-3.5 py-1.5 shrink-0">
+                        开启剧场
+                      </button>
+                    </div>
+                  </div>
+                  <p id="datemode-status-msg" class="text-[11px] text-mute"></p>
+                </div>
+
+                <!-- Layer 2：本人形象照 & 双人赛博合影 -->
+                <div class="rounded-xl border border-line bg-white/50 p-3 mb-3 space-y-2.5">
+                  <div class="flex items-center justify-between gap-2 flex-wrap">
+                    <div class="text-[12px] font-semibold text-ink">📸 双人约会合影（赛博同框）</div>
+                    <span id="user-ref-status" class="text-[11px] text-mute">检测本人形象照…</span>
+                  </div>
+                  <div class="flex items-center gap-2 flex-wrap rounded-xl bg-sakura-soft/30 border border-sakura-soft px-2.5 py-2">
+                    <img id="user-ref-thumb" alt="我的形象照" class="hidden w-10 h-10 rounded-lg object-cover border border-sakura/40" />
+                    <div class="flex-1 min-w-0 text-[11px] text-mute leading-snug">
+                      上传你的本人正面照后，拍约会打卡照和赛博合影都会把<b>你和她真实同框</b>画在一起！
+                    </div>
+                    <label class="text-[11.5px] font-semibold rounded-full bg-white border border-sakura-deep/40 text-sakura-deep px-3 py-1 cursor-pointer hover:bg-sakura-soft/50 shrink-0">
+                      🧑 上传我的照片
+                      <input id="input-upload-user-portrait" type="file" accept="image/*" class="sr-only" />
+                    </label>
+                  </div>
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <label class="text-[12px] rounded-xl border border-dashed border-sakura-deep/50 bg-white/80 px-3 py-1.5 cursor-pointer hover:border-sakura-deep transition-colors">
+                      🌄 选择约会背景照
+                      <input id="cyber-photo-file" type="file" accept="image/*" class="sr-only" />
+                    </label>
+                    <span id="cyber-photo-fname" class="text-[11px] text-mute">未选择背景照（餐厅/街景/风景皆可）</span>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <input id="cyber-photo-note" type="text" maxlength="100"
+                           placeholder="（可选）氛围提示，如：两人并肩笑着合影比耶"
+                           class="flex-1 text-[12px] rounded-xl border border-line bg-white/80 px-3 py-1.5 focus:outline-none focus:border-sakura-deep" />
+                    <button id="btn-cyber-photo-gen" type="button" class="text-[12px] font-semibold text-white bg-gradient-to-r from-sakura to-sakura-deep rounded-full px-3.5 py-1.5 shrink-0">
+                      生成双人合影
+                    </button>
+                  </div>
+                  <div id="cyber-photo-result" class="hidden pt-1"></div>
+                </div>
+
+                <!-- 历史约会结算记录 -->
+                <div class="border-t border-line pt-2.5">
+                  <div class="flex items-center justify-between mb-1.5">
+                    <span class="text-[11px] font-semibold text-ink">近期约会记录</span>
+                    <button id="btn-datemode-refresh" type="button" class="text-[11px] text-sakura-deep hover:underline">刷新</button>
+                  </div>
+                  <div id="datemode-history" class="space-y-1.5 text-[11px] text-mute"></div>
+                </div>
+              </div>
+            </div>
 
             <!-- 时光胶囊 -->
             <div class="dash-acc-item" data-acc="capsule">
@@ -1050,7 +1287,7 @@
 
   <div id="silent-orb" role="button" tabindex="0" aria-label="退出沉默陪伴模式" title="沉默陪伴模式开启中 · 点击退出"></div>
   <script src="/vendor/lucide.min.js" defer></script>
-  <script src="/app/dashboard.js?v=35" defer></script>
+  <script src="/app/dashboard.js?v=39" defer></script>
   <script src="/app/dashboard-model-drawer.js?v=35" defer></script>
   <script src="/app/stickers.js?v=35" defer></script>
 </body>

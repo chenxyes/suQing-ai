@@ -170,6 +170,7 @@ import {
   saveImageReaction,
   getConversationContext, clearConversationContext,
   GIFT_CATALOG, getGiftById, saveCompanionGift, getCompanionGifts,
+  createWardrobeItem, getWardrobeItem, listWardrobeItems, wearWardrobeItem, updateWardrobeItem, deleteWardrobeItem,
   getReminders, createReminder, updateReminder, deleteReminder, getDueReminders,
   getUserProfile, getUserProfileForRecall, upsertUserProfile, softClearMemories,
   getDb, // BILLING_DISABLED: 保留 db helper 以便 18 岁后恢复
@@ -611,6 +612,8 @@ function companionSummary(companion) {
     safe_mode: Number(companion.safe_mode) ? 1 : 0,
     // v1.21 冲突与和好弧（只读展示；状态由 relationship_arc 状态机独占写入）
     arc_state: fallbackText(companion.arc_state, 'normal'),
+    // 三层相处物理距离底盘（local | ldr | digital）
+    presence_mode: fallbackText(companion.presence_mode, 'local'),
   };
 }
 
@@ -1034,6 +1037,8 @@ router.delete('/me/account', requireAuth, (req, res) => {
         db.prepare(`DELETE FROM companion_memories WHERE companion_id IN (${cph})`).run(...cids);
         db.prepare(`DELETE FROM companion_conversation_turns WHERE companion_id IN (${cph})`).run(...cids);
         db.prepare(`DELETE FROM companion_gifts WHERE companion_id IN (${cph})`).run(...cids);
+        db.prepare(`DELETE FROM companion_wardrobe WHERE companion_id IN (${cph})`).run(...cids);
+        db.prepare(`DELETE FROM companion_date_sessions WHERE companion_id IN (${cph})`).run(...cids);
         db.prepare(`DELETE FROM companion_reminders WHERE companion_id IN (${cph})`).run(...cids);
         db.prepare(`DELETE FROM companion_image_reactions WHERE companion_id IN (${cph})`).run(...cids);
         db.prepare(`DELETE FROM user_profiles WHERE companion_id IN (${cph})`).run(...cids);
@@ -2883,11 +2888,21 @@ router.post('/companions/:id/playground-chat',
     const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
     const c = requireOwnedCompanion(req, res, id); if (!c) return;
     const text = String(req.body?.text ?? req.body?.message ?? '').trim();
-    if (!text) return err(res, '消息不能为空');
+    const rawImage = typeof req.body?.image === 'string' ? req.body.image.trim() : '';
+    const imagePurpose = typeof req.body?.image_purpose === 'string' ? req.body.image_purpose.trim() : 'auto';
+    if (!text && !rawImage) return err(res, '消息不能为空');
     if (text.length > 2000) return err(res, '消息过长（>2000 字）');
+    const inboundImages = [];
+    if (rawImage) {
+      const m = rawImage.match(/^data:(image\/(?:jpeg|jpg|png|webp));base64,([A-Za-z0-9+/=\s]+)$/i);
+      if (!m) return err(res, '图片格式无效（支持 JPG / PNG / WebP）', 400);
+      const buf = Buffer.from(m[2].replace(/\s+/g, ''), 'base64');
+      if (buf.length > 8 * 1024 * 1024) return err(res, '图片大小需在 8MB 以内', 400);
+      if (buf.length >= 64) inboundImages.push({ buffer: buf, mime: m[1].toLowerCase() });
+    }
     try {
       const { playgroundChat } = await import('./playground.mjs');
-      const result = await playgroundChat(c, text);
+      const result = await playgroundChat(c, text, { inboundImages, imagePurpose });
       return ok(res, result);
     } catch (e) {
       log('error', `[API] playground-chat companion=${id}: ${e.message}`);
@@ -3432,6 +3447,102 @@ router.post('/companions/:id/visual-identity/lock',
   }
 });
 
+// GET /api/companions/:id/visual-identity/status
+router.get('/companions/:id/visual-identity/status', requireAuth, async (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c = requireOwnedCompanion(req, res, id); if (!c) return;
+  const { getVisualIdentity } = await import('./visual_identity.mjs');
+  const identity = getVisualIdentity(id);
+  const refs = Array.isArray(identity?.referenceImages) ? identity.referenceImages : [];
+  return ok(res, { locked: refs.length > 0, reference_count: refs.length });
+});
+
+// POST /api/companions/:id/visual-identity/upload-reference
+// 上传自定义人物定妆参考图（base64 / data URL），直接锁定为 referenceImages 供后续换装与发图锁脸
+router.post('/companions/:id/visual-identity/upload-reference',
+  express.json({ limit: '10mb' }),
+  rateLimit({ scope: 'identity-lock', maxPerWindow: 20, windowMs: 60 * 60 * 1000, message: '上传过于频繁，请稍后再试' }),
+  requireAuth,
+  async (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c = requireOwnedCompanion(req, res, id); if (!c) return;
+  const rawImage = String(req.body?.image || req.body?.data_url || '').trim();
+  const replace = req.body?.replace !== false;
+  if (!rawImage) return err(res, '缺少 image（data URL 或 base64）');
+  try {
+    const { saveCandidateImage, saveReferenceImage, resetVisualIdentity } = await import('./visual_identity.mjs');
+    const savedCand = saveCandidateImage(id, rawImage, 'upload');
+    if (!savedCand?.absPath) return err(res, '图片数据无效', 400);
+    if (replace) resetVisualIdentity(id);
+    const refPath = saveReferenceImage(id, savedCand.absPath);
+    if (!refPath) return err(res, '保存人物参考图失败', 500);
+    log('info', `[API] custom visual reference uploaded companion=${id} replace=${replace}`);
+    return res.status(201).json({ ok: true, success: true, locked: true, replace, data: { locked: true, replace } });
+  } catch (e) {
+    log('error', `[API] custom visual reference upload failed id=${id}: ${e.message}`);
+    return err(res, e.message || '上传失败', 500);
+  }
+});
+
+// GET /api/companions/:id/visual-identity/reference-image — 返回已锁定的伴侣定妆参考图（供大舞台展示）
+router.get('/companions/:id/visual-identity/reference-image', requireAuth, async (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c = requireOwnedCompanion(req, res, id); if (!c) return;
+  const { selectReferenceImage } = await import('./visual_identity.mjs');
+  const refPath = selectReferenceImage(id);
+  if (!refPath) return err(res, '尚未上传人物参考图', 404);
+  res.setHeader('Cache-Control', 'no-cache');
+  return res.sendFile(path.basename(refPath), { root: path.dirname(refPath) });
+});
+
+// GET/POST/DELETE /api/companions/:id/user-visual-reference — 本人形象照（双人约会合影锁脸）
+router.get('/companions/:id/user-visual-reference', requireAuth, async (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c = requireOwnedCompanion(req, res, id); if (!c) return;
+  const { getUserPortraitReference } = await import('./date_mode.mjs');
+  const ref = getUserPortraitReference(id);
+  return ok(res, {
+    locked: !!ref,
+    image_url: ref ? `/api/companions/${id}/user-visual-reference/image?t=${Date.now()}` : null,
+  });
+});
+
+router.post('/companions/:id/user-visual-reference', requireAuth, async (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c = requireOwnedCompanion(req, res, id); if (!c) return;
+  const rawImage = typeof req.body?.image === 'string' ? req.body.image.trim() : '';
+  const match = rawImage.match(/^data:(image\/(?:jpeg|jpg|png|webp));base64,([A-Za-z0-9+/=\s]+)$/i);
+  if (!match) return err(res, '请上传有效的本人照片（JPG / PNG / WebP）', 400);
+  const buf = Buffer.from(match[2].replace(/\s+/g, ''), 'base64');
+  if (!buf.length || buf.length > 8 * 1024 * 1024) return err(res, '照片大小需在 8MB 以内', 400);
+  const { saveUserPortraitReference } = await import('./date_mode.mjs');
+  const saved = saveUserPortraitReference(id, buf, match[1].toLowerCase());
+  if (!saved) return err(res, '保存本人形象照失败', 500);
+  log('info', `[API] user portrait reference uploaded companion=${id}`);
+  return ok(res, {
+    locked: true,
+    image_url: `/api/companions/${id}/user-visual-reference/image?t=${Date.now()}`,
+  }, 201);
+});
+
+router.delete('/companions/:id/user-visual-reference', requireAuth, async (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c = requireOwnedCompanion(req, res, id); if (!c) return;
+  const { clearUserPortraitReference } = await import('./date_mode.mjs');
+  clearUserPortraitReference(id);
+  return ok(res, { locked: false });
+});
+
+router.get('/companions/:id/user-visual-reference/image', requireAuth, async (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c = requireOwnedCompanion(req, res, id); if (!c) return;
+  const { getUserPortraitReference } = await import('./date_mode.mjs');
+  const ref = getUserPortraitReference(id);
+  if (!ref?.fullPath) return err(res, '尚未上传本人形象照', 404);
+  res.setHeader('Cache-Control', 'no-cache');
+  return res.sendFile(path.basename(ref.fullPath), { root: path.dirname(ref.fullPath) });
+});
+
 // POST /api/companions/:id/reset-to-crush  (v1.4.2)
 // 把 companion 一键拉回「她暗恋你」的默认起步状态。
 // 影响：affection=35 / stage='暧昧' / mood='shy' / dependency=40。
@@ -3560,6 +3671,343 @@ router.post('/companions/:id/gifts', requireAuth, (req, res) => {
     affection: newAffection,
     reaction_text: reactionText,
   });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 数字衣橱系统（衣服 / 外套 / 裙子 / 鞋袜 / 包包 / 配饰）
+// ─────────────────────────────────────────────────────────────────────────────
+
+// GET /api/companions/:id/wardrobe
+router.get('/companions/:id/wardrobe', requireAuth, (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c = requireOwnedCompanion(req, res, id); if (!c) return;
+  const status = typeof req.query.status === 'string' && req.query.status.trim() ? req.query.status.trim() : null;
+  const slot = typeof req.query.slot === 'string' && req.query.slot.trim() ? req.query.slot.trim() : null;
+  const lim = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+  const items = listWardrobeItems(id, { status, slot, limit: lim });
+  const activeOutfit = {};
+  for (const it of items) {
+    if (it.status === 'wearing') activeOutfit[it.slot] = it;
+  }
+  return ok(res, { companion_id: id, total: items.length, active_outfit: activeOutfit, items });
+});
+
+// POST /api/companions/:id/wardrobe
+router.post('/companions/:id/wardrobe', express.json({ limit: '10mb' }), requireAuth, async (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c = requireOwnedCompanion(req, res, id); if (!c) return;
+  try {
+    const {
+      normalizeWardrobeSlot,
+      saveWardrobeProductImage,
+      analyzeWardrobeItem,
+      computeDeliveryEta,
+    } = await import('./wardrobe.mjs');
+    const body = req.body || {};
+    let sourceImagePath = null;
+    let analyzed = null;
+
+    if (typeof body.image === 'string' && body.image.trim()) {
+      const m = body.image.trim().match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i);
+      const mime = m ? m[1] : 'image/jpeg';
+      const buf = Buffer.from(m ? m[2] : body.image.trim(), 'base64');
+      if (buf.length >= 64) {
+        sourceImagePath = saveWardrobeProductImage(id, buf, mime);
+        if (body.auto_analyze !== false && !body.name) {
+          analyzed = await analyzeWardrobeItem(buf, mime, String(body.gifted_note || body.category || ''));
+        }
+      }
+    }
+
+    const name = String(body.name || analyzed?.name || '').trim();
+    if (!name) return err(res, '缺少单品名称 name（或提供有效商品图片进行解析）', 400);
+    const category = String(body.category || analyzed?.category || '衣服').trim();
+    const slot = normalizeWardrobeSlot(body.slot || analyzed?.slot, category, name);
+    const status = typeof body.status === 'string' ? body.status.trim() : 'owned';
+    const etaAt = status === 'in_transit' ? (body.eta_at || computeDeliveryEta()) : null;
+
+    const item = createWardrobeItem({
+      companionId: id,
+      slot,
+      category,
+      name,
+      color: body.color ?? analyzed?.color ?? '',
+      material: body.material ?? analyzed?.material ?? '',
+      styleTags: Array.isArray(body.style_tags) ? body.style_tags : (analyzed?.styleTags || []),
+      visualPrompt: body.visual_prompt || analyzed?.visualPrompt || name,
+      sourceImagePath,
+      giftedBy: body.gifted_by === 'self' ? 'self' : 'user',
+      giftedNote: body.gifted_note || '',
+      status,
+      etaAt,
+    });
+    log('info', `[API] wardrobe item added companion=${id} item=#${item.id} slot=${item.slot} status=${item.status}`);
+    return res.status(201).json({ ok: true, success: true, item, data: { item } });
+  } catch (e) {
+    log('error', `[API] wardrobe create failed companion=${id}: ${e.message}`);
+    return err(res, e.message || '新增衣橱单品失败', 500);
+  }
+});
+
+// PATCH /api/companions/:id/wardrobe/:itemId
+router.patch('/companions/:id/wardrobe/:itemId', requireAuth, (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const itemId = intId(req.params.itemId); if (!itemId) return err(res, 'itemId 无效');
+  const c = requireOwnedCompanion(req, res, id); if (!c) return;
+  const body = req.body || {};
+  const updated = body.action === 'wear'
+    ? wearWardrobeItem(id, itemId)
+    : body.action === 'unwear'
+      ? updateWardrobeItem(id, itemId, { status: 'owned' })
+      : updateWardrobeItem(id, itemId, {
+          name: body.name,
+          category: body.category,
+          slot: body.slot,
+          color: body.color,
+          material: body.material,
+          visualPrompt: body.visual_prompt,
+          giftedNote: body.gifted_note,
+          status: body.status,
+          etaAt: body.eta_at,
+        });
+  if (!updated) return err(res, '衣橱单品不存在', 404);
+  return ok(res, { item: updated });
+});
+
+// DELETE /api/companions/:id/wardrobe/:itemId
+router.delete('/companions/:id/wardrobe/:itemId', requireAuth, (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const itemId = intId(req.params.itemId); if (!itemId) return err(res, 'itemId 无效');
+  const c = requireOwnedCompanion(req, res, id); if (!c) return;
+  const deleted = deleteWardrobeItem(id, itemId);
+  if (!deleted) return err(res, '衣橱单品不存在', 404);
+  return ok(res, { deleted: true, item_id: itemId });
+});
+
+// POST /api/companions/:id/wardrobe/outfit-tryon
+// 多部位叠穿 / 整套 OOTD 大片（默认取当前所有 wearing 单品，也支持传 item_ids 自由组合）
+router.post('/companions/:id/wardrobe/outfit-tryon', requireAuth, async (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c = requireOwnedCompanion(req, res, id); if (!c) return;
+  try {
+    const rawIds = Array.isArray(req.body?.item_ids)
+      ? req.body.item_ids.map(x => intId(x)).filter(Boolean)
+      : [];
+    const targetItems = rawIds.length > 0
+      ? rawIds.map(itemId => getWardrobeItem(id, itemId)).filter(Boolean)
+      : listWardrobeItems(id, { status: 'wearing', limit: 6 });
+    if (!targetItems.length) {
+      return err(res, '请先穿上或勾选至少一件藏品再拍叠穿照', 400);
+    }
+    const { generateOutfitTryonImage } = await import('./wardrobe.mjs');
+    const result = await generateOutfitTryonImage(c, targetItems, {
+      primaryItemId: targetItems[0].id,
+      filePrefix: 'outfit',
+    });
+    return ok(res, {
+      item: result.item,
+      items: result.items,
+      caption: result.caption,
+      shot_mode: result.shotMode,
+      ref_count: result.refCount,
+      has_face_ref: result.hasFaceRef,
+      image_url: `/api/companions/${id}/wardrobe/outfit-image/${encodeURIComponent(result.fileName)}?t=${Date.now()}`,
+    });
+  } catch (e) {
+    log('error', `[API] wardrobe outfit try-on failed companion=${id}: ${e.message}`);
+    return err(res, e.message || '叠穿试穿图生成失败', 500);
+  }
+});
+
+// GET /api/companions/:id/wardrobe/outfit-image/:fname
+router.get('/companions/:id/wardrobe/outfit-image/:fname', requireAuth, async (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c = requireOwnedCompanion(req, res, id); if (!c) return;
+  const fname = path.basename(String(req.params.fname || ''));
+  if (!fname || !/^[a-zA-Z0-9._-]+$/.test(fname)) return err(res, '文件名无效', 400);
+  const { wardrobeDirFor, resolveWardrobeImagePath } = await import('./wardrobe.mjs');
+  const candidate = path.join(wardrobeDirFor(id), fname);
+  const safePath = resolveWardrobeImagePath(id, candidate);
+  if (!safePath) return err(res, '图片不存在', 404);
+  res.setHeader('Cache-Control', 'no-cache');
+  return res.sendFile(path.basename(safePath), { root: path.dirname(safePath) });
+});
+
+// POST /api/companions/:id/wardrobe/:itemId/tryon
+router.post('/companions/:id/wardrobe/:itemId/tryon', requireAuth, async (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const itemId = intId(req.params.itemId); if (!itemId) return err(res, 'itemId 无效');
+  const c = requireOwnedCompanion(req, res, id); if (!c) return;
+  const item = getWardrobeItem(id, itemId);
+  if (!item) return err(res, '衣橱单品不存在', 404);
+  try {
+    const composeWithWearing = req.body?.compose_with_wearing !== false;
+    const { generateWardrobeTryonImage } = await import('./wardrobe.mjs');
+    const result = await generateWardrobeTryonImage(c, item, { composeWithWearing });
+    return ok(res, {
+      item: result.item,
+      items: result.items,
+      caption: result.caption,
+      shot_mode: result.shotMode,
+      ref_count: result.refCount,
+      has_face_ref: result.hasFaceRef,
+      tryon_image_url: `/api/companions/${id}/wardrobe/${itemId}/image?kind=tryon&t=${Date.now()}`,
+    });
+  } catch (e) {
+    log('error', `[API] wardrobe try-on failed companion=${id} item=${itemId}: ${e.message}`);
+    return err(res, e.message || '试穿返图生成失败', 500);
+  }
+});
+
+// GET /api/companions/:id/wardrobe/:itemId/image?kind=source|tryon
+router.get('/companions/:id/wardrobe/:itemId/image', requireAuth, async (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const itemId = intId(req.params.itemId); if (!itemId) return err(res, 'itemId 无效');
+  const c = requireOwnedCompanion(req, res, id); if (!c) return;
+  const item = getWardrobeItem(id, itemId);
+  if (!item) return err(res, '衣橱单品不存在', 404);
+  const kind = req.query.kind === 'tryon' ? 'tryon' : 'source';
+  const rawPath = kind === 'tryon' ? item.tryon_image_path : item.source_image_path;
+  const { resolveWardrobeImagePath } = await import('./wardrobe.mjs');
+  const safePath = resolveWardrobeImagePath(id, rawPath);
+  if (!safePath) return err(res, '图片不存在', 404);
+  res.setHeader('Cache-Control', 'no-cache');
+  return res.sendFile(path.basename(safePath), { root: path.dirname(safePath) });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 三层相处框架：相处底盘（presence_mode）+ 可结算约会剧场 + 赛博合影
+// ─────────────────────────────────────────────────────────────────────────────
+
+// PUT /api/companions/:id/presence-mode
+router.put('/companions/:id/presence-mode', requireAuth, async (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c = requireOwnedCompanion(req, res, id); if (!c) return;
+  const rawMode = String(req.body?.presence_mode || '').trim().toLowerCase();
+  const { PRESENCE_MODES, setCompanionPresenceMode } = await import('./date_mode.mjs');
+  if (!PRESENCE_MODES.includes(rawMode)) {
+    return err(res, `presence_mode 必须为 ${PRESENCE_MODES.join(' / ')}`, 400);
+  }
+  const mode = setCompanionPresenceMode(id, rawMode);
+  log('info', `[API] presence_mode updated companion=${id} mode=${mode}`);
+  return ok(res, { presence_mode: mode });
+});
+
+// GET /api/companions/:id/date-mode
+router.get('/companions/:id/date-mode', requireAuth, async (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c = requireOwnedCompanion(req, res, id); if (!c) return;
+  const { getDateModeOverview } = await import('./date_mode.mjs');
+  return ok(res, getDateModeOverview(id));
+});
+
+// POST /api/companions/:id/date-mode/start
+router.post('/companions/:id/date-mode/start', requireAuth, async (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c = requireOwnedCompanion(req, res, id); if (!c) return;
+  try {
+    const { startDateSession } = await import('./date_mode.mjs');
+    const session = startDateSession(id, {
+      activityType: req.body?.activity_type || 'custom',
+      title: req.body?.title || '',
+      scene: req.body?.scene || '',
+    });
+    log('info', `[API] date session started companion=${id} session=#${session.id} type=${session.activity_type}`);
+    return ok(res, { session }, 201);
+  } catch (e) {
+    log('error', `[API] date session start failed companion=${id}: ${e.message}`);
+    return err(res, e.message || '开启约会剧场失败', 500);
+  }
+});
+
+// POST /api/companions/:id/date-mode/end
+router.post('/api/companions/:id/date-mode/end', requireAuth, async (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c = requireOwnedCompanion(req, res, id); if (!c) return;
+  try {
+    const { settleDateSession } = await import('./date_mode.mjs');
+    const result = await settleDateSession(id, {
+      sessionId: req.body?.session_id ? intId(req.body.session_id) : null,
+      userNote: typeof req.body?.note === 'string' ? req.body.note : '',
+    });
+    if (!result.settled) return err(res, '当前没有进行中的约会剧场', 404);
+    log('info', `[API] date session settled companion=${id} session=#${result.session?.id} loops=${result.resolvedLoops.length}`);
+    return ok(res, result);
+  } catch (e) {
+    log('error', `[API] date session end failed companion=${id}: ${e.message}`);
+    return err(res, e.message || '结束约会结算失败', 500);
+  }
+});
+
+// POST /api/companions/:id/date-mode/photo
+router.post('/companions/:id/date-mode/photo', requireAuth, async (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c = requireOwnedCompanion(req, res, id); if (!c) return;
+  try {
+    const { getFreshActiveDateSession, generateDatePhoto } = await import('./date_mode.mjs');
+    const session = getFreshActiveDateSession(id);
+    if (!session) return err(res, '请先开启约会剧场再拍约会打卡照', 400);
+    const out = await generateDatePhoto(c, session, {
+      mode: 'date_scene',
+      includeUser: req.body?.include_user !== false,
+      userText: typeof req.body?.note === 'string' ? req.body.note : '',
+    });
+    if (!out.ok) return err(res, out.error || '约会打卡照生成失败', 500);
+    return ok(res, {
+      image_url: out.imageUrl,
+      file_name: out.fileName,
+      used_multi_ref: out.usedMultiRef,
+      has_user_ref: out.hasUserRef,
+    });
+  } catch (e) {
+    log('error', `[API] date photo failed companion=${id}: ${e.message}`);
+    return err(res, e.message || '约会打卡照生成失败', 500);
+  }
+});
+
+// POST /api/companions/:id/date-mode/cyber-photo
+router.post('/companions/:id/date-mode/cyber-photo', requireAuth, async (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c = requireOwnedCompanion(req, res, id); if (!c) return;
+  const rawImage = typeof req.body?.image === 'string' ? req.body.image.trim() : '';
+  const match = rawImage.match(/^data:(image\/(?:jpeg|jpg|png|webp));base64,([A-Za-z0-9+/=\s]+)$/i);
+  if (!match) return err(res, '请上传有效的图片（JPG / PNG / WebP）', 400);
+  const sceneBuf = Buffer.from(match[2].replace(/\s+/g, ''), 'base64');
+  if (!sceneBuf.length || sceneBuf.length > 8 * 1024 * 1024) {
+    return err(res, '环境照大小需在 8MB 以内', 400);
+  }
+  try {
+    const { getFreshActiveDateSession, generateDatePhoto } = await import('./date_mode.mjs');
+    const session = getFreshActiveDateSession(id);
+    const out = await generateDatePhoto(c, session, {
+      mode: 'cyber_group',
+      sceneImageBuffer: sceneBuf,
+      sceneMime: match[1].toLowerCase(),
+      includeUser: req.body?.include_user !== false,
+      userText: typeof req.body?.note === 'string' ? req.body.note : '',
+    });
+    if (!out.ok) return err(res, out.error || '赛博合影生成失败', 500);
+    return ok(res, {
+      image_url: out.imageUrl,
+      file_name: out.fileName,
+      used_multi_ref: out.usedMultiRef,
+      has_user_ref: out.hasUserRef,
+    });
+  } catch (e) {
+    log('error', `[API] cyber photo failed companion=${id}: ${e.message}`);
+    return err(res, e.message || '赛博合影生成失败', 500);
+  }
+});
+
+// GET /api/companions/:id/date-mode/image/:fname
+router.get('/companions/:id/date-mode/image/:fname', requireAuth, async (req, res) => {
+  const id = intId(req.params.id); if (!id) return err(res, 'id 无效');
+  const c = requireOwnedCompanion(req, res, id); if (!c) return;
+  const { resolveDateImagePath } = await import('./date_mode.mjs');
+  const safePath = resolveDateImagePath(id, req.params.fname);
+  if (!safePath) return err(res, '图片不存在', 404);
+  res.setHeader('Cache-Control', 'no-cache');
+  return res.sendFile(path.basename(safePath), { root: path.dirname(safePath) });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -5066,6 +5514,11 @@ export function startApiServer() {
   // Full memory migrations may exceed the ordinary chat/config body size.
   // Authenticate before allocating the larger import body; the default stays bounded.
   app.post('/api/companions/import', requireAuth, express.json({ limit: MAX_IMPORT_BYTES }));
+  app.post('/api/companions/:id/wardrobe', requireAuth, express.json({ limit: '10mb' }));
+  app.post('/api/companions/:id/visual-identity/upload-reference', requireAuth, express.json({ limit: '10mb' }));
+  app.post('/api/companions/:id/user-visual-reference', requireAuth, express.json({ limit: '10mb' }));
+  app.post('/api/companions/:id/date-mode/cyber-photo', requireAuth, express.json({ limit: '10mb' }));
+  app.post('/api/companions/:id/playground-chat', requireAuth, express.json({ limit: '10mb' }));
   app.use(express.json({ limit: '2mb' }));
   app.use(express.urlencoded({ extended: false, limit: '2mb' }));   // 支付宝异步通知用 form 编码
   app.use((req, _res, next) => { log('debug', `[API] ${req.method} ${req.path}`); next(); });

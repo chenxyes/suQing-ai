@@ -35,7 +35,15 @@ import {
   saveOpenLoop,   // v1.21.5: 照片承诺改期写 her_promise open_loop
   getActiveCurrentWorks,   // v1.21.4 PR-W2: current_works 表达层注入
   getActiveLifeStates,     // v1.22 PR-L1: #317 四档身体事件闸查档案
+  updateWardrobeItem,
 } from './db.mjs';
+import { buildWardrobePromptBlock, buildTryonPhotoPlan, handleInboundWardrobeTurn, generateWardrobeTryonImage } from './wardrobe.mjs';
+import {
+  buildPresenceModeHint,
+  buildDateSessionPromptBlock,
+  handleInboundDateTurn,
+  generateDatePhoto,
+} from './date_mode.mjs';
 import { buildSystemPrompt, buildFirstTurnHint } from './companion.mjs';
 import { syncUpdateCompanionState, extractAndSaveMemories, extractAndUpdateUserProfile, consumePendingCelebration, detectUserConfession, detectCompanionConfession, detectIntimacyOvereach, canAcceptConfession, daysSinceMeet, DAYS_TO_LOVER } from './memory.mjs';
 import { buildLongTermDigest } from './plan_tasks.mjs';
@@ -380,14 +388,18 @@ export function __setTurnRunnerForTest(fn) { _turnRunner = typeof fn === 'functi
 // COALESCE 关闭时退回老行为：直接处理（仍用 inflightUsers 防同一用户并发回复）。
 export function enqueueOrRunTurn(turn) {
   const fromUser = turn.fromUser;
+  const incomingImgs = Array.isArray(turn.inboundImages)
+    ? turn.inboundImages
+    : (turn.inboundImage ? [turn.inboundImage] : []);
   if (!COALESCE_ENABLED) {
     if (inflightUsers.has(fromUser)) { log('info', `[Bot] 已有回复进行中，跳过 user=${fromUser}`); return; }
-    _turnRunner(turn).catch(e => log('error', `[Bot] processUserTurn 异常: ${e.message}`));
+    _turnRunner({ ...turn, inboundImages: incomingImgs }).catch(e => log('error', `[Bot] processUserTurn 异常: ${e.message}`));
     return;
   }
   let b = pendingBursts.get(fromUser);
-  if (!b) { b = { parts: [], firstAt: Date.now(), timer: null, turn }; pendingBursts.set(fromUser, b); }
+  if (!b) { b = { parts: [], inboundImages: [], firstAt: Date.now(), timer: null, turn }; pendingBursts.set(fromUser, b); }
   b.parts.push(turn.userText);
+  if (incomingImgs.length) b.inboundImages.push(...incomingImgs.slice(-2));
   b.turn = turn;  // 留最新一条的 ctx / contextToken / companion
   if (b.timer) clearTimeout(b.timer);
   const remaining = COALESCE_MAX_WAIT_MS - (Date.now() - b.firstAt);
@@ -408,7 +420,7 @@ function flushBurst(fromUser) {
   const userText = b.parts.length <= 1 ? (b.parts[0] || '') : b.parts.join('\n');
   if (b.parts.length > 1) log('info', `[Bot] coalesce flush: user=${fromUser} 合并 ${b.parts.length} 条 → 一次回复`);
   // #279: parts 原文随 turn 传下去——回复段要用它把"本轮已在 userText 里的消息"从 history 尾部剔掉
-  _turnRunner({ ...b.turn, userText, userParts: [...b.parts] }).catch(e => log('error', `[Bot] flush 异常: ${e.message}`));
+  _turnRunner({ ...b.turn, userText, userParts: [...b.parts], inboundImages: [...(b.inboundImages || [])] }).catch(e => log('error', `[Bot] flush 异常: ${e.message}`));
 }
 
 // 防重放：记录已处理的 msgId（内存）
@@ -544,6 +556,7 @@ export async function handleMessage(rawMsg, botContext = {}) {
     }
 
     let userText = null;
+    let inboundImage = null;
 
     // ── 处理各类消息 ─────────────────────────────────────────────────────────
     if (msg.msgType === 'text') {
@@ -562,6 +575,7 @@ export async function handleMessage(rawMsg, botContext = {}) {
       if (cdnUrl) {
         log('info', `[Bot] 下载图片 ${cdnUrl.slice(0, 60)}`);
         const buf = await fetchBuffer(cdnUrl);
+        if (buf) inboundImage = { buffer: buf, mime: 'image/jpeg' };
         userText = buf
           ? `[他发了一张图片，内容：${await recognizeImage(buf, 'image/jpeg')}]`
           : '[他发了一张图片，但下载失败]';
@@ -609,7 +623,7 @@ export async function handleMessage(rawMsg, botContext = {}) {
 
     // v1.10.53: 连发合并 —— 把这条识别后的 userText 推进 burst 缓冲，用户停手后
     // 整合成一轮、只回一次（见文件顶部 enqueueOrRunTurn / flushBurst）。
-    enqueueOrRunTurn({ companion, binding, ctx, botId, fromUser: msg.fromUser, contextToken: msg.contextToken, userText });
+    enqueueOrRunTurn({ companion, binding, ctx, botId, fromUser: msg.fromUser, contextToken: msg.contextToken, userText, inboundImage });
     return;
   } catch (err) {
     log('error', `[Bot] 接收段异常 user=${msg.fromUser}: ${err.message}`);
@@ -620,7 +634,7 @@ export async function handleMessage(rawMsg, botContext = {}) {
 
 // v1.10.53: 单轮回复处理（photo-intent + 文本回复管线）。由 burst flush 合并后调用，
 // COALESCE 关闭时直接调用。msg 为 shim，保留移植代码里的 msg.fromUser/.contextToken 写法。
-async function processUserTurn({ companion, binding, ctx, botId, fromUser, contextToken, userText, userParts = null, _mergeDepth = 0 }) {
+async function processUserTurn({ companion, binding, ctx, botId, fromUser, contextToken, userText, userParts = null, inboundImages = [], _mergeDepth = 0 }) {
   const inputStartedAt = Date.now();
   const msg = { fromUser, contextToken };
   if (isBehaviorEnabled()) {
@@ -631,6 +645,35 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
   // v1.16.x: 用户开口了 → 清零"未回连发"计数，主动消息刹车解除
   try { clearProactiveUnanswered(companion.id); } catch {}
   try {
+    // ── 数字衣橱：发图送礼/试穿/下单/换穿识别（fail-open，绝不阻断正常对话）──
+    let wardrobeOutcome = null;
+    try {
+      wardrobeOutcome = await handleInboundWardrobeTurn({ companion, userText, inboundImages });
+      if (wardrobeOutcome?.item) {
+        log('info', `[Wardrobe] intent=${wardrobeOutcome.intent} companion=${companion.id} item=#${wardrobeOutcome.item.id} "${wardrobeOutcome.item.name}" status=${wardrobeOutcome.item.status}`);
+      }
+    } catch (e) {
+      log('warn', `[Wardrobe] inbound处理失败(忽略): ${e.message}`);
+    }
+
+    // ── 三层相处框架 & 约会剧场：自然启停/刷新/云约会与赛博合影识别（fail-open）──
+    let dateOutcome = null;
+    try {
+      dateOutcome = await handleInboundDateTurn({
+        companion,
+        userText,
+        inboundImages,
+        wardrobeHandled: !!wardrobeOutcome?.item,
+      });
+      if (dateOutcome?.activeSession) {
+        companion.current_scene = dateOutcome.activeSession.scene;
+      } else if (dateOutcome?.settledResult?.settled) {
+        companion.current_scene = '日常';
+        log('info', `[DateMode] settled companion=${companion.id} loops=${dateOutcome.settledResult.resolvedLoops?.length || 0}`);
+      }
+    } catch (e) {
+      log('warn', `[DateMode] inbound处理失败(忽略): ${e.message}`);
+    }
     // v1.10.38: regex fast path + LLM 兜底。regex 命中 strong → 直接 strong；
     // 不命中 → LLM 二分类（轻量短 token）兜底，终结 regex 漏识别循环。
     const photoIntent = await detectPhotoIntentSmart(userText, getRecentHistory(msg.fromUser, botId, 6));
@@ -644,7 +687,12 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
     if (photoEsc.level >= 2) {
       log('info', `[Bot] #5b 气头停生图 companion=${companion.id} level=${photoEsc.level}`);
     }
-    if (photoIntent.type === 'strong_photo_request' && photoEsc.level < 2) {
+    const hasDedicatedPhotoFlow = Boolean(
+      wardrobeOutcome?.shouldSendTryonPhoto
+      || dateOutcome?.triggerCyberPhoto
+      || dateOutcome?.triggerDatePhoto,
+    );
+    if (photoIntent.type === 'strong_photo_request' && photoEsc.level < 2 && !hasDedicatedPhotoFlow) {
       try { recordUserReplied(companion.id); } catch {}
 
       // unsafe / 兜底 / gate 拒 都是同步小回复，不进异步路径
@@ -825,6 +873,21 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
     const relationshipEvent = celebration || confession
       ? { from: celebration?.from, to: celebration?.to, confession } : null;
 
+    let wardrobeHintBase = '';
+    try { wardrobeHintBase = buildWardrobePromptBlock(companion.id); }
+    catch (e) { log('warn', `[Wardrobe] 注入构建失败 companion=${companion.id}: ${e.message}`); }
+    const wardrobeHint = [wardrobeHintBase, wardrobeOutcome?.contextNote || ''].filter(Boolean).join('\n');
+
+    let presenceHint = '';
+    try { presenceHint = buildPresenceModeHint(companion); } catch { /* fail-open */ }
+    let dateModeHint = '';
+    try {
+      dateModeHint = [
+        buildDateSessionPromptBlock(dateOutcome?.activeSession || null),
+        dateOutcome?.contextNote || '',
+      ].filter(Boolean).join('\n');
+    } catch { /* fail-open */ }
+
     async function buildLegacyWechatPrompt() {
       const longTermDigest = await buildLongTermDigest(companion.id, companion.user_id);
       const recentSchedules = getRecentSchedules(companion.id, todayKey, 3);
@@ -854,7 +917,7 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
       // v1.21: arc 激活时 escalation 指令让位（L2+ 已作为 pressure_spam 喂进状态机，
       // arc directive 自带冷语气，双指令会打架）；arc 主导语气追加在最后（最高优先）。
       // worksHint 走 buildSystemPrompt 参数注入（生活背景带，§8 排序），结构上永在 arc 指令之前。
-      let systemPrompt = buildSystemPrompt(companion, { memories, userProfile, recentTurns, longTermDigest, promptMode: 'reply', userText, dailySchedule, recentSchedules, personaFacts, preferences, shapingHint, worksHint, openLoopsHint, behaviorPlan }) + stickerHint + emotionHint + reunionHint + shapingConfirmHint + ((arcCtx.active || behaviorPlan) ? '' : escalationDirective(esc.level)) + (behaviorPlan ? '' : (arcCtx.directive || ''));
+      let systemPrompt = buildSystemPrompt(companion, { memories, userProfile, recentTurns, longTermDigest, promptMode: 'reply', userText, dailySchedule, recentSchedules, personaFacts, preferences, shapingHint, worksHint, openLoopsHint, wardrobeHint, presenceHint, dateModeHint, behaviorPlan }) + stickerHint + emotionHint + reunionHint + shapingConfirmHint + ((arcCtx.active || behaviorPlan) ? '' : escalationDirective(esc.level)) + (behaviorPlan ? '' : (arcCtx.directive || ''));
       // PR-1 复读止血（reply 侧·prompt 级·intent 而非纯字符串）：把她最近几小时主动说过的 intent/topic
       // 喂回去，叫她在用户简短回应时别原样复读（反复叮嘱/想你/追问）。确定性兜底在下方 ack 闸。
       systemPrompt += buildIntentDedupHint(recentIntentEvents(recentTurns, Date.now()));
@@ -967,7 +1030,8 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
       if (grounded) {
         const result = await generateGroundedReply({ companion, userText, history, memories, userProfile, behaviorPlan,
           arcState: arcCtx.arcState, accountId: binding.account_id || null, channel: 'wechat',
-          personaFacts, preferences, dailySchedule, shapingHint, relationshipEvent });
+          personaFacts, preferences, dailySchedule, shapingHint, wardrobeHint, presenceHint, dateModeHint,
+          dateSession: dateOutcome?.activeSession || null, relationshipEvent });
         return result.reply;
       }
       return generateReply(systemPrompt, history, userText, {
@@ -1165,6 +1229,102 @@ async function processUserTurn({ companion, binding, ctx, botId, fromUser, conte
       }
     } catch (e) {
       log('warn', `[Bot] photo promise check failed: ${e.message}`);
+    }
+
+    // ── 数字衣橱异步试穿返图（与网页端共用高保真完整图锁脸 + 多部位叠穿引擎）──
+    if (wardrobeOutcome?.shouldSendTryonPhoto && wardrobeOutcome.item && !inflightPhoto.has(companion.id) && !hasUnsafePhotoContent(userText)) {
+      const tryonItem = wardrobeOutcome.item;
+      const tryonPlan = buildTryonPhotoPlan(tryonItem, companion);
+      const photoCompanion = { ...companion, wechat_user_id: msg.fromUser };
+      inflightPhoto.add(companion.id);
+      (async () => {
+        try {
+          const genOut = await withTimeout(
+            generateWardrobeTryonImage(companion, tryonItem, { composeWithWearing: true }),
+            PHOTO_GEN_TIMEOUT_MS,
+            'wardrobe tryon gen',
+          );
+          const res = await withTimeout(sendCompanionPhoto({
+            companion: photoCompanion,
+            user: { ...binding, wechat_user_id: msg.fromUser },
+            context: ctx,
+            contextToken: msg.contextToken,
+            activity: tryonPlan.activity,
+            caption: genOut.caption || tryonPlan.caption,
+            trigger: 'wardrobe_tryon',
+            source: 'request',
+            aspect: tryonPlan.aspect,
+            shotMode: genOut.shotMode || tryonPlan.shotMode,
+            preGeneratedImagePath: genOut.filePath,
+            force: true,
+          }), PHOTO_GEN_TIMEOUT_MS, 'wardrobe tryon send');
+          if (res?.ok) {
+            if (genOut.filePath || res.filePath) {
+              try { updateWardrobeItem(companion.id, tryonItem.id, { tryonImagePath: genOut.filePath || res.filePath }); } catch {}
+            }
+            if (res.caption && peekSendQuota(botId)) {
+              await sleep(randInt(700, 1400));
+              await sendAndRecord(ctx, msg.fromUser, res.caption, msg.contextToken);
+            }
+            saveConversationTurn(companion.id, 'assistant', res.caption || `[试穿照：${tryonItem.name}]`, companion.chat_mode_active);
+            log('info', `[Wardrobe] 微信高保真试穿返图已发送 companion=${companion.id} item=#${tryonItem.id} refs=${genOut.refCount} shot=${genOut.shotMode}`);
+          } else {
+            log('warn', `[Wardrobe] 试穿返图未发出 companion=${companion.id} item=#${tryonItem.id} code=${res?.code || 'unknown'}`);
+          }
+        } catch (e) {
+          log('warn', `[Wardrobe] 试穿返图异常 companion=${companion.id} item=#${tryonItem.id}: ${e.message}`);
+        } finally {
+          inflightPhoto.delete(companion.id);
+        }
+      })();
+    } else if ((dateOutcome?.triggerCyberPhoto || dateOutcome?.triggerDatePhoto) && !inflightPhoto.has(companion.id) && !hasUnsafePhotoContent(userText)) {
+      const cyber = dateOutcome.triggerCyberPhoto;
+      const dateShot = dateOutcome.triggerDatePhoto;
+      const photoCompanion = { ...companion, wechat_user_id: msg.fromUser };
+      inflightPhoto.add(companion.id);
+      (async () => {
+        try {
+          const genOut = await withTimeout(generateDatePhoto(companion, dateOutcome.activeSession || null, {
+            mode: cyber ? 'cyber_group' : (dateShot?.mode || 'date_scene'),
+            sceneImageBuffer: cyber?.sceneImageBuffer || null,
+            sceneMime: cyber?.sceneMime || 'image/jpeg',
+            includeUser: true,
+            userText,
+          }), PHOTO_GEN_TIMEOUT_MS, 'date couple photo gen');
+          if (!genOut?.ok || !genOut.filePath) {
+            log('warn', `[DateMode] 微信约会合影生成失败 companion=${companion.id} err=${genOut?.error || 'unknown'}`);
+            return;
+          }
+          const caption = genOut.hasUserRef
+            ? '好啦，咱俩的双人约会合影拍好咯～'
+            : '好啦，我也来打卡同框一下～（发张你的正面照并说“这是我的照片”，下次就能咱俩双人同框啦）';
+          const res = await withTimeout(sendCompanionPhoto({
+            companion: photoCompanion,
+            user: { ...binding, wechat_user_id: msg.fromUser },
+            context: ctx,
+            contextToken: msg.contextToken,
+            activity: dateOutcome.activeSession?.title || '约会合影',
+            caption,
+            trigger: cyber ? 'cyber_group_photo' : 'date_couple_photo',
+            source: 'request',
+            aspect: cyber ? '1:1' : '3:4',
+            preGeneratedImagePath: genOut.filePath,
+            force: true,
+          }), PHOTO_GEN_TIMEOUT_MS, 'date couple photo send');
+          if (res?.ok) {
+            if (res.caption && peekSendQuota(botId)) {
+              await sleep(randInt(700, 1400));
+              await sendAndRecord(ctx, msg.fromUser, res.caption, msg.contextToken);
+            }
+            saveConversationTurn(companion.id, 'assistant', res.caption || '[约会合影]', companion.chat_mode_active);
+            log('info', `[DateMode] 微信约会合影已发送 companion=${companion.id} hasUserRef=${genOut.hasUserRef}`);
+          }
+        } catch (e) {
+          log('warn', `[DateMode] 微信约会合影异常 companion=${companion.id}: ${e.message}`);
+        } finally {
+          inflightPhoto.delete(companion.id);
+        }
+      })();
     }
 
     // ── 异步后处理（不阻塞主流程）───────────────────────────────────────────

@@ -56,6 +56,8 @@ import {
 import { dispatchUrgentGoodnight, dispatchUrgentMorning } from './proactive.mjs';
 import { runAutonomousSurfTick } from './plugins/surf_engine.mjs';
 import { runAutonomousDouyinTick } from './plugins/publishers/douyin_autonomy.mjs';
+import { runWardrobeDeliveryTick } from './wardrobe.mjs';
+import { buildWeekendWardrobeBoomerangHint, normalizePresenceMode } from './date_mode.mjs';
 
 const TZ = 'Asia/Shanghai';
 const TICK_MS = 60_000;
@@ -149,6 +151,13 @@ async function tick(now = new Date()) {
   runAutonomousDouyinTick(now).catch(e => {
     log('warn', `[DouyinAutonomy] tick failed: ${e.message}`);
   });
+
+  // 数字衣橱快递拆箱巡检：每 10 分钟轻量查库（无到期包裹零 LLM 成本）
+  if (parts.minute % 10 === 0) {
+    runWardrobeDeliveryTick(now).catch(e => {
+      log('warn', `[Wardrobe] delivery tick failed: ${e.message}`);
+    });
+  }
 }
 
 // ─── v1.10.0 sleep ─────────────────────────────────────────────────────────
@@ -262,7 +271,7 @@ const WEEKDAY_LABELS = ['周日', '周一', '周二', '周三', '周四', '周�
 async function runDailySchedules(dateKey, weekdayLabel, weekdayNum) {
   const db = getDb();
   const companions = db.prepare(`
-    SELECT c.id, c.user_id, c.name, c.age, c.role_title, c.personality_tags, c.hobbies, c.safe_mode
+    SELECT c.id, c.user_id, c.name, c.age, c.role_title, c.personality_tags, c.hobbies, c.safe_mode, c.presence_mode
     FROM companions c
     JOIN users u ON u.id = c.user_id
     JOIN wechat_accounts wa ON wa.wechat_user_id = u.wechat_user_id
@@ -373,6 +382,17 @@ async function generateScheduleFor(comp, dateKey, weekdayLabel, weekdayNum) {
   try { worksScheduleHint = buildScheduleWorksHint(getActiveCurrentWorks(comp.id)); }
   catch (e) { log('warn', `[CurrentWorks] 日程 works hint 失败 companion=${comp.id}: ${e.message}`); }
 
+  let weekendWardrobeHint = '';
+  try { weekendWardrobeHint = buildWeekendWardrobeBoomerangHint(comp.id, { isWeekend }); }
+  catch (e) { log('warn', `[Wardrobe] 周末穿戴回访 hint 失败 companion=${comp.id}: ${e.message}`); }
+
+  const pMode = normalizePresenceMode(comp.presence_mode);
+  const presenceScheduleHint = pMode === 'ldr'
+    ? '\n【异地恋底盘】你们平时不在同一座城市，各自过日常；不要把对方不在本地编成“爽约/放鸽子”剧情，想念可以写进情绪段或晚间视频/语音安排里。'
+    : pMode === 'digital'
+      ? '\n【隔屏陪伴底盘】你们隔着屏幕相伴，不要凭空编造“等他线下爽约”剧情；日常安排以你自己的真实生活与线上分享为主。'
+      : '';
+
   const sys = `你帮一个虚拟角色生成"今天的日程"，要符合人设、真实可信、有生活气息。
 
 角色：${comp.name}，${age}岁，${comp.role_title || '邻家女孩'}${personality ? '，性格' + personality : ''}${hobbies ? '，爱好：' + hobbies : ''}
@@ -381,6 +401,8 @@ async function generateScheduleFor(comp, dateKey, weekdayLabel, weekdayNum) {
 【强制约束 - 极其重要】
 ${occupationHint}
 ${commitmentsHint}
+${presenceScheduleHint}
+${weekendWardrobeHint}
 ${continuityHint}
 ${worksScheduleHint}
 

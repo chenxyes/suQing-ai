@@ -16,7 +16,7 @@ const RUBRIC = `你是聊天输出审查器，只检查草稿，不扮演聊天�
 证据规则：
 - current 和 history 保留了实际说话人。助手说过、问过、猜过的内容不能证明对方的经历。对方只说“味道不错”不能确认“买的还是自己煮的”；短确认也不能擅自选择此前多个选项中的一个。
 - facts 按主体理解；对方当前明确纠正优先。没有证据的过去经历、次数、心理动机不要当事实。不凭空说“你之前”“又”“只会”。unknown 不是可引用的事实。
-- persona 是人物自身背景，不是对方的经历。以 state.activity 的北京时间和本时段计划为准。历史消息的时间指当时；其他时段的安排不能说成此刻正在做。允许明确回顾早些时候的事或讨论未来。若唯一依据是计划，回答只能说原本打算做什么。“正在做”“刚做完”“做完后在别处休息”均需额外证据；检查角色回答里的每个动作与地点，缺少依据就删改。问过去的安排时保留计划语气。events 保留状态；完成、取消、过期或不确定的事不能当成当前未履约事件。
+- persona 是人物自身背景，不是对方的经历。以 state.activity 的北京时间和本时段计划为准；但若 state.dateSession 非空，说明双方已开启约会剧场，允许与当前约会场景和今日穿搭相符的轻度现场互动，不要强行改写回独处日程。历史消息的时间指当时；其他时段的安排不能说成此刻正在做。允许明确回顾早些时候的事或讨论未来。若唯一依据是计划，回答只能说原本打算做什么。“正在做”“刚做完”“做完后在别处休息”均需额外证据；检查角色回答里的每个动作与地点，缺少依据就删改。问过去的安排时保留计划语气。events 保留状态；完成、取消、过期或不确定的事不能当成当前未履约事件。
 - context.task.kind=followup 且 status=claimed 表示程序正在执行已获授权的跟进，current.text 为空表示此刻没有新来信；可以围绕授权话题轻轻询问现状，不把旧心情当成此刻事实，也不额外承诺下一次联系。
 行动与表达：
 - 先回应对方本轮真正说的内容。需要必要事实才能回答时可以澄清一点；对方已经明确求建议时，不再问“要不要听我的建议”，给一个可执行的小建议或澄清必要事实。
@@ -65,6 +65,7 @@ function parsedReview(response, draft, current) {
 // A substantive question, a request to pick a time, and an active action plan retain ordinary review.
 function enforceTurnScope(outcome, context, plan) {
   if (!outcome || plan || context.task) return outcome;
+  if (context.state?.dateSession) return outcome;
   const current = context.current.text.trim();
   const activity = context.state?.activity;
   const hasCurrentWindowHistory = !!activity && context.history.some(
@@ -100,6 +101,7 @@ function enforceTurnScope(outcome, context, plan) {
 // response, reuse the normal review failure path. Schedules are intentions, not proof.
 function checkPersonalAnecdote(outcome, context, persona) {
   if (!outcome || !['kept','revised'].includes(outcome.status)) return outcome;
+  if (context.state?.dateSession) return outcome;
   const clause = /(?:^|[。！？!?～~｜|\n，,])\s*(我(?:今[天早晚]|昨[天晚]|早上|中午|下午|晚上|晚饭|刚刚?|方才|之前|上次|也|已经|才|就|还|自己|随便|也就|又|早就|只|去|在){0,5}(?:吃|喝|买|煮|做饭|逛|去了|去过|下班|起床|睡醒|看完)[^，。！？!?～~｜|\n]{0,12}(?:了|过)[^，。！？!?～~｜|\n]*)/gu;
   const activity = context.state?.activity;
   const activeHistoryEvidence = (context.history || [])

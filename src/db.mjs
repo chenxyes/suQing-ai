@@ -1213,6 +1213,49 @@ function initSchema() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- 数字衣橱与实体风礼物单品表（衣服/外套/裙子/鞋袜/包包/配饰）
+    CREATE TABLE IF NOT EXISTS companion_wardrobe (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      companion_id INTEGER NOT NULL REFERENCES companions(id) ON DELETE CASCADE,
+      slot TEXT NOT NULL,
+      category TEXT NOT NULL,
+      name TEXT NOT NULL,
+      color TEXT DEFAULT '',
+      material TEXT DEFAULT '',
+      style_tags TEXT DEFAULT '[]',
+      visual_prompt TEXT NOT NULL,
+      source_image_path TEXT DEFAULT NULL,
+      tryon_image_path TEXT DEFAULT NULL,
+      gifted_by TEXT DEFAULT 'user',
+      gifted_note TEXT DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'owned',
+      eta_at DATETIME DEFAULT NULL,
+      wear_count INTEGER DEFAULT 0,
+      last_worn_at DATETIME DEFAULT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_wardrobe_comp_status ON companion_wardrobe(companion_id, status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_wardrobe_comp_slot ON companion_wardrobe(companion_id, slot, status);
+
+    -- 约会剧场会话表（可开关、可关联数字衣橱穿搭快照、结束可结算记忆并核销 open_loops）
+    CREATE TABLE IF NOT EXISTS companion_date_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      companion_id INTEGER NOT NULL REFERENCES companions(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      activity_type TEXT NOT NULL DEFAULT 'custom',
+      scene TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'settled', 'abandoned')),
+      outfit_snapshot TEXT DEFAULT '[]',
+      notes TEXT DEFAULT '',
+      photo_paths TEXT NOT NULL DEFAULT '[]',
+      resolved_loops TEXT NOT NULL DEFAULT '[]',
+      started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      ended_at DATETIME DEFAULT NULL,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_date_sessions_comp_status ON companion_date_sessions(companion_id, status, started_at DESC);
+
     -- 节日/纪念日/自定义提醒表；当前只提供 pending/due 查询，不主动推送
     CREATE TABLE IF NOT EXISTS companion_reminders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1640,6 +1683,8 @@ function migrateProactiveEngineV2() {
   addColIfMissing('companions', 'safe_mode_attested_at',  'TEXT');
   // v1.13 双语：界面/AI 语言（'zh' | 'en'），默认中文
   addColIfMissing('companions', 'locale',                 "TEXT DEFAULT 'zh'");
+  // 相处物理距离底盘：local（经典同城·默认兼容存量）| ldr（异地恋·推荐）| digital（清醒跨次元）
+  addColIfMissing('companions', 'presence_mode',          "TEXT DEFAULT 'local'");
   addColIfMissing('companions', 'last_user_reply_at',     'TEXT');
   addColIfMissing('companions', 'last_proactive_reply_at','TEXT');
   addColIfMissing('companions', 'missing_score',          'REAL DEFAULT 0');
@@ -1957,7 +2002,7 @@ export const ALLOWED_FIELDS = new Set([
   'how_met', 'relationship_status', 'shared_memory',
   'memory_priorities',
   'proactive_enabled', 'proactive_frequency', 'proactive_time_window', 'proactive_daily_target',
-  'attachment_style', 'first_love',
+  'attachment_style', 'first_love', 'presence_mode',
   'silent_mode',
   'voice_reply_enabled', 'voice_id',
   'voice_reply_enabled', 'sticker_reply_enabled',
@@ -3060,6 +3105,8 @@ export function deleteCompanionForAccount(accountId, companionId) {
     const cleaned = {};
     cleaned.companion_memories = db.prepare('DELETE FROM companion_memories WHERE companion_id = ?').run(companionId).changes;
     cleaned.companion_gifts = db.prepare('DELETE FROM companion_gifts WHERE companion_id = ?').run(companionId).changes;
+    cleaned.companion_wardrobe = db.prepare('DELETE FROM companion_wardrobe WHERE companion_id = ?').run(companionId).changes;
+    cleaned.companion_date_sessions = db.prepare('DELETE FROM companion_date_sessions WHERE companion_id = ?').run(companionId).changes;
     cleaned.companion_reminders = db.prepare('DELETE FROM companion_reminders WHERE companion_id = ?').run(companionId).changes;
     cleaned.companion_conversation_turns = db.prepare('DELETE FROM companion_conversation_turns WHERE companion_id = ?').run(companionId).changes;
     cleaned.companion_image_reactions = db.prepare('DELETE FROM companion_image_reactions WHERE companion_id = ?').run(companionId).changes;
@@ -4427,6 +4474,330 @@ export function getCompanionGifts(companionId, limit = 50) {
     ORDER BY created_at DESC, id DESC
     LIMIT ?
   `).all(companionId, safeLimit).map(parseGiftRow);
+}
+
+// ─── digital wardrobe (clothes / bags / shoes / accessories) ─────────────────
+export const WARDROBE_SLOTS = Object.freeze(['outerwear', 'top', 'bottom_or_dress', 'shoes', 'bag', 'accessory']);
+export const WARDROBE_STATUSES = Object.freeze(['tryon_only', 'in_transit', 'owned', 'wearing', 'archived']);
+
+function parseWardrobeRow(row) {
+  if (!row) return null;
+  let styleTags = [];
+  try {
+    const parsed = JSON.parse(row.style_tags || '[]');
+    if (Array.isArray(parsed)) styleTags = parsed.map(String).filter(Boolean).slice(0, 8);
+  } catch { /* ignore malformed json */ }
+  return { ...row, style_tags: styleTags };
+}
+
+export function createWardrobeItem({
+  companionId,
+  slot = 'top',
+  category = '衣服',
+  name,
+  color = '',
+  material = '',
+  styleTags = [],
+  visualPrompt = '',
+  sourceImagePath = null,
+  tryonImagePath = null,
+  giftedBy = 'user',
+  giftedNote = '',
+  status = 'owned',
+  etaAt = null,
+} = {}) {
+  const db = getDb();
+  const safeSlot = WARDROBE_SLOTS.includes(slot) ? slot : 'top';
+  const safeStatus = WARDROBE_STATUSES.includes(status) ? status : 'owned';
+  const safeName = String(name || category || '新单品').trim().slice(0, 80);
+  const safeCat = String(category || '衣服').trim().slice(0, 30);
+  const safeVisual = String(visualPrompt || safeName).trim().slice(0, 500);
+  const safeNote = replaceUserWording(String(giftedNote || '').trim().slice(0, 240));
+  const tagsJson = JSON.stringify(Array.isArray(styleTags) ? styleTags.map(s => String(s).trim().slice(0, 20)).filter(Boolean).slice(0, 8) : []);
+
+  const tx = db.transaction(() => {
+    if (safeStatus === 'wearing') {
+      db.prepare(`
+        UPDATE companion_wardrobe
+        SET status = 'owned', updated_at = CURRENT_TIMESTAMP
+        WHERE companion_id = ? AND slot = ? AND status = 'wearing'
+      `).run(companionId, safeSlot);
+    }
+    const info = db.prepare(`
+      INSERT INTO companion_wardrobe
+        (companion_id, slot, category, name, color, material, style_tags, visual_prompt,
+         source_image_path, tryon_image_path, gifted_by, gifted_note, status, eta_at,
+         wear_count, last_worn_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      companionId,
+      safeSlot,
+      safeCat,
+      safeName,
+      String(color || '').trim().slice(0, 30),
+      String(material || '').trim().slice(0, 40),
+      tagsJson,
+      safeVisual,
+      sourceImagePath ? String(sourceImagePath).slice(0, 300) : null,
+      tryonImagePath ? String(tryonImagePath).slice(0, 300) : null,
+      giftedBy === 'self' ? 'self' : 'user',
+      safeNote,
+      safeStatus,
+      etaAt ? String(etaAt).slice(0, 40) : null,
+      safeStatus === 'wearing' ? 1 : 0,
+      safeStatus === 'wearing' ? new Date().toISOString().replace('T', ' ').slice(0, 19) : null,
+    );
+    return parseWardrobeRow(db.prepare('SELECT * FROM companion_wardrobe WHERE id = ?').get(info.lastInsertRowid));
+  });
+  return tx();
+}
+
+export function getWardrobeItem(companionId, itemId) {
+  const row = getDb().prepare('SELECT * FROM companion_wardrobe WHERE companion_id = ? AND id = ?').get(companionId, itemId);
+  return parseWardrobeRow(row);
+}
+
+export function listWardrobeItems(companionId, { status = null, slot = null, limit = 50 } = {}) {
+  const db = getDb();
+  const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 200);
+  const where = ['companion_id = ?'];
+  const params = [companionId];
+  if (status) {
+    if (Array.isArray(status)) {
+      const valid = status.filter(s => WARDROBE_STATUSES.includes(s));
+      if (valid.length) {
+        where.push(`status IN (${valid.map(() => '?').join(',')})`);
+        params.push(...valid);
+      }
+    } else if (WARDROBE_STATUSES.includes(status)) {
+      where.push('status = ?');
+      params.push(status);
+    }
+  }
+  if (slot && WARDROBE_SLOTS.includes(slot)) {
+    where.push('slot = ?');
+    params.push(slot);
+  }
+  params.push(safeLimit);
+  return db.prepare(`
+    SELECT * FROM companion_wardrobe
+    WHERE ${where.join(' AND ')}
+    ORDER BY
+      CASE status WHEN 'wearing' THEN 0 WHEN 'in_transit' THEN 1 WHEN 'owned' THEN 2 WHEN 'tryon_only' THEN 3 ELSE 4 END,
+      updated_at DESC, id DESC
+    LIMIT ?
+  `).all(...params).map(parseWardrobeRow);
+}
+
+export function wearWardrobeItem(companionId, itemId) {
+  const db = getDb();
+  const tx = db.transaction(() => {
+    const item = db.prepare('SELECT * FROM companion_wardrobe WHERE companion_id = ? AND id = ?').get(companionId, itemId);
+    if (!item) return null;
+    db.prepare(`
+      UPDATE companion_wardrobe
+      SET status = 'owned', updated_at = CURRENT_TIMESTAMP
+      WHERE companion_id = ? AND slot = ? AND status = 'wearing' AND id != ?
+    `).run(companionId, item.slot, itemId);
+    db.prepare(`
+      UPDATE companion_wardrobe
+      SET status = 'wearing',
+          wear_count = COALESCE(wear_count, 0) + 1,
+          last_worn_at = CURRENT_TIMESTAMP,
+          eta_at = NULL,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE companion_id = ? AND id = ?
+    `).run(companionId, itemId);
+    return parseWardrobeRow(db.prepare('SELECT * FROM companion_wardrobe WHERE id = ?').get(itemId));
+  });
+  return tx();
+}
+
+export function updateWardrobeItem(companionId, itemId, fields = {}) {
+  const db = getDb();
+  const current = db.prepare('SELECT * FROM companion_wardrobe WHERE companion_id = ? AND id = ?').get(companionId, itemId);
+  if (!current) return null;
+  if (fields.status === 'wearing') {
+    wearWardrobeItem(companionId, itemId);
+  }
+  const sets = [];
+  const params = [];
+  if (fields.name !== undefined) { sets.push('name = ?'); params.push(String(fields.name).trim().slice(0, 80)); }
+  if (fields.category !== undefined) { sets.push('category = ?'); params.push(String(fields.category).trim().slice(0, 30)); }
+  if (fields.slot !== undefined && WARDROBE_SLOTS.includes(fields.slot)) { sets.push('slot = ?'); params.push(fields.slot); }
+  if (fields.color !== undefined) { sets.push('color = ?'); params.push(String(fields.color).trim().slice(0, 30)); }
+  if (fields.material !== undefined) { sets.push('material = ?'); params.push(String(fields.material).trim().slice(0, 40)); }
+  if (fields.visualPrompt !== undefined) { sets.push('visual_prompt = ?'); params.push(String(fields.visualPrompt).trim().slice(0, 500)); }
+  if (fields.tryonImagePath !== undefined) { sets.push('tryon_image_path = ?'); params.push(fields.tryonImagePath ? String(fields.tryonImagePath).slice(0, 300) : null); }
+  if (fields.giftedNote !== undefined) { sets.push('gifted_note = ?'); params.push(replaceUserWording(String(fields.giftedNote).trim().slice(0, 240))); }
+  if (fields.status !== undefined && fields.status !== 'wearing' && WARDROBE_STATUSES.includes(fields.status)) {
+    sets.push('status = ?'); params.push(fields.status);
+  }
+  if (fields.etaAt !== undefined) { sets.push('eta_at = ?'); params.push(fields.etaAt ? String(fields.etaAt).slice(0, 40) : null); }
+  if (sets.length) {
+    sets.push('updated_at = CURRENT_TIMESTAMP');
+    params.push(companionId, itemId);
+    db.prepare(`UPDATE companion_wardrobe SET ${sets.join(', ')} WHERE companion_id = ? AND id = ?`).run(...params);
+  }
+  return parseWardrobeRow(db.prepare('SELECT * FROM companion_wardrobe WHERE id = ?').get(itemId));
+}
+
+export function deleteWardrobeItem(companionId, itemId) {
+  return getDb().prepare('DELETE FROM companion_wardrobe WHERE companion_id = ? AND id = ?').run(companionId, itemId).changes;
+}
+
+export function listDueWardrobeDeliveries(nowIso = new Date().toISOString().replace('T', ' ').slice(0, 19), limit = 10) {
+  const safeLimit = Math.min(Math.max(Number(limit) || 10, 1), 50);
+  return getDb().prepare(`
+    SELECT w.*, c.name AS companion_name, c.user_id, c.chat_mode_active, c.current_scene,
+           wa.wechat_user_id, wa.bot_id
+    FROM companion_wardrobe w
+    JOIN companions c ON c.id = w.companion_id
+    LEFT JOIN users u ON u.id = c.user_id
+    LEFT JOIN wechat_accounts wa ON wa.wechat_user_id = u.wechat_user_id AND wa.is_active = 1
+    WHERE w.status = 'in_transit'
+      AND w.eta_at IS NOT NULL
+      AND datetime(w.eta_at) <= datetime(?)
+    ORDER BY w.eta_at ASC, w.id ASC
+    LIMIT ?
+  `).all(nowIso, safeLimit).map(parseWardrobeRow);
+}
+
+// ─── companion_date_sessions（约会剧场会话）────────────────────────────────────
+export const DATE_ACTIVITY_TYPES = new Set(['shopping', 'dining', 'walk', 'movie', 'custom']);
+export const DATE_SESSION_STATUSES = new Set(['active', 'settled', 'abandoned']);
+
+function parseDateSessionRow(row) {
+  if (!row) return null;
+  const parseArr = (raw) => {
+    try {
+      const v = JSON.parse(raw || '[]');
+      return Array.isArray(v) ? v : [];
+    } catch {
+      return [];
+    }
+  };
+  return {
+    ...row,
+    outfit_snapshot: parseArr(row.outfit_snapshot),
+    photo_paths: parseArr(row.photo_paths),
+    resolved_loops: parseArr(row.resolved_loops),
+  };
+}
+
+export function createDateSession(companionId, data = {}) {
+  const db = getDb();
+  const title = String(data.title || '一起出去玩').trim().slice(0, 60) || '一起出去玩';
+  const activityType = DATE_ACTIVITY_TYPES.has(data.activity_type) ? data.activity_type : 'custom';
+  const scene = String(data.scene || title).trim().slice(0, 60) || title;
+  const outfitSnapshot = Array.isArray(data.outfit_snapshot) ? data.outfit_snapshot.slice(0, 6) : [];
+  const notes = String(data.notes || '').trim().slice(0, 400);
+  const nowIso = data.started_at || new Date().toISOString();
+
+  return db.transaction(() => {
+    // 同一伴侣同一时刻最多只保留 1 场 active 约会
+    db.prepare(`
+      UPDATE companion_date_sessions
+      SET status = 'abandoned', ended_at = COALESCE(ended_at, ?), updated_at = ?
+      WHERE companion_id = ? AND status = 'active'
+    `).run(nowIso, nowIso, companionId);
+
+    const info = db.prepare(`
+      INSERT INTO companion_date_sessions
+        (companion_id, title, activity_type, scene, status, outfit_snapshot, notes, photo_paths, resolved_loops, started_at, updated_at)
+      VALUES (?, ?, ?, ?, 'active', ?, ?, '[]', '[]', ?, ?)
+    `).run(
+      companionId,
+      title,
+      activityType,
+      scene,
+      JSON.stringify(outfitSnapshot),
+      notes,
+      nowIso,
+      nowIso,
+    );
+    return parseDateSessionRow(db.prepare('SELECT * FROM companion_date_sessions WHERE id = ?').get(info.lastInsertRowid));
+  })();
+}
+
+export function getDateSessionById(companionId, sessionId) {
+  const row = getDb().prepare(
+    'SELECT * FROM companion_date_sessions WHERE companion_id = ? AND id = ?'
+  ).get(companionId, sessionId);
+  return parseDateSessionRow(row);
+}
+
+export function getActiveDateSession(companionId) {
+  const row = getDb().prepare(`
+    SELECT * FROM companion_date_sessions
+    WHERE companion_id = ? AND status = 'active'
+    ORDER BY id DESC LIMIT 1
+  `).get(companionId);
+  return parseDateSessionRow(row);
+}
+
+export function listDateSessions(companionId, { limit = 10 } = {}) {
+  const safeLimit = Math.min(Math.max(Number(limit) || 10, 1), 50);
+  return getDb().prepare(`
+    SELECT * FROM companion_date_sessions
+    WHERE companion_id = ?
+    ORDER BY id DESC LIMIT ?
+  `).all(companionId, safeLimit).map(parseDateSessionRow);
+}
+
+export function touchDateSession(companionId, sessionId, { notes = undefined, nowIso = new Date().toISOString() } = {}) {
+  const db = getDb();
+  if (notes !== undefined) {
+    db.prepare(`
+      UPDATE companion_date_sessions
+      SET notes = ?, updated_at = ?
+      WHERE companion_id = ? AND id = ?
+    `).run(String(notes || '').slice(0, 400), nowIso, companionId, sessionId);
+  } else {
+    db.prepare(`
+      UPDATE companion_date_sessions
+      SET updated_at = ?
+      WHERE companion_id = ? AND id = ?
+    `).run(nowIso, companionId, sessionId);
+  }
+  return getDateSessionById(companionId, sessionId);
+}
+
+export function appendDateSessionPhoto(companionId, sessionId, photoRelPath) {
+  const row = getDateSessionById(companionId, sessionId);
+  if (!row || !photoRelPath) return row;
+  const photos = [...row.photo_paths, String(photoRelPath).slice(0, 260)].slice(-12);
+  const nowIso = new Date().toISOString();
+  getDb().prepare(`
+    UPDATE companion_date_sessions
+    SET photo_paths = ?, updated_at = ?
+    WHERE companion_id = ? AND id = ?
+  `).run(JSON.stringify(photos), nowIso, companionId, sessionId);
+  return getDateSessionById(companionId, sessionId);
+}
+
+export function settleDateSessionRow(companionId, sessionId, {
+  status = 'settled',
+  notes = '',
+  resolvedLoops = [],
+  nowIso = new Date().toISOString(),
+} = {}) {
+  const safeStatus = DATE_SESSION_STATUSES.has(status) ? status : 'settled';
+  const safeLoops = Array.isArray(resolvedLoops) ? resolvedLoops.map(s => String(s).slice(0, 80)).slice(0, 10) : [];
+  getDb().prepare(`
+    UPDATE companion_date_sessions
+    SET status = ?, notes = ?, resolved_loops = ?, ended_at = ?, updated_at = ?
+    WHERE companion_id = ? AND id = ?
+  `).run(
+    safeStatus,
+    String(notes || '').slice(0, 400),
+    JSON.stringify(safeLoops),
+    nowIso,
+    nowIso,
+    companionId,
+    sessionId,
+  );
+  return getDateSessionById(companionId, sessionId);
 }
 
 // ─── reminders ───────────────────────────────────────────────────────────────
